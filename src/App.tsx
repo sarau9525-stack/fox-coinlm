@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { UserGameState, UpgradeDefinition, TaskDefinition } from './types/game.js';
 import { api, GameConfig } from './utils/api.js';
+import { reconcileUserLevel } from '../server/gameConfig.js';
 import { sound } from './utils/audio.js';
 import { TelegramService } from './utils/telegram.js';
 import { Header } from './components/Header.js';
@@ -119,18 +120,17 @@ export default function App() {
     // Register real-time sync listener from api client with anti-rollback reconciliation
     api.registerStateListener((updatedUser) => {
       setUser((prev) => {
-        if (!prev || prev.id !== updatedUser.id) return updatedUser;
-        // If taps are queued or real-time passive profit ticked slightly ahead, prevent visual rollback
-        if (api.hasPendingTaps()) {
-          return {
-            ...updatedUser,
-            balance: Math.max(updatedUser.balance, prev.balance),
-            totalEarned: Math.max(updatedUser.totalEarned, prev.totalEarned),
-            totalTaps: Math.max(updatedUser.totalTaps, prev.totalTaps),
-            energy: Math.min(updatedUser.energy, prev.energy),
-          };
+        if (!prev || prev.id !== updatedUser.id) {
+          return reconcileUserLevel({ ...updatedUser });
         }
-        return updatedUser;
+        const merged: UserGameState = {
+          ...updatedUser,
+          balance: api.hasPendingTaps() ? Math.max(updatedUser.balance, prev.balance) : updatedUser.balance,
+          totalEarned: Math.max(updatedUser.totalEarned || 0, prev.totalEarned || 0),
+          totalTaps: Math.max(updatedUser.totalTaps || 0, prev.totalTaps || 0),
+          energy: api.hasPendingTaps() ? Math.min(updatedUser.energy, prev.energy) : updatedUser.energy,
+        };
+        return reconcileUserLevel(merged);
       });
     });
   }, []);
@@ -166,13 +166,13 @@ export default function App() {
           : prev.energy;
         const profitGain = hasProfit ? (prev.profitPerHour / 3600) * elapsedSec : 0;
 
-        const nextState: UserGameState = {
+        const nextState: UserGameState = reconcileUserLevel({
           ...prev,
           energy: Math.floor(nextEnergy),
           balance: prev.balance + profitGain,
           totalEarned: prev.totalEarned + profitGain,
           lastPassiveClaimTimestamp: now,
-        };
+        });
         api.syncClientState(nextState);
         return nextState;
       });
@@ -195,13 +195,13 @@ export default function App() {
       const earned = prev.tapPower * tapMultiplier * effectiveCount;
       const nextEnergy = isTurbo ? prev.energy : Math.max(0, prev.energy - effectiveCount);
 
-      const nextState: UserGameState = {
+      const nextState: UserGameState = reconcileUserLevel({
         ...prev,
         balance: prev.balance + earned,
         totalEarned: prev.totalEarned + earned,
         totalTaps: prev.totalTaps + effectiveCount,
         energy: nextEnergy,
-      };
+      });
       api.syncClientState(nextState);
       return nextState;
     });
@@ -213,7 +213,7 @@ export default function App() {
   // Upgrade handler
   const handlePurchaseUpgrade = async (upgradeId: string) => {
     const updated = await api.purchaseUpgrade(upgradeId);
-    setUser(updated);
+    setUser(reconcileUserLevel({ ...updated }));
   };
 
   // Claim Passive income

@@ -17,6 +17,8 @@ import {
   GAME_CONSTANTS,
   LUCKY_WHEEL_PRIZES,
   pickLuckyWheelPrize,
+  reconcileUserLevel,
+  getUpgradeXpBonus,
 } from './gameConfig.js';
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
@@ -279,12 +281,15 @@ class DatabaseStore {
     const todayStr = new Date(now).toISOString().split('T')[0];
     user.canClaimDaily = user.lastDailyClaimDate !== todayStr;
 
-    // 4. Update Level
-    const lvl = this.calculateLevel(Math.max(user.totalEarned, user.balance));
-    user.level = lvl.level;
-    user.levelName = lvl.name;
-    user.currentLevelMinCoins = lvl.min;
-    user.nextLevelMinCoins = lvl.nextMin;
+    // 4. Update Level (including upgrade progression value)
+    reconcileUserLevel(user, this.getUpgrades());
+
+    if (user.level >= 2) {
+      this.checkTaskProgress(user, 'reach_silver', user.level, false);
+    }
+    if (user.level >= 3) {
+      this.checkTaskProgress(user, 'reach_gold', user.level, false);
+    }
 
     return user;
   }
@@ -543,9 +548,14 @@ class DatabaseStore {
       return { success: false, error: 'Insufficient FOX balance' };
     }
 
-    // Atomic balance deduction
+    // Atomic balance deduction + Upgrade XP progression toward next Fox Level
     user.balance -= price;
+    user.totalEarned = Math.max(user.totalEarned || 0, user.balance + price) + getUpgradeXpBonus(price);
     user.upgrades[upgradeId] = currentLvl + 1;
+
+    if (upgrade.benefitType === 'max_energy') {
+      user.energy += upgrade.baseBenefit;
+    }
 
     // Recalculate derived benefits
     this.recalculatePlayerStats(user);

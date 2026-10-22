@@ -1,5 +1,5 @@
 import { UserGameState, LeaderboardEntry, UpgradeDefinition, TaskDefinition, DailyRewardDay, TradeOrder, LuckyWheelPrize } from '../types/game.js';
-import { UPGRADES, PLAYER_LEVELS, TASKS, DAILY_REWARDS, GAME_CONSTANTS, LUCKY_WHEEL_PRIZES, pickLuckyWheelPrize } from '../../server/gameConfig.js';
+import { UPGRADES, PLAYER_LEVELS, TASKS, DAILY_REWARDS, GAME_CONSTANTS, LUCKY_WHEEL_PRIZES, pickLuckyWheelPrize, reconcileUserLevel, getUpgradeXpBonus } from '../../server/gameConfig.js';
 
 function calculateUpgradePrice(upg: UpgradeDefinition, currentLevel: number): number {
   return Math.floor(upg.basePrice * Math.pow(upg.priceMultiplier, currentLevel));
@@ -170,12 +170,7 @@ class ApiService {
       user.unclaimedPassive = Math.floor(elapsedHours * user.profitPerHour);
     }
 
-    const lvl = getPlayerLevel(user.balance);
-    const nextLvl = getNextPlayerLevel(lvl.level);
-    user.level = lvl.level;
-    user.levelName = lvl.name;
-    user.currentLevelMinCoins = lvl.minCoins;
-    user.nextLevelMinCoins = nextLvl ? nextLvl.minCoins : lvl.minCoins;
+    reconcileUserLevel(user, this.getLocalUpgrades());
 
     return user;
   }
@@ -505,11 +500,12 @@ class ApiService {
         body: JSON.stringify({ upgradeId }),
       });
 
-      this.saveLocalUser(res.user);
-      if (this.onStateUpdated && res.user) {
-        this.onStateUpdated(res.user);
+      const reconciled = reconcileUserLevel(res.user, this.getLocalUpgrades());
+      this.saveLocalUser(reconciled);
+      if (this.onStateUpdated && reconciled) {
+        this.onStateUpdated(reconciled);
       }
-      return res.user;
+      return reconciled;
     } catch (err) {
       if (this.isStaticFallbackError(err)) {
         const user = this.getLocalUser();
@@ -520,9 +516,13 @@ class ApiService {
         if (user.balance < price) throw new Error('Insufficient FOX balance');
 
         user.balance -= price;
+        user.totalEarned = Math.max(user.totalEarned || 0, user.balance + price) + getUpgradeXpBonus(price);
         user.upgrades[upgradeId] = currentLvl + 1;
         if (upg.benefitType === 'tap_power') user.tapPower += upg.baseBenefit;
-        if (upg.benefitType === 'max_energy') user.maxEnergy += upg.baseBenefit;
+        if (upg.benefitType === 'max_energy') {
+          user.maxEnergy += upg.baseBenefit;
+          user.energy += upg.baseBenefit;
+        }
         if (upg.benefitType === 'energy_regen') user.energyRegenRate += upg.baseBenefit;
         if (upg.benefitType === 'profit_per_hour') user.profitPerHour += upg.baseBenefit;
 

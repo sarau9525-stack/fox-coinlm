@@ -13,6 +13,8 @@ import {
   GAME_CONSTANTS,
   LUCKY_WHEEL_PRIZES,
   pickLuckyWheelPrize,
+  reconcileUserLevel,
+  getUpgradeXpBonus,
 } from '../../server/gameConfig.js';
 import {
   UserGameState,
@@ -536,12 +538,7 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
     const todayStr = new Date(now).toISOString().split('T')[0];
     user.canClaimDaily = user.lastDailyClaimDate !== todayStr;
 
-    const lvl = getPlayerLevel(Math.max(user.totalEarned, user.balance));
-    const nextLvl = getNextPlayerLevel(lvl.level);
-    user.level = lvl.level;
-    user.levelName = lvl.name;
-    user.currentLevelMinCoins = lvl.minCoins;
-    user.nextLevelMinCoins = nextLvl.minCoins;
+    reconcileUserLevel(user, edgeUpgrades);
 
     return user;
   };
@@ -790,6 +787,7 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
     if (user.balance < price) return jsonResponse({ error: 'Insufficient FOX balance' }, 400);
 
     user.balance -= price;
+    user.totalEarned = Math.max(user.totalEarned || 0, user.balance + price) + getUpgradeXpBonus(price);
     user.upgrades[upgrade.id] = currentLevel + 1;
 
     if (upgrade.benefitType === 'max_energy') {
@@ -1459,12 +1457,7 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
       }
     }
 
-    const lvl = getPlayerLevel(targetUser.balance);
-    const nextLvl = getNextPlayerLevel(lvl.level);
-    targetUser.level = lvl.level;
-    targetUser.levelName = lvl.name;
-    targetUser.currentLevelMinCoins = lvl.minCoins;
-    targetUser.nextLevelMinCoins = nextLvl ? nextLvl.minCoins : lvl.minCoins;
+    refreshEdgeUserState(targetUser);
 
     edgeUsers.set(userId, targetUser);
     if (env.DB) await persistUserToD1(env.DB, targetUser);

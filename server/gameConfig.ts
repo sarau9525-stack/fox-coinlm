@@ -813,3 +813,62 @@ export function pickLuckyWheelPrize(
   return { prize: list[0], index: 0 };
 }
 
+export function getUpgradeXpBonus(price: number): number {
+  return Math.max(1_000, Math.floor(price * 0.5));
+}
+
+export function reconcileUserLevel<
+  T extends {
+    balance: number;
+    totalEarned: number;
+    level: number;
+    levelName: string;
+    currentLevelMinCoins: number;
+    nextLevelMinCoins: number;
+    upgrades?: Record<string, number>;
+  }
+>(user: T, customUpgrades: UpgradeDefinition[] = UPGRADES): T {
+  const catalog = customUpgrades && customUpgrades.length > 0 ? customUpgrades : UPGRADES;
+  let totalUpgradeValue = 0;
+
+  if (user.upgrades) {
+    for (const [upId, lvl] of Object.entries(user.upgrades)) {
+      const count = Math.max(0, Math.floor(Number(lvl) || 0));
+      if (count <= 0) continue;
+      const def = catalog.find((u) => u.id === upId) || UPGRADES.find((u) => u.id === upId);
+      const basePrice = def ? def.basePrice : 1_000;
+      const mult = def ? Math.max(1.05, def.priceMultiplier) : 1.4;
+      for (let i = 0; i < Math.min(count, 200); i++) {
+        const stepPrice = Math.floor(basePrice * Math.pow(mult, i));
+        totalUpgradeValue += stepPrice + getUpgradeXpBonus(stepPrice);
+      }
+    }
+  }
+
+  const effectiveScore = Math.max(
+    Number(user.totalEarned) || 0,
+    (Number(user.balance) || 0) + totalUpgradeValue
+  );
+  user.totalEarned = effectiveScore;
+
+  let current = PLAYER_LEVELS[0];
+  let next = PLAYER_LEVELS[1] || PLAYER_LEVELS[0];
+
+  for (let i = 0; i < PLAYER_LEVELS.length; i++) {
+    if (effectiveScore >= PLAYER_LEVELS[i].minCoins) {
+      current = PLAYER_LEVELS[i];
+      next = PLAYER_LEVELS[i + 1] || PLAYER_LEVELS[i];
+    } else {
+      break;
+    }
+  }
+
+  user.level = current.level;
+  user.levelName = current.name;
+  user.currentLevelMinCoins = current.minCoins;
+  user.nextLevelMinCoins = next.minCoins;
+
+  return user;
+}
+
+
