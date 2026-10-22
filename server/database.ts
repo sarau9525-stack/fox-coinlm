@@ -239,26 +239,40 @@ class DatabaseStore {
     };
   }
 
-  // Reconcile energy regeneration and unclaimed passive income
+  // Reconcile energy regeneration and passive income on time
   public refreshUserState(user: UserGameState, now: number = Date.now()): UserGameState {
     // 1. Calculate energy regeneration
-    const elapsedSeconds = Math.max(0, Math.floor((now - (user.boosters.turboActiveUntil > now ? now : user.createdAt)) / 1000));
     const lastEnergyTime = (user as any).lastEnergyTimestamp || user.createdAt;
-    const energyElapsedSec = Math.max(0, Math.floor((now - lastEnergyTime) / 1000));
+    const energyElapsedSec = Math.max(0, (now - lastEnergyTime) / 1000);
 
-    if (energyElapsedSec > 0 && user.energy < user.maxEnergy) {
-      const regenerated = energyElapsedSec * user.energyRegenRate;
-      user.energy = Math.min(user.maxEnergy, user.energy + regenerated);
+    if (energyElapsedSec >= 1 && user.energy < user.maxEnergy) {
+      const regenerated = Math.floor(energyElapsedSec * user.energyRegenRate);
+      if (regenerated > 0) {
+        user.energy = Math.min(user.maxEnergy, user.energy + regenerated);
+        (user as any).lastEnergyTimestamp = now;
+      }
+    } else if (user.energy >= user.maxEnergy) {
       (user as any).lastEnergyTimestamp = now;
     }
 
-    // 2. Calculate unclaimed passive income
-    const passiveElapsedSec = Math.max(0, Math.floor((now - user.lastPassiveClaimTimestamp) / 1000));
+    // 2. Credit continuous passive income (profitPerHour) right on time
+    const passiveElapsedSec = Math.max(0, (now - (user.lastPassiveClaimTimestamp || now)) / 1000);
     const cappedPassiveSec = Math.min(passiveElapsedSec, user.maxOfflineHours * 3600);
-    if (user.profitPerHour > 0) {
-      user.unclaimedPassive = Math.floor((user.profitPerHour / 3600) * cappedPassiveSec);
+    if (user.profitPerHour > 0 && cappedPassiveSec > 0) {
+      if (passiveElapsedSec < 120) {
+        // Active session: continuously add profitPerHour directly to balance on time
+        const activeEarned = (user.profitPerHour / 3600) * cappedPassiveSec;
+        user.balance += activeEarned;
+        user.totalEarned += activeEarned;
+        user.lastPassiveClaimTimestamp = now;
+        user.unclaimedPassive = 0;
+      } else {
+        // Offline session (>= 2 mins away): show in offline modal OR auto-claim
+        user.unclaimedPassive = Math.floor((user.profitPerHour / 3600) * cappedPassiveSec);
+      }
     } else {
       user.unclaimedPassive = 0;
+      user.lastPassiveClaimTimestamp = now;
     }
 
     // 3. Daily check-in eligibility
@@ -266,7 +280,7 @@ class DatabaseStore {
     user.canClaimDaily = user.lastDailyClaimDate !== todayStr;
 
     // 4. Update Level
-    const lvl = this.calculateLevel(user.totalEarned);
+    const lvl = this.calculateLevel(Math.max(user.totalEarned, user.balance));
     user.level = lvl.level;
     user.levelName = lvl.name;
     user.currentLevelMinCoins = lvl.min;
@@ -587,22 +601,19 @@ class DatabaseStore {
     if (!user) return { success: false, error: 'User not found' };
 
     const now = Date.now();
-    this.refreshUserState(user, now);
-
-    const elapsedSec = Math.max(0, Math.floor((now - user.lastPassiveClaimTimestamp) / 1000));
+    const elapsedSec = Math.max(0, (now - (user.lastPassiveClaimTimestamp || now)) / 1000);
     const cappedSec = Math.min(elapsedSec, user.maxOfflineHours * 3600);
-    const amount = Math.floor((user.profitPerHour / 3600) * cappedSec);
+    const amount = Math.max(user.unclaimedPassive || 0, Math.floor((user.profitPerHour / 3600) * cappedSec));
 
-    if (amount <= 0) {
-      return { success: false, error: 'No passive income accumulated yet' };
+    if (amount > 0) {
+      user.balance += amount;
+      user.totalEarned += amount;
+      this.addAuditLog(user.id, 'passive', amount, user.balance, `Claimed ${amount} offline FOX`);
     }
 
-    user.balance += amount;
-    user.totalEarned += amount;
     user.lastPassiveClaimTimestamp = now;
     user.unclaimedPassive = 0;
 
-    this.addAuditLog(user.id, 'passive', amount, user.balance, `Claimed ${amount} offline FOX`);
     this.refreshUserState(user, now);
     this.save();
     return { success: true, state: user, claimedAmount: amount };

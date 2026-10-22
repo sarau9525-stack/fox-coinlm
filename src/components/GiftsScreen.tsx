@@ -12,7 +12,7 @@ import {
   X,
 } from 'lucide-react';
 import { UpgradeDefinition, UserGameState } from '../types/game.js';
-import { FoxGiftAvatar, FOX_GIFT_METADATA } from './FoxGiftAvatar.js';
+import { FoxGiftAvatar, getFoxGiftMetadata } from './FoxGiftAvatar.js';
 import { foxGoldCoinImg } from '../assets/assets.js';
 import { sound } from '../utils/audio.js';
 import { TelegramService } from '../utils/telegram.js';
@@ -36,10 +36,11 @@ export const GiftsScreen: React.FC<GiftsScreenProps> = ({
 }) => {
   const [filter, setFilter] = useState<'all' | 'owned' | 'epic' | 'legendary'>('all');
   const [mintingId, setMintingId] = useState<string | null>(null);
-  const [selectedGift, setSelectedGift] = useState<UpgradeDefinition | null>(null);
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [selectedGiftId, setSelectedGiftId] = useState<string | null>(null);
+  const [toastMessage, setToastMessage] = useState<{ text: string; isError?: boolean } | null>(null);
 
   const giftItems = upgrades.filter((u) => u.category === 'gift');
+  const selectedGift = giftItems.find((g) => g.id === selectedGiftId) || null;
 
   const getPrice = (up: UpgradeDefinition, level: number) => {
     return Math.floor(up.basePrice * Math.pow(up.priceMultiplier, level));
@@ -54,35 +55,49 @@ export const GiftsScreen: React.FC<GiftsScreenProps> = ({
   );
 
   const filteredGifts = giftItems.filter((g) => {
-    const meta = FOX_GIFT_METADATA[g.id];
+    const meta = getFoxGiftMetadata(g.id, g.basePrice);
     const owned = (user.upgrades[g.id] || 0) > 0;
     if (filter === 'owned') return owned;
-    if (filter === 'epic') return meta?.rarity === 'Rare' || meta?.rarity === 'Epic';
-    if (filter === 'legendary') return meta?.rarity === 'Legendary' || meta?.rarity === 'Mythic';
+    if (filter === 'epic') return meta.rarity === 'Rare' || meta.rarity === 'Epic';
+    if (filter === 'legendary') return meta.rarity === 'Legendary' || meta.rarity === 'Mythic';
     return true;
   });
 
-  const showToast = (msg: string) => {
-    setToastMessage(msg);
+  const showToast = (text: string, isError = false) => {
+    setToastMessage({ text, isError });
     setTimeout(() => setToastMessage(null), 3200);
   };
 
   const handleMintGift = async (gift: UpgradeDefinition) => {
     const currentLevel = user.upgrades[gift.id] || 0;
     const price = getPrice(gift, currentLevel);
-    if (user.balance < price || user.level < gift.levelRequirement || mintingId) return;
+    if (mintingId) return;
+
+    if (user.level < gift.levelRequirement) {
+      sound.playError();
+      TelegramService.triggerHaptic('heavy');
+      showToast(`Requires Player Level ${gift.levelRequirement} to unlock ${gift.name}`, true);
+      return;
+    }
+
+    if (user.balance < price) {
+      sound.playError();
+      TelegramService.triggerHaptic('heavy');
+      showToast(`Insufficient FOX! Need ${price.toLocaleString()} FOX to mint ${gift.name}`, true);
+      return;
+    }
 
     try {
       setMintingId(gift.id);
+      await onPurchaseGift(gift.id);
       sound.playSuccess();
       TelegramService.triggerHaptic('heavy');
-      await onPurchaseGift(gift.id);
-      if (!equippedGiftId) {
-        onEquipGift(gift.id);
-      }
-      showToast(`Collected ${gift.name} (#${currentLevel + 1})! +${gift.baseBenefit.toLocaleString()} FOX/hr`);
+      onEquipGift(gift.id);
+      showToast(`🦊 Collected & Equipped ${gift.name} (#${currentLevel + 1})! +${gift.baseBenefit.toLocaleString()} FOX/hr`);
     } catch (err: any) {
-      console.error('Gift mint error:', err);
+      sound.playError();
+      TelegramService.triggerHaptic('heavy');
+      showToast(err?.message || 'Could not mint gift right now', true);
     } finally {
       setMintingId(null);
     }
@@ -91,7 +106,7 @@ export const GiftsScreen: React.FC<GiftsScreenProps> = ({
   const handleSendTelegramGift = (gift: UpgradeDefinition) => {
     sound.playCoin();
     TelegramService.triggerHaptic('medium');
-    const meta = FOX_GIFT_METADATA[gift.id] || FOX_GIFT_METADATA.gift_star_fox;
+    const meta = getFoxGiftMetadata(gift.id, gift.basePrice);
     const cleanBot = botUsername.replace('@', '');
     const tgDeepLink = `https://t.me/${cleanBot}?start=ref_${user.referralCode}`;
     const text = `🎁🦊 I'm sending you a "${gift.name}" (${meta.rarity} Telegram Collectible Gift · +${gift.baseBenefit.toLocaleString()} FOX/hr) on FOXCOIN! Claim your gift & +5,000 FOX bonus now:`;
@@ -103,9 +118,15 @@ export const GiftsScreen: React.FC<GiftsScreenProps> = ({
     <div className="w-full max-w-md mx-auto px-4 pb-24 pt-2 text-white">
       {/* Toast Notification */}
       {toastMessage && (
-        <div className="mb-3 p-3 rounded-2xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-xs font-bold flex items-center justify-center gap-2 shadow-lg">
-          <Sparkles className="w-4 h-4 text-emerald-400 shrink-0" />
-          <span>{toastMessage}</span>
+        <div
+          className={`mb-3 p-3 rounded-2xl border text-xs font-bold flex items-center justify-center gap-2 shadow-lg transition-all ${
+            toastMessage.isError
+              ? 'bg-red-500/20 border-red-500/40 text-red-300'
+              : 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
+          }`}
+        >
+          <Sparkles className={`w-4 h-4 shrink-0 ${toastMessage.isError ? 'text-red-400' : 'text-emerald-400'}`} />
+          <span>{toastMessage.text}</span>
         </div>
       )}
 
@@ -200,7 +221,7 @@ export const GiftsScreen: React.FC<GiftsScreenProps> = ({
       ) : (
         <div className="grid grid-cols-2 gap-3">
           {filteredGifts.map((gift) => {
-            const meta = FOX_GIFT_METADATA[gift.id] || FOX_GIFT_METADATA.gift_star_fox;
+            const meta = getFoxGiftMetadata(gift.id, gift.basePrice);
             const editionCount = user.upgrades[gift.id] || 0;
             const isOwned = editionCount > 0;
             const isEquipped = equippedGiftId === gift.id;
@@ -213,7 +234,7 @@ export const GiftsScreen: React.FC<GiftsScreenProps> = ({
                 key={gift.id}
                 onClick={() => {
                   sound.playTap();
-                  setSelectedGift(gift);
+                  setSelectedGiftId(gift.id);
                 }}
                 className={`relative rounded-3xl p-3.5 border transition flex flex-col justify-between cursor-pointer ${
                   isEquipped
@@ -249,7 +270,7 @@ export const GiftsScreen: React.FC<GiftsScreenProps> = ({
                       {gift.name}
                     </h3>
                     <div className="text-[10px] text-slate-400 text-center mt-0.5">
-                      {meta.backdropName} · ★ {meta.starsEquivalent}
+                      {meta.backdropName} · ★ {meta.starsEquivalent.toLocaleString()}
                     </div>
                   </div>
 
@@ -300,8 +321,13 @@ export const GiftsScreen: React.FC<GiftsScreenProps> = ({
                         if (!isOwned) return;
                         sound.playTap();
                         TelegramService.triggerHaptic('light');
-                        onEquipGift(gift.id);
-                        showToast(`Equipped ${gift.name} on your Tap Screen!`);
+                        if (isEquipped) {
+                          onEquipGift('');
+                          showToast(`Unequipped ${gift.name}`);
+                        } else {
+                          onEquipGift(gift.id);
+                          showToast(`Equipped ${gift.name} on your Tap Screen!`);
+                        }
                       }}
                       disabled={!isOwned}
                       className={`py-1.5 px-2 rounded-lg text-[10px] font-bold flex items-center justify-center gap-1 transition cursor-pointer ${
@@ -333,7 +359,7 @@ export const GiftsScreen: React.FC<GiftsScreenProps> = ({
 
       {/* TELEGRAM COLLECTIBLE GIFT INSPECTOR MODAL */}
       {selectedGift && (() => {
-        const meta = FOX_GIFT_METADATA[selectedGift.id] || FOX_GIFT_METADATA.gift_star_fox;
+        const meta = getFoxGiftMetadata(selectedGift.id, selectedGift.basePrice);
         const editionCount = user.upgrades[selectedGift.id] || 0;
         const isOwned = editionCount > 0;
         const isEquipped = equippedGiftId === selectedGift.id;
@@ -344,14 +370,14 @@ export const GiftsScreen: React.FC<GiftsScreenProps> = ({
         return (
           <div
             className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
-            onClick={() => setSelectedGift(null)}
+            onClick={() => setSelectedGiftId(null)}
           >
             <div
               className="w-full max-w-sm bg-[#111726] border border-slate-700/90 rounded-3xl p-5 shadow-2xl relative overflow-hidden"
               onClick={(e) => e.stopPropagation()}
             >
               <button
-                onClick={() => setSelectedGift(null)}
+                onClick={() => setSelectedGiftId(null)}
                 className="absolute top-3.5 right-3.5 w-8 h-8 rounded-full bg-slate-800/90 hover:bg-slate-700 flex items-center justify-center text-slate-300 cursor-pointer"
               >
                 <X className="w-4 h-4" />
@@ -416,7 +442,9 @@ export const GiftsScreen: React.FC<GiftsScreenProps> = ({
                   >
                     <img src={foxGoldCoinImg} alt="FOX" className="w-4 h-4" />
                     <span className="tabular-nums">
-                      {isOwned
+                      {mintingId === selectedGift.id
+                        ? 'Minting...'
+                        : isOwned
                         ? `Mint Next Edition (#${editionCount + 1}) · ${price.toLocaleString()} FOX`
                         : `Collect Telegram Gift · ${price.toLocaleString()} FOX`}
                     </span>
@@ -431,14 +459,19 @@ export const GiftsScreen: React.FC<GiftsScreenProps> = ({
                   {isOwned && (
                     <button
                       onClick={() => {
-                        onEquipGift(selectedGift.id);
-                        showToast(`Equipped ${selectedGift.name} on your Tap Screen!`);
-                        setSelectedGift(null);
+                        if (isEquipped) {
+                          onEquipGift('');
+                          showToast(`Unequipped ${selectedGift.name}`);
+                        } else {
+                          onEquipGift(selectedGift.id);
+                          showToast(`Equipped ${selectedGift.name} on your Tap Screen!`);
+                        }
+                        setSelectedGiftId(null);
                       }}
                       className="py-2.5 px-3 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer"
                     >
                       <Award className="w-4 h-4" />
-                      <span>{isEquipped ? 'Equipped' : 'Equip on Home'}</span>
+                      <span>{isEquipped ? 'Unequip' : 'Equip on Home'}</span>
                     </button>
                   )}
 

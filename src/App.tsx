@@ -116,9 +116,22 @@ export default function App() {
 
     initApp();
 
-    // Register real-time sync listener from api client
+    // Register real-time sync listener from api client with anti-rollback reconciliation
     api.registerStateListener((updatedUser) => {
-      setUser(updatedUser);
+      setUser((prev) => {
+        if (!prev || prev.id !== updatedUser.id) return updatedUser;
+        // If taps are queued or real-time passive profit ticked slightly ahead, prevent visual rollback
+        if (api.hasPendingTaps()) {
+          return {
+            ...updatedUser,
+            balance: Math.max(updatedUser.balance, prev.balance),
+            totalEarned: Math.max(updatedUser.totalEarned, prev.totalEarned),
+            totalTaps: Math.max(updatedUser.totalTaps, prev.totalTaps),
+            energy: Math.min(updatedUser.energy, prev.energy),
+          };
+        }
+        return updatedUser;
+      });
     });
   }, []);
 
@@ -126,57 +139,76 @@ export default function App() {
   useEffect(() => {
     if (user && !offlineCheckedRef.current) {
       offlineCheckedRef.current = true;
-      if (user.unclaimedPassive > 0) {
-        setOfflineEarningsAmount(user.unclaimedPassive);
+      if (user.unclaimedPassive >= 10) {
+        setOfflineEarningsAmount(Math.floor(user.unclaimedPassive));
         setShowOfflineModal(true);
       }
     }
   }, [user]);
 
-  // Client-side smooth energy regeneration ticker
+  // Client-side real-time energy regeneration AND continuous profitPerHour ticker
+  const lastTickRef = useRef<number>(Date.now());
   useEffect(() => {
+    lastTickRef.current = Date.now();
     const interval = setInterval(() => {
+      const now = Date.now();
+      const elapsedSec = Math.min(10, Math.max(0.5, (now - lastTickRef.current) / 1000));
+      lastTickRef.current = now;
+
       setUser((prev) => {
         if (!prev) return null;
-        if (prev.energy >= prev.maxEnergy) return prev;
-        return {
+        const needsEnergy = prev.energy < prev.maxEnergy;
+        const hasProfit = prev.profitPerHour > 0;
+        if (!needsEnergy && !hasProfit) return prev;
+
+        const nextEnergy = needsEnergy
+          ? Math.min(prev.maxEnergy, prev.energy + prev.energyRegenRate * elapsedSec)
+          : prev.energy;
+        const profitGain = hasProfit ? (prev.profitPerHour / 3600) * elapsedSec : 0;
+
+        const nextState: UserGameState = {
           ...prev,
-          energy: Math.min(prev.maxEnergy, prev.energy + prev.energyRegenRate),
+          energy: Math.floor(nextEnergy),
+          balance: prev.balance + profitGain,
+          totalEarned: prev.totalEarned + profitGain,
+          lastPassiveClaimTimestamp: now,
         };
+        api.syncClientState(nextState);
+        return nextState;
       });
     }, 1000);
 
     return () => clearInterval(interval);
   }, []);
 
-  // Tapping handler
-  const handleTap = useCallback(
-    (count: number) => {
-      if (!user) return;
-      if (user.energy <= 0) return;
+  // Tapping handler (stable reference for zero re-render lag)
+  const handleTap = useCallback((count: number) => {
+    setUser((prev) => {
+      if (!prev) return null;
+      const isTurbo = prev.boosters.turboActiveUntil > Date.now();
+      if (!isTurbo && prev.energy <= 0) return prev;
 
-      const isTurbo = user.boosters.turboActiveUntil > Date.now();
       const tapMultiplier = isTurbo ? 3 : 1;
-      const earned = user.tapPower * tapMultiplier * count;
+      const effectiveCount = isTurbo ? count : Math.min(count, Math.floor(prev.energy));
+      if (effectiveCount <= 0) return prev;
 
-      // Optimistic instant UI update
-      setUser((prev) => {
-        if (!prev) return null;
-        const nextEnergy = Math.max(0, prev.energy - count);
-        return {
-          ...prev,
-          balance: prev.balance + earned,
-          totalEarned: prev.totalEarned + earned,
-          totalTaps: prev.totalTaps + count,
-          energy: nextEnergy,
-        };
-      });
+      const earned = prev.tapPower * tapMultiplier * effectiveCount;
+      const nextEnergy = isTurbo ? prev.energy : Math.max(0, prev.energy - effectiveCount);
 
-      // Send to batched queue for server authorization
-      api.queueTap(count);
-    },
-    [user]
-  );
+      const nextState: UserGameState = {
+        ...prev,
+        balance: prev.balance + earned,
+        totalEarned: prev.totalEarned + earned,
+        totalTaps: prev.totalTaps + effectiveCount,
+        energy: nextEnergy,
+      };
+      api.syncClientState(nextState);
+      return nextState;
+    });
+
+    // Send to batched queue for server authorization
+    api.queueTap(count);
+  }, []);
 
   // Upgrade handler
   const handlePurchaseUpgrade = async (upgradeId: string) => {

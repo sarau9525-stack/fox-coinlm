@@ -454,7 +454,7 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
         'Content-Type': 'application/json',
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-admin-secret, x-telegram-bot-api-secret-token',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-admin-secret, x-fox-sync, x-telegram-bot-api-secret-token',
       },
     });
   };
@@ -466,20 +466,146 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
       headers: {
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-admin-secret, x-telegram-bot-api-secret-token',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-admin-secret, x-fox-sync, x-telegram-bot-api-secret-token',
         'Access-Control-Max-Age': '86400',
       },
     });
   }
 
-  // Auth helper
+  // Recalculate derived stats from upgrades & gifts on Cloudflare Edge
+  const recalculateEdgePlayerStats = (user: UserGameState) => {
+    let tapPower = GAME_CONSTANTS.BASE_TAP_POWER;
+    let maxEnergy = GAME_CONSTANTS.BASE_MAX_ENERGY;
+    let energyRegen = GAME_CONSTANTS.BASE_ENERGY_REGEN_PER_SEC;
+    let profitPerHour = 0;
+
+    for (const [upId, lvl] of Object.entries(user.upgrades || {})) {
+      const upDef = edgeUpgrades.find((u) => u.id === upId);
+      if (!upDef || !lvl) continue;
+
+      if (upDef.benefitType === 'tap_power') {
+        tapPower += upDef.baseBenefit * lvl;
+      } else if (upDef.benefitType === 'max_energy') {
+        maxEnergy += upDef.baseBenefit * lvl;
+      } else if (upDef.benefitType === 'energy_regen') {
+        energyRegen += upDef.baseBenefit * lvl;
+      } else if (upDef.benefitType === 'profit_per_hour') {
+        profitPerHour += upDef.baseBenefit * lvl;
+      }
+    }
+
+    user.tapPower = tapPower;
+    user.maxEnergy = maxEnergy;
+    user.energyRegenRate = energyRegen;
+    user.profitPerHour = profitPerHour;
+  };
+
+  // Refresh energy & credit continuous profitPerHour on time on Cloudflare Edge
+  const refreshEdgeUserState = (user: UserGameState, now: number = Date.now()): UserGameState => {
+    recalculateEdgePlayerStats(user);
+
+    const lastEnergyTime = (user as any).lastEnergyTimestamp || user.createdAt || now;
+    const energyElapsedSec = Math.max(0, (now - lastEnergyTime) / 1000);
+    if (energyElapsedSec >= 1 && user.energy < user.maxEnergy) {
+      const regenerated = Math.floor(energyElapsedSec * user.energyRegenRate);
+      if (regenerated > 0) {
+        user.energy = Math.min(user.maxEnergy, user.energy + regenerated);
+        (user as any).lastEnergyTimestamp = now;
+      }
+    } else if (user.energy >= user.maxEnergy) {
+      (user as any).lastEnergyTimestamp = now;
+    }
+
+    const passiveElapsedSec = Math.max(0, (now - (user.lastPassiveClaimTimestamp || now)) / 1000);
+    const cappedPassiveSec = Math.min(passiveElapsedSec, (user.maxOfflineHours || 3) * 3600);
+    if (user.profitPerHour > 0 && cappedPassiveSec > 0) {
+      if (passiveElapsedSec < 120) {
+        const activeEarned = (user.profitPerHour / 3600) * cappedPassiveSec;
+        user.balance += activeEarned;
+        user.totalEarned += activeEarned;
+        user.lastPassiveClaimTimestamp = now;
+        user.unclaimedPassive = 0;
+      } else {
+        user.unclaimedPassive = Math.floor((user.profitPerHour / 3600) * cappedPassiveSec);
+      }
+    } else {
+      user.unclaimedPassive = 0;
+      user.lastPassiveClaimTimestamp = now;
+    }
+
+    const todayStr = new Date(now).toISOString().split('T')[0];
+    user.canClaimDaily = user.lastDailyClaimDate !== todayStr;
+
+    const lvl = getPlayerLevel(Math.max(user.totalEarned, user.balance));
+    const nextLvl = getNextPlayerLevel(lvl.level);
+    user.level = lvl.level;
+    user.levelName = lvl.name;
+    user.currentLevelMinCoins = lvl.minCoins;
+    user.nextLevelMinCoins = nextLvl.minCoins;
+
+    return user;
+  };
+
+  // Parse client sync snapshot header to prevent cold-start state loss across Cloudflare Edge isolates
+  const parseClientSyncUser = (): UserGameState | null => {
+    const syncHeader = request.headers.get('x-fox-sync');
+    if (!syncHeader) return null;
+    try {
+      const jsonStr = decodeURIComponent(Buffer.from(syncHeader, 'base64').toString('utf8'));
+      const parsed = JSON.parse(jsonStr);
+      if (parsed && typeof parsed.id === 'string') {
+        return parsed as UserGameState;
+      }
+    } catch {}
+    return null;
+  };
+
+  // Auth helper with automatic cold-start isolate rehydration
   const getAuthUser = (): UserGameState | null => {
     const authHeader = request.headers.get('authorization');
     if (!authHeader || !authHeader.startsWith('Bearer ')) return null;
     const token = authHeader.replace('Bearer ', '').trim();
     const userId = verifyToken(token, env.SESSION_SECRET);
     if (!userId) return null;
-    return edgeUsers.get(userId) || null;
+
+    let user = edgeUsers.get(userId) || null;
+    const syncedClient = parseClientSyncUser();
+
+    if (!user) {
+      if (syncedClient && syncedClient.id === userId) {
+        user = {
+          ...syncedClient,
+          upgrades: syncedClient.upgrades || {},
+          tasks: syncedClient.tasks || {},
+          boosters: syncedClient.boosters || {
+            fullEnergyRemaining: 6,
+            nextFullEnergyAt: 0,
+            turboActiveUntil: 0,
+            nextTurboAt: 0,
+          },
+        };
+        edgeUsers.set(userId, user);
+      } else {
+        user = createNewUserRecord(userId, `Fox_${userId.slice(-4)}`, userId.startsWith('tg_'), userId.startsWith('guest_'));
+      }
+    } else if (syncedClient && syncedClient.id === userId) {
+      // Reconcile if client hit a different Cloudflare isolate previously
+      if (syncedClient.upgrades) {
+        for (const [upId, lvl] of Object.entries(syncedClient.upgrades)) {
+          if ((lvl || 0) > (user.upgrades[upId] || 0)) {
+            user.upgrades[upId] = lvl;
+          }
+        }
+      }
+      if ((syncedClient.totalEarned || 0) > (user.totalEarned || 0)) {
+        user.totalEarned = syncedClient.totalEarned;
+      }
+      if ((syncedClient.totalTaps || 0) > (user.totalTaps || 0)) {
+        user.totalTaps = syncedClient.totalTaps;
+      }
+    }
+
+    return refreshEdgeUserState(user);
   };
 
   const checkIsAdmin = (user: UserGameState | null): boolean => {
@@ -524,7 +650,7 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
       body = await request.json();
     } catch {}
     const guestId = `guest_${Math.random().toString(36).substring(2, 9)}`;
-    const guestUser = createNewUserRecord(guestId, `Guest_${guestId.slice(-4)}`, false, true, body.refCode);
+    const guestUser = createNewUserRecord(guestId, body.username || `Guest_${guestId.slice(-4)}`, false, true, body.refCode);
     const token = createToken(guestId, env.SESSION_SECRET);
 
     if (env.DB) await persistUserToD1(env.DB, guestUser);
@@ -562,6 +688,7 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
       user.displayName = `${tgUser.first_name || ''} ${tgUser.last_name || ''}`.trim() || user.username;
     }
 
+    refreshEdgeUserState(user);
     const token = createToken(userId, env.SESSION_SECRET);
     if (env.DB) await persistUserToD1(env.DB, user);
     return jsonResponse({ token, user });
@@ -580,7 +707,8 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
     const userId = `web_${Math.random().toString(36).substring(2, 9)}`;
     const user = createNewUserRecord(userId, username || email.split('@')[0], false, false, refCode);
     user.email = email;
-    if (env.ADMIN_EMAIL && email.toLowerCase() === env.ADMIN_EMAIL.toLowerCase()) {
+    const adminEmail = (env.ADMIN_EMAIL || 'k39127031@gmail.com').toLowerCase().trim();
+    if (email.toLowerCase().trim() === adminEmail) {
       user.isAdmin = true;
     }
 
@@ -597,14 +725,15 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
     const { email } = body;
     let found = Array.from(edgeUsers.values()).find((u) => u.email === email);
     if (!found) {
-      // Auto-create for demo seamless login
       const userId = `web_${Math.random().toString(36).substring(2, 9)}`;
       found = createNewUserRecord(userId, email.split('@')[0], false, false);
       found.email = email;
-      if (env.ADMIN_EMAIL && email.toLowerCase() === env.ADMIN_EMAIL.toLowerCase()) {
+      const adminEmail = (env.ADMIN_EMAIL || 'k39127031@gmail.com').toLowerCase().trim();
+      if (email.toLowerCase().trim() === adminEmail) {
         found.isAdmin = true;
       }
     }
+    refreshEdgeUserState(found);
     const token = createToken(found.id, env.SESSION_SECRET);
     if (env.DB) await persistUserToD1(env.DB, found);
     return jsonResponse({ token, user: found });
@@ -626,21 +755,21 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
     } catch {}
     const count = Math.min(Math.max(1, body.tapCount || 1), 100);
 
-    const isTurbo = user.boosters.turboActiveUntil > Date.now();
+    const now = Date.now();
+    const isTurbo = user.boosters.turboActiveUntil > now;
     const tapMultiplier = isTurbo ? 3 : 1;
-    const earned = user.tapPower * tapMultiplier * count;
+    const actualTaps = isTurbo ? count : Math.min(count, Math.floor(user.energy));
+    const earned = user.tapPower * tapMultiplier * actualTaps;
 
     user.balance += earned;
     user.totalEarned += earned;
-    user.totalTaps += count;
-    user.energy = Math.max(0, user.energy - count);
+    user.totalTaps += actualTaps;
+    if (!isTurbo) {
+      user.energy = Math.max(0, user.energy - actualTaps);
+    }
+    (user as any).lastEnergyTimestamp = now;
 
-    const levelObj = getPlayerLevel(user.balance);
-    user.level = levelObj.level;
-    user.levelName = levelObj.name;
-    user.currentLevelMinCoins = levelObj.minCoins;
-    user.nextLevelMinCoins = getNextPlayerLevel(levelObj.level).minCoins;
-
+    refreshEdgeUserState(user, now);
     edgeUsers.set(user.id, user);
     if (env.DB) await persistUserToD1(env.DB, user);
     return jsonResponse({ user });
@@ -658,22 +787,16 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
 
     const currentLevel = user.upgrades[upgrade.id] || 0;
     const price = Math.floor(upgrade.basePrice * Math.pow(upgrade.priceMultiplier, currentLevel));
-    if (user.balance < price) return jsonResponse({ error: 'Insufficient balance' }, 400);
+    if (user.balance < price) return jsonResponse({ error: 'Insufficient FOX balance' }, 400);
 
     user.balance -= price;
     user.upgrades[upgrade.id] = currentLevel + 1;
 
-    if (upgrade.benefitType === 'tap_power') {
-      user.tapPower += upgrade.baseBenefit;
-    } else if (upgrade.benefitType === 'max_energy') {
-      user.maxEnergy += upgrade.baseBenefit;
+    if (upgrade.benefitType === 'max_energy') {
       user.energy += upgrade.baseBenefit;
-    } else if (upgrade.benefitType === 'profit_per_hour') {
-      user.profitPerHour += upgrade.baseBenefit;
-    } else if (upgrade.benefitType === 'energy_regen') {
-      user.energyRegenRate += upgrade.baseBenefit;
     }
 
+    refreshEdgeUserState(user);
     edgeUsers.set(user.id, user);
     if (env.DB) await persistUserToD1(env.DB, user);
     return jsonResponse({ user });
@@ -682,6 +805,10 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
   if (pathname === '/api/game/claim-daily' && method === 'POST') {
     const user = getAuthUser();
     if (!user) return jsonResponse({ error: 'Unauthorized' }, 401);
+    const todayStr = new Date().toISOString().split('T')[0];
+    if (user.lastDailyClaimDate === todayStr) {
+      return jsonResponse({ error: 'Daily reward already claimed today' }, 400);
+    }
     const day = (user.dailyStreak % 7) + 1;
     const rewardItem = DAILY_REWARDS.find((r) => r.day === day) || DAILY_REWARDS[0];
     const rewardAmount = rewardItem.coins;
@@ -689,9 +816,10 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
     user.balance += rewardAmount;
     user.totalEarned += rewardAmount;
     user.dailyStreak += 1;
-    user.lastDailyClaimDate = new Date().toISOString().split('T')[0];
+    user.lastDailyClaimDate = todayStr;
     user.canClaimDaily = false;
 
+    refreshEdgeUserState(user);
     edgeUsers.set(user.id, user);
     if (env.DB) await persistUserToD1(env.DB, user);
     return jsonResponse({ user, rewardAmount });
@@ -700,11 +828,18 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
   if (pathname === '/api/game/claim-passive' && method === 'POST') {
     const user = getAuthUser();
     if (!user) return jsonResponse({ error: 'Unauthorized' }, 401);
-    const amount = user.unclaimedPassive;
-    user.balance += amount;
-    user.totalEarned += amount;
+    const now = Date.now();
+    const elapsedSec = Math.max(0, (now - (user.lastPassiveClaimTimestamp || now)) / 1000);
+    const cappedSec = Math.min(elapsedSec, (user.maxOfflineHours || 3) * 3600);
+    const amount = Math.max(user.unclaimedPassive || 0, Math.floor((user.profitPerHour / 3600) * cappedSec));
+
+    if (amount > 0) {
+      user.balance += amount;
+      user.totalEarned += amount;
+    }
     user.unclaimedPassive = 0;
-    user.lastPassiveClaimTimestamp = Date.now();
+    user.lastPassiveClaimTimestamp = now;
+    refreshEdgeUserState(user, now);
     edgeUsers.set(user.id, user);
     if (env.DB) await persistUserToD1(env.DB, user);
     return jsonResponse({ user, claimedAmount: amount });
@@ -732,6 +867,7 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
     };
     user.balance += task.reward;
     user.totalEarned += task.reward;
+    refreshEdgeUserState(user);
     edgeUsers.set(user.id, user);
     if (env.DB) await persistUserToD1(env.DB, user);
     return jsonResponse({ user, reward: task.reward });
@@ -744,14 +880,19 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
     try {
       body = await request.json();
     } catch {}
+    const now = Date.now();
     if (body.type === 'full_energy') {
+      if (user.boosters.fullEnergyRemaining <= 0) {
+        return jsonResponse({ error: 'Daily Full Energy refills depleted' }, 400);
+      }
       user.energy = user.maxEnergy;
       user.boosters.fullEnergyRemaining = Math.max(0, user.boosters.fullEnergyRemaining - 1);
-      user.boosters.nextFullEnergyAt = Date.now() + 60 * 60 * 1000;
+      (user as any).lastEnergyTimestamp = now;
     } else if (body.type === 'turbo') {
-      user.boosters.turboActiveUntil = Date.now() + 30 * 1000;
-      user.boosters.nextTurboAt = Date.now() + 2 * 60 * 60 * 1000;
+      user.boosters.turboActiveUntil = now + GAME_CONSTANTS.TURBO_DURATION_MS;
+      user.boosters.nextTurboAt = now + 60 * 1000;
     }
+    refreshEdgeUserState(user, now);
     edgeUsers.set(user.id, user);
     if (env.DB) await persistUserToD1(env.DB, user);
     return jsonResponse({ user });
@@ -779,20 +920,16 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
     if (prize.type === 'coins') {
       user.balance += prize.amount;
       user.totalEarned += prize.amount;
-      const lvl = getPlayerLevel(user.balance);
-      const nextLvl = getNextPlayerLevel(lvl.level);
-      user.level = lvl.level;
-      user.levelName = lvl.name;
-      user.currentLevelMinCoins = lvl.minCoins;
-      user.nextLevelMinCoins = nextLvl.minCoins;
     } else if (prize.type === 'full_energy') {
       user.energy = user.maxEnergy;
       user.boosters.fullEnergyRemaining += prize.amount;
+      (user as any).lastEnergyTimestamp = now;
     } else if (prize.type === 'turbo') {
       const baseUntil = Math.max(now, user.boosters.turboActiveUntil || 0);
       user.boosters.turboActiveUntil = baseUntil + prize.amount * 1000;
     }
 
+    refreshEdgeUserState(user, now);
     edgeUsers.set(user.id, user);
     if (env.DB) await persistUserToD1(env.DB, user);
     return jsonResponse({ user, prize, prizeIndex });
@@ -817,6 +954,7 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
     user.referralEarnings = (user.referralEarnings || 0) + bonus;
     user.claimedMilestones = milestonesAchieved;
 
+    refreshEdgeUserState(user);
     edgeUsers.set(user.id, user);
     if (env.DB) await persistUserToD1(env.DB, user);
     return jsonResponse({ success: true, user, claimedCount: unclaimed, bonus });
@@ -835,6 +973,7 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
       user.totalEarned += bonus;
     }
 
+    refreshEdgeUserState(user);
     edgeUsers.set(user.id, user);
     if (env.DB) await persistUserToD1(env.DB, user);
     return jsonResponse({ success: true, user, bonus });
@@ -909,6 +1048,7 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
   if (pathname === '/api/game/leaderboard') {
     const user = getAuthUser();
     const sorted = Array.from(edgeUsers.values())
+      .map((u) => refreshEdgeUserState(u))
       .sort((a, b) => b.balance - a.balance)
       .slice(0, 50);
 
@@ -924,10 +1064,14 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
       isCurrentPlayer: user?.id === u.id,
     }));
 
+    const playerEntry = entries.find((e) => e.isCurrentPlayer);
+
     return jsonResponse({
+      list: entries,
+      playerEntry,
       entries,
       totalPlayers: edgeUsers.size,
-      currentUserRank: entries.find((e) => e.isCurrentPlayer)?.rank || 1,
+      currentUserRank: playerEntry?.rank || 1,
     });
   }
 

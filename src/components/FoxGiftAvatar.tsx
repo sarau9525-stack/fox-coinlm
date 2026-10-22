@@ -145,15 +145,98 @@ export const FOX_GIFT_METADATA: Record<string, FoxGiftMetadata> = {
     secondaryColor: '#CCFBF1',
     accessoryLabel: '1-of-500 Diamond Facet',
   },
+  gift_inferno_fox: {
+    id: 'gift_inferno_fox',
+    rarity: 'Legendary',
+    starsEquivalent: 25000,
+    totalSupply: '350',
+    backdropName: 'Volcanic Magma Core',
+    gradientClass: 'from-orange-500/45 via-red-950/60 to-slate-950',
+    borderClass: 'border-orange-400/70',
+    accentTextClass: 'text-orange-200',
+    primaryColor: '#F97316',
+    secondaryColor: '#FDE047',
+    accessoryLabel: 'Blazing Magma Halo',
+  },
+  gift_emerald_fox: {
+    id: 'gift_emerald_fox',
+    rarity: 'Legendary',
+    starsEquivalent: 50000,
+    totalSupply: '250',
+    backdropName: 'Imperial Jade Palace',
+    gradientClass: 'from-emerald-400/40 via-green-950/55 to-slate-950',
+    borderClass: 'border-emerald-400/70',
+    accentTextClass: 'text-emerald-200',
+    primaryColor: '#10B981',
+    secondaryColor: '#A7F3D0',
+    accessoryLabel: 'Imperial Jade Scepter',
+  },
+  gift_nebula_fox: {
+    id: 'gift_nebula_fox',
+    rarity: 'Mythic',
+    starsEquivalent: 100000,
+    totalSupply: '150',
+    backdropName: 'Andromeda Singularity',
+    gradientClass: 'from-fuchsia-500/45 via-indigo-950/60 to-slate-950',
+    borderClass: 'border-fuchsia-400/75',
+    accentTextClass: 'text-fuchsia-200',
+    primaryColor: '#D946EF',
+    secondaryColor: '#F5D0FE',
+    accessoryLabel: 'Dark-Matter Orbit Ring',
+  },
+  gift_celestial_fox: {
+    id: 'gift_celestial_fox',
+    rarity: 'Mythic',
+    starsEquivalent: 250000,
+    totalSupply: '77',
+    backdropName: 'Solaris Pantheon',
+    gradientClass: 'from-yellow-300/45 via-amber-900/60 to-slate-950',
+    borderClass: 'border-yellow-300/80',
+    accentTextClass: 'text-yellow-100',
+    primaryColor: '#FACC15',
+    secondaryColor: '#FEF9C3',
+    accessoryLabel: 'Divine Solar Halo',
+  },
 };
+
+export function getFoxGiftMetadata(giftId: string, basePrice?: number): FoxGiftMetadata {
+  if (FOX_GIFT_METADATA[giftId]) {
+    return FOX_GIFT_METADATA[giftId];
+  }
+  const price = basePrice || 10000;
+  const rarity: FoxGiftMetadata['rarity'] =
+    price >= 50_000_000
+      ? 'Mythic'
+      : price >= 500_000
+      ? 'Legendary'
+      : price >= 40_000
+      ? 'Epic'
+      : price >= 2_500
+      ? 'Rare'
+      : 'Common';
+
+  return {
+    id: giftId,
+    rarity,
+    starsEquivalent: Math.max(50, Math.floor(price / 50)),
+    totalSupply: '1,000',
+    backdropName: 'Custom Fox Edition',
+    gradientClass: 'from-amber-500/35 via-orange-950/50 to-slate-950',
+    borderClass: 'border-amber-400/50',
+    accentTextClass: 'text-amber-300',
+    primaryColor: '#F59E0B',
+    secondaryColor: '#FDE68A',
+    accessoryLabel: 'Limited Edition Crest',
+  };
+}
 
 interface FoxGiftAvatarProps {
   giftId: string;
   size?: 'sm' | 'md' | 'lg';
 }
 
-export const FoxGiftAvatar: React.FC<FoxGiftAvatarProps> = ({ giftId, size = 'md' }) => {
-  const meta = FOX_GIFT_METADATA[giftId] || FOX_GIFT_METADATA.gift_star_fox;
+export const FoxGiftAvatar: React.FC<FoxGiftAvatarProps> = React.memo(({ giftId, size = 'md' }) => {
+  const meta = getFoxGiftMetadata(giftId);
 
   const sizeClass =
     size === 'sm' ? 'w-11 h-11' : size === 'lg' ? 'w-24 h-24' : 'w-16 h-16';
@@ -179,6 +262,14 @@ export const FoxGiftAvatar: React.FC<FoxGiftAvatarProps> = ({ giftId, size = 'md
         return { main: '#F59E0B', dark: '#B45309', cheek: '#FFFBEB', earInner: '#FDE68A' };
       case 'gift_diamond_fox':
         return { main: '#2DD4BF', dark: '#0F766E', cheek: '#F0FDFA', earInner: '#99F6E4' };
+      case 'gift_inferno_fox':
+        return { main: '#FB923C', dark: '#9A3412', cheek: '#FEF3C7', earInner: '#FDE047' };
+      case 'gift_emerald_fox':
+        return { main: '#34D399', dark: '#047857', cheek: '#ECFDF5', earInner: '#A7F3D0' };
+      case 'gift_nebula_fox':
+        return { main: '#E879F9', dark: '#86198F', cheek: '#FDF4FF', earInner: '#F5D0FE' };
+      case 'gift_celestial_fox':
+        return { main: '#FACC15', dark: '#CA8A04', cheek: '#FEFCE8', earInner: '#FEF08A' };
       default:
         return { main: '#F97316', dark: '#C2410C', cheek: '#FFF7ED', earInner: '#FDBA74' };
     }
@@ -207,6 +298,35 @@ export const FoxGiftAvatar: React.FC<FoxGiftAvatarProps> = ({ giftId, size = 'md
         <circle cx="16" cy="22" r="2" fill={meta.secondaryColor} opacity="0.8" />
         <circle cx="85" cy="20" r="1.8" fill={meta.secondaryColor} opacity="0.7" />
         <circle cx="84" cy="78" r="2.2" fill={meta.primaryColor} opacity="0.75" />
+
+        {/* Celestial Solar Halo Ring */}
+        {giftId === 'gift_celestial_fox' && (
+          <circle
+            cx="50"
+            cy="50"
+            r="41"
+            fill="none"
+            stroke="#FDE047"
+            strokeWidth="2.5"
+            strokeDasharray="6 3"
+            opacity="0.85"
+          />
+        )}
+
+        {/* Nebula Orbit Ring */}
+        {giftId === 'gift_nebula_fox' && (
+          <ellipse
+            cx="50"
+            cy="55"
+            rx="44"
+            ry="16"
+            transform="rotate(-18 50 55)"
+            fill="none"
+            stroke="#F0ABFC"
+            strokeWidth="2.5"
+            opacity="0.75"
+          />
+        )}
 
         {/* Left & Right Fox Ears */}
         <polygon points="20,46 14,14 42,32" fill={fur.dark} />
@@ -250,9 +370,9 @@ export const FoxGiftAvatar: React.FC<FoxGiftAvatarProps> = ({ giftId, size = 'md
           fill={fur.cheek}
         />
 
-        {/* Diamond Facet Lines for Mythic Diamond Fox */}
-        {giftId === 'gift_diamond_fox' && (
-          <g stroke="#CCFBF1" strokeWidth="1" opacity="0.65">
+        {/* Diamond Facet Lines for Mythic Diamond / Emerald Fox */}
+        {(giftId === 'gift_diamond_fox' || giftId === 'gift_emerald_fox') && (
+          <g stroke={giftId === 'gift_emerald_fox' ? '#A7F3D0' : '#CCFBF1'} strokeWidth="1" opacity="0.65">
             <line x1="50" y1="28" x2="35" y2="52" />
             <line x1="50" y1="28" x2="65" y2="52" />
             <line x1="35" y1="52" x2="65" y2="52" />
@@ -374,7 +494,7 @@ export const FoxGiftAvatar: React.FC<FoxGiftAvatarProps> = ({ giftId, size = 'md
         )}
 
         {/* 9. Royal Sovereign Crown */}
-        {giftId === 'gift_royal_fox' && (
+        {(giftId === 'gift_royal_fox' || giftId === 'gift_celestial_fox') && (
           <g>
             <polygon
               points="28,34 32,14 44,25 50,11 56,25 68,14 72,34"
@@ -388,19 +508,23 @@ export const FoxGiftAvatar: React.FC<FoxGiftAvatarProps> = ({ giftId, size = 'md
           </g>
         )}
 
-        {/* 10. Mythic Diamond Floating Gem Crown */}
-        {giftId === 'gift_diamond_fox' && (
+        {/* 10. Mythic Diamond / Emerald / Inferno / Nebula Floating Gem Crown */}
+        {(giftId === 'gift_diamond_fox' ||
+          giftId === 'gift_emerald_fox' ||
+          giftId === 'gift_inferno_fox' ||
+          giftId === 'gift_nebula_fox') && (
           <g>
             <polygon
               points="50,8 62,20 50,32 38,20"
-              fill="#5EEAD4"
+              fill={meta.primaryColor}
               stroke="#FFFFFF"
               strokeWidth="2"
             />
-            <polygon points="50,11 58,20 50,29 42,20" fill="#CCFBF1" />
+            <polygon points="50,11 58,20 50,29 42,20" fill={meta.secondaryColor} />
           </g>
         )}
       </svg>
     </div>
   );
-};
+});
+

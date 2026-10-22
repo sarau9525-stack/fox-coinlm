@@ -80,6 +80,14 @@ class ApiService {
     this.onStateUpdated = cb;
   }
 
+  public hasPendingTaps(): boolean {
+    return this.pendingTapCount > 0 || this.isFlushingTaps;
+  }
+
+  public syncClientState(user: UserGameState) {
+    this.saveLocalUser(user);
+  }
+
   private getLocalUser(defaultUsername = 'FoxPlayer', isTelegram = false, refCode?: string): UserGameState {
     if (typeof window !== 'undefined') {
       const raw = localStorage.getItem(LOCAL_USER_KEY);
@@ -206,6 +214,16 @@ class ApiService {
       headers['Authorization'] = `Bearer ${this.token}`;
     }
 
+    // Attach lightweight state snapshot header so Cloudflare Edge isolates can seamlessly rehydrate after cold-starts
+    if (typeof window !== 'undefined') {
+      try {
+        const rawUser = localStorage.getItem(LOCAL_USER_KEY);
+        if (rawUser) {
+          headers['x-fox-sync'] = btoa(encodeURIComponent(rawUser));
+        }
+      } catch {}
+    }
+
     const response = await fetch(endpoint, {
       ...options,
       headers,
@@ -231,7 +249,8 @@ class ApiService {
       msg.startsWith('ENDPOINT_NOT_JSON') ||
       msg.includes('Failed to fetch') ||
       msg.includes('NetworkError') ||
-      msg.includes('404')
+      msg.includes('404') ||
+      msg.includes('Unauthorized')
     );
   }
 
@@ -451,27 +470,19 @@ class ApiService {
       });
 
       this.saveLocalUser(res.user);
-      if (this.onStateUpdated && res.user) {
+      // Only push server state to UI if no newer taps occurred while the request was in flight
+      if (this.onStateUpdated && res.user && this.pendingTapCount === 0) {
         this.onStateUpdated(res.user);
       }
       return res.user;
     } catch (err) {
       if (this.isStaticFallbackError(err)) {
         const user = this.getLocalUser();
-        const isTurbo = user.boosters.turboActiveUntil > Date.now();
-        const multiplier = isTurbo ? GAME_CONSTANTS.TURBO_MULTIPLIER : 1;
-        const effectiveTaps = isTurbo ? countToSend : Math.min(countToSend, Math.floor(user.energy));
-        const earned = effectiveTaps * user.tapPower * multiplier;
-
-        if (!isTurbo) {
-          user.energy = Math.max(0, user.energy - effectiveTaps);
-        }
-        user.balance += earned;
-        user.totalEarned += earned;
-        user.totalTaps += effectiveTaps;
         this.syncLocalUserProgress(user);
         this.saveLocalUser(user);
-        if (this.onStateUpdated) this.onStateUpdated(user);
+        if (this.onStateUpdated && this.pendingTapCount === 0) {
+          this.onStateUpdated(user);
+        }
         return user;
       }
       return null;
