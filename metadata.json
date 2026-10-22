@@ -1,0 +1,6 @@
+{
+  "name": "FOXCOIN — Telegram Mini App & Web Clicker",
+  "description": "FOXCOIN: Tap-to-earn fox clicker game with crypto exchange trading, 10-day payout timer, referral milestones, upgrades, and Cloudflare D1 & Pages support.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,462 @@
+import React, { useState } from 'react';
+import {
+  Gift,
+  Sparkles,
+  Send,
+  Check,
+  Lock,
+  TrendingUp,
+  Star,
+  Award,
+  Layers,
+  X,
+} from 'lucide-react';
+import { UpgradeDefinition, UserGameState } from '../types/game.js';
+import { FoxGiftAvatar, FOX_GIFT_METADATA } from './FoxGiftAvatar.js';
+import { foxGoldCoinImg } from '../assets/assets.js';
+import { sound } from '../utils/audio.js';
+import { TelegramService } from '../utils/telegram.js';
+
+interface GiftsScreenProps {
+  user: UserGameState;
+  upgrades: UpgradeDefinition[];
+  botUsername?: string;
+  equippedGiftId: string | null;
+  onEquipGift: (giftId: string) => void;
+  onPurchaseGift: (giftId: string) => Promise<void>;
+}
+
+export const GiftsScreen: React.FC<GiftsScreenProps> = ({
+  user,
+  upgrades,
+  botUsername = 'FOXCOINBot',
+  equippedGiftId,
+  onEquipGift,
+  onPurchaseGift,
+}) => {
+  const [filter, setFilter] = useState<'all' | 'owned' | 'epic' | 'legendary'>('all');
+  const [mintingId, setMintingId] = useState<string | null>(null);
+  const [selectedGift, setSelectedGift] = useState<UpgradeDefinition | null>(null);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  const giftItems = upgrades.filter((u) => u.category === 'gift');
+
+  const getPrice = (up: UpgradeDefinition, level: number) => {
+    return Math.floor(up.basePrice * Math.pow(up.priceMultiplier, level));
+  };
+
+  // Calculate total collected gifts & gift passive yield
+  const uniqueOwnedCount = giftItems.filter((g) => (user.upgrades[g.id] || 0) > 0).length;
+  const totalEditionsOwned = giftItems.reduce((sum, g) => sum + (user.upgrades[g.id] || 0), 0);
+  const totalGiftYield = giftItems.reduce(
+    (sum, g) => sum + (user.upgrades[g.id] || 0) * g.baseBenefit,
+    0
+  );
+
+  const filteredGifts = giftItems.filter((g) => {
+    const meta = FOX_GIFT_METADATA[g.id];
+    const owned = (user.upgrades[g.id] || 0) > 0;
+    if (filter === 'owned') return owned;
+    if (filter === 'epic') return meta?.rarity === 'Rare' || meta?.rarity === 'Epic';
+    if (filter === 'legendary') return meta?.rarity === 'Legendary' || meta?.rarity === 'Mythic';
+    return true;
+  });
+
+  const showToast = (msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => setToastMessage(null), 3200);
+  };
+
+  const handleMintGift = async (gift: UpgradeDefinition) => {
+    const currentLevel = user.upgrades[gift.id] || 0;
+    const price = getPrice(gift, currentLevel);
+    if (user.balance < price || user.level < gift.levelRequirement || mintingId) return;
+
+    try {
+      setMintingId(gift.id);
+      sound.playSuccess();
+      TelegramService.triggerHaptic('heavy');
+      await onPurchaseGift(gift.id);
+      if (!equippedGiftId) {
+        onEquipGift(gift.id);
+      }
+      showToast(`Collected ${gift.name} (#${currentLevel + 1})! +${gift.baseBenefit.toLocaleString()} FOX/hr`);
+    } catch (err: any) {
+      console.error('Gift mint error:', err);
+    } finally {
+      setMintingId(null);
+    }
+  };
+
+  const handleSendTelegramGift = (gift: UpgradeDefinition) => {
+    sound.playCoin();
+    TelegramService.triggerHaptic('medium');
+    const meta = FOX_GIFT_METADATA[gift.id] || FOX_GIFT_METADATA.gift_star_fox;
+    const cleanBot = botUsername.replace('@', '');
+    const tgDeepLink = `https://t.me/${cleanBot}?start=ref_${user.referralCode}`;
+    const text = `🎁🦊 I'm sending you a "${gift.name}" (${meta.rarity} Telegram Collectible Gift · +${gift.baseBenefit.toLocaleString()} FOX/hr) on FOXCOIN! Claim your gift & +5,000 FOX bonus now:`;
+    const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(tgDeepLink)}&text=${encodeURIComponent(text)}`;
+    TelegramService.openLink(shareUrl);
+  };
+
+  return (
+    <div className="w-full max-w-md mx-auto px-4 pb-24 pt-2 text-white">
+      {/* Toast Notification */}
+      {toastMessage && (
+        <div className="mb-3 p-3 rounded-2xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-xs font-bold flex items-center justify-center gap-2 shadow-lg">
+          <Sparkles className="w-4 h-4 text-emerald-400 shrink-0" />
+          <span>{toastMessage}</span>
+        </div>
+      )}
+
+      {/* TELEGRAM COLLECTIBLE FOX GIFTS SHOWCASE HEADER */}
+      <div className="relative w-full bg-gradient-to-br from-slate-900 via-[#13192B] to-slate-950 border border-amber-500/35 rounded-3xl p-4 mb-4 shadow-xl overflow-hidden">
+        <div className="flex items-center justify-between gap-3 mb-3">
+          <div className="flex items-center gap-3">
+            <FoxGiftAvatar
+              giftId={equippedGiftId || 'gift_star_fox'}
+              size="md"
+            />
+            <div>
+              <div className="flex items-center gap-1.5 text-[11px] font-bold text-amber-400">
+                <Gift className="w-3.5 h-3.5" />
+                <span>Telegram Collectible Fox Gifts</span>
+              </div>
+              <h2 className="text-lg font-black text-slate-100 leading-tight mt-0.5">
+                Fox Gift Vault & NFTs
+              </h2>
+              <p className="text-[11px] text-slate-400 mt-0.5">
+                Collect limited Telegram Foxes, boost passive FOX/hr & send gifts to friends
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Vault Stats Bar */}
+        <div className="grid grid-cols-3 gap-2 pt-2 border-t border-slate-800/80">
+          <div className="bg-slate-950/80 border border-slate-800/90 rounded-2xl p-2 text-center">
+            <span className="text-[10px] font-semibold text-slate-400 block">
+              Unique Foxes
+            </span>
+            <span className="text-sm font-black text-slate-100 tabular-nums">
+              {uniqueOwnedCount} / {giftItems.length}
+            </span>
+          </div>
+
+          <div className="bg-slate-950/80 border border-slate-800/90 rounded-2xl p-2 text-center">
+            <span className="text-[10px] font-semibold text-slate-400 block">
+              Total Minted
+            </span>
+            <span className="text-sm font-black text-amber-400 tabular-nums">
+              #{totalEditionsOwned} Gifts
+            </span>
+          </div>
+
+          <div className="bg-slate-950/80 border border-slate-800/90 rounded-2xl p-2 text-center">
+            <span className="text-[10px] font-semibold text-slate-400 block">
+              Gift Yield/Hr
+            </span>
+            <span className="text-sm font-black text-emerald-400 tabular-nums">
+              +{totalGiftYield.toLocaleString()}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* Interactive Filter Tabs */}
+      <div className="grid grid-cols-4 gap-1 bg-slate-900/90 p-1 rounded-2xl border border-slate-800 mb-4">
+        {[
+          { id: 'all', label: `All (${giftItems.length})` },
+          { id: 'owned', label: `Owned (${uniqueOwnedCount})` },
+          { id: 'epic', label: 'Rare & Epic' },
+          { id: 'legendary', label: 'Legendary' },
+        ].map((tab) => (
+          <button
+            key={tab.id}
+            onClick={() => {
+              sound.playTap();
+              setFilter(tab.id as any);
+            }}
+            className={`py-2 px-2 rounded-xl text-[11px] font-bold transition cursor-pointer ${
+              filter === tab.id
+                ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-slate-950 font-black shadow-md'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {/* 2-Column Collectible Telegram Gift Grid */}
+      {filteredGifts.length === 0 ? (
+        <div className="bg-slate-900/70 border border-slate-800 rounded-3xl p-8 text-center my-4">
+          <Gift className="w-10 h-10 text-amber-400 mx-auto mb-2 opacity-80" />
+          <h3 className="text-sm font-bold text-slate-200">No Fox Gifts in this filter yet</h3>
+          <p className="text-xs text-slate-400 mt-1">
+            Switch to "All" to mint your first Telegram Collectible Fox Gift!
+          </p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-3">
+          {filteredGifts.map((gift) => {
+            const meta = FOX_GIFT_METADATA[gift.id] || FOX_GIFT_METADATA.gift_star_fox;
+            const editionCount = user.upgrades[gift.id] || 0;
+            const isOwned = editionCount > 0;
+            const isEquipped = equippedGiftId === gift.id;
+            const price = getPrice(gift, editionCount);
+            const isLevelLocked = user.level < gift.levelRequirement;
+            const canAfford = user.balance >= price && !isLevelLocked;
+
+            return (
+              <div
+                key={gift.id}
+                onClick={() => {
+                  sound.playTap();
+                  setSelectedGift(gift);
+                }}
+                className={`relative rounded-3xl p-3.5 border transition flex flex-col justify-between cursor-pointer ${
+                  isEquipped
+                    ? 'bg-slate-900/95 border-emerald-400/70 shadow-lg shadow-emerald-500/10'
+                    : isOwned
+                    ? `bg-slate-900/90 ${meta.borderClass}`
+                    : 'bg-slate-900/70 border-slate-800/90 hover:border-slate-700'
+                }`}
+              >
+                {/* Top Rarity & Supply Header */}
+                <div>
+                  <div className="flex items-center justify-between text-[10px] mb-2">
+                    <span className={`font-bold ${meta.accentTextClass}`}>
+                      {meta.rarity}
+                    </span>
+                    <span className="font-mono text-slate-400 tabular-nums">
+                      {isOwned ? `#${editionCount} Owned` : `1 of ${meta.totalSupply}`}
+                    </span>
+                  </div>
+
+                  {/* Centered Collectible Fox Artwork */}
+                  <div className="flex flex-col items-center my-1">
+                    <div className="relative">
+                      <FoxGiftAvatar giftId={gift.id} size="lg" />
+                      {isEquipped && (
+                        <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 bg-emerald-500 text-slate-950 text-[9px] font-black px-2 py-0.5 rounded-md shadow">
+                          Equipped
+                        </span>
+                      )}
+                    </div>
+
+                    <h3 className="font-black text-sm text-slate-100 text-center mt-2.5 leading-snug">
+                      {gift.name}
+                    </h3>
+                    <div className="text-[10px] text-slate-400 text-center mt-0.5">
+                      {meta.backdropName} · ★ {meta.starsEquivalent}
+                    </div>
+                  </div>
+
+                  {/* Hourly Passive Yield Boost */}
+                  <div className="mt-2 bg-slate-950/80 border border-slate-800/80 rounded-xl py-1.5 px-2 flex items-center justify-between text-[11px]">
+                    <span className="text-slate-400 flex items-center gap-1">
+                      <TrendingUp className="w-3 h-3 text-emerald-400" />
+                      <span>Yield</span>
+                    </span>
+                    <span className="font-black text-emerald-400 tabular-nums">
+                      +{gift.baseBenefit.toLocaleString()}/hr
+                    </span>
+                  </div>
+                </div>
+
+                {/* Action Buttons */}
+                <div className="mt-3 space-y-1.5" onClick={(e) => e.stopPropagation()}>
+                  {isLevelLocked ? (
+                    <div className="w-full py-2 px-2.5 rounded-xl bg-slate-800/70 border border-slate-700/70 text-slate-400 text-[11px] font-bold flex items-center justify-center gap-1">
+                      <Lock className="w-3 h-3" />
+                      <span>Requires Lvl {gift.levelRequirement}</span>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => handleMintGift(gift)}
+                      disabled={!canAfford || mintingId === gift.id}
+                      className={`w-full py-2 px-2.5 rounded-xl text-xs font-black flex items-center justify-center gap-1.5 transition active:scale-95 cursor-pointer ${
+                        canAfford
+                          ? 'bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 shadow-md shadow-amber-500/20'
+                          : 'bg-slate-800 text-slate-500 border border-slate-700/60 cursor-not-allowed'
+                      }`}
+                    >
+                      <img src={foxGoldCoinImg} alt="FOX" className="w-3.5 h-3.5" />
+                      <span className="tabular-nums">
+                        {mintingId === gift.id
+                          ? 'Minting...'
+                          : isOwned
+                          ? `Mint #${editionCount + 1} · ${price.toLocaleString()}`
+                          : `Collect · ${price.toLocaleString()}`}
+                      </span>
+                    </button>
+                  )}
+
+                  {/* Equip or Send Gift Secondary Row */}
+                  <div className="grid grid-cols-2 gap-1">
+                    <button
+                      onClick={() => {
+                        if (!isOwned) return;
+                        sound.playTap();
+                        TelegramService.triggerHaptic('light');
+                        onEquipGift(gift.id);
+                        showToast(`Equipped ${gift.name} on your Tap Screen!`);
+                      }}
+                      disabled={!isOwned}
+                      className={`py-1.5 px-2 rounded-lg text-[10px] font-bold flex items-center justify-center gap-1 transition cursor-pointer ${
+                        isEquipped
+                          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                          : isOwned
+                          ? 'bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700'
+                          : 'bg-slate-900/50 text-slate-600 border border-slate-800/60 cursor-not-allowed'
+                      }`}
+                    >
+                      <Check className="w-3 h-3" />
+                      <span>{isEquipped ? 'Active' : 'Equip'}</span>
+                    </button>
+
+                    <button
+                      onClick={() => handleSendTelegramGift(gift)}
+                      className="py-1.5 px-2 rounded-lg bg-sky-500/15 hover:bg-sky-500/25 text-sky-300 border border-sky-500/30 text-[10px] font-bold flex items-center justify-center gap-1 transition cursor-pointer"
+                    >
+                      <Send className="w-3 h-3" />
+                      <span>Gift</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* TELEGRAM COLLECTIBLE GIFT INSPECTOR MODAL */}
+      {selectedGift && (() => {
+        const meta = FOX_GIFT_METADATA[selectedGift.id] || FOX_GIFT_METADATA.gift_star_fox;
+        const editionCount = user.upgrades[selectedGift.id] || 0;
+        const isOwned = editionCount > 0;
+        const isEquipped = equippedGiftId === selectedGift.id;
+        const price = getPrice(selectedGift, editionCount);
+        const isLevelLocked = user.level < selectedGift.levelRequirement;
+        const canAfford = user.balance >= price && !isLevelLocked;
+
+        return (
+          <div
+            className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
+            onClick={() => setSelectedGift(null)}
+          >
+            <div
+              className="w-full max-w-sm bg-[#111726] border border-slate-700/90 rounded-3xl p-5 shadow-2xl relative overflow-hidden"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <button
+                onClick={() => setSelectedGift(null)}
+                className="absolute top-3.5 right-3.5 w-8 h-8 rounded-full bg-slate-800/90 hover:bg-slate-700 flex items-center justify-center text-slate-300 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+
+              <div className="flex flex-col items-center text-center">
+                <FoxGiftAvatar giftId={selectedGift.id} size="lg" />
+
+                <div className={`text-xs font-bold mt-3 ${meta.accentTextClass}`}>
+                  {meta.rarity} Telegram Collectible Gift
+                </div>
+                <h3 className="text-xl font-black text-white mt-0.5">
+                  {selectedGift.name}
+                </h3>
+                <p className="text-xs text-slate-300 mt-1 max-w-xs">
+                  {selectedGift.description}
+                </p>
+              </div>
+
+              {/* Telegram Collectible Attributes Table */}
+              <div className="mt-4 bg-slate-950/90 border border-slate-800 rounded-2xl p-3 space-y-2 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-400">Backdrop</span>
+                  <span className="font-bold text-slate-200">{meta.backdropName}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-400">Accessory</span>
+                  <span className="font-bold text-amber-300">{meta.accessoryLabel}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-400">Availability</span>
+                  <span className="font-mono font-bold text-slate-200 tabular-nums">
+                    {isOwned ? `Edition #${editionCount} of ${meta.totalSupply}` : `Limited (${meta.totalSupply} max)`}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-400">Telegram Stars Value</span>
+                  <span className="font-bold text-yellow-400 flex items-center gap-1 tabular-nums">
+                    <Star className="w-3.5 h-3.5 fill-yellow-400" />
+                    <span>{meta.starsEquivalent.toLocaleString()} Stars</span>
+                  </span>
+                </div>
+                <div className="flex items-center justify-between pt-1.5 border-t border-slate-800">
+                  <span className="text-slate-400">Passive Mining Boost</span>
+                  <span className="font-black text-emerald-400 tabular-nums">
+                    +{selectedGift.baseBenefit.toLocaleString()} FOX / hr
+                  </span>
+                </div>
+              </div>
+
+              {/* Modal Actions */}
+              <div className="mt-4 space-y-2">
+                {!isLevelLocked ? (
+                  <button
+                    onClick={() => handleMintGift(selectedGift)}
+                    disabled={!canAfford || mintingId === selectedGift.id}
+                    className={`w-full py-3 px-4 rounded-2xl text-xs font-black flex items-center justify-center gap-2 transition active:scale-95 cursor-pointer ${
+                      canAfford
+                        ? 'bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 shadow-lg shadow-amber-500/25'
+                        : 'bg-slate-800 text-slate-500 border border-slate-700 cursor-not-allowed'
+                    }`}
+                  >
+                    <img src={foxGoldCoinImg} alt="FOX" className="w-4 h-4" />
+                    <span className="tabular-nums">
+                      {isOwned
+                        ? `Mint Next Edition (#${editionCount + 1}) · ${price.toLocaleString()} FOX`
+                        : `Collect Telegram Gift · ${price.toLocaleString()} FOX`}
+                    </span>
+                  </button>
+                ) : (
+                  <div className="w-full py-3 px-4 rounded-2xl bg-slate-800 text-slate-400 text-xs font-bold text-center">
+                    Unlocks at Player Level {selectedGift.levelRequirement}
+                  </div>
+                )}
+
+                <div className="grid grid-cols-2 gap-2">
+                  {isOwned && (
+                    <button
+                      onClick={() => {
+                        onEquipGift(selectedGift.id);
+                        showToast(`Equipped ${selectedGift.name} on your Tap Screen!`);
+                        setSelectedGift(null);
+                      }}
+                      className="py-2.5 px-3 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      <Award className="w-4 h-4" />
+                      <span>{isEquipped ? 'Equipped' : 'Equip on Home'}</span>
+                    </button>
+                  )}
+
+                  <button
+                    onClick={() => handleSendTelegramGift(selectedGift)}
+                    className={`${
+                      isOwned ? '' : 'col-span-2'
+                    } py-2.5 px-3 rounded-xl bg-sky-500/20 hover:bg-sky-500/30 border border-sky-500/40 text-sky-300 text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer`}
+                  >
+                    <Send className="w-4 h-4" />
+                    <span>Send Gift to Friend on Telegram</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+    </div>
+  );
+};

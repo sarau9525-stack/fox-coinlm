@@ -1,0 +1,6 @@
+/*
+  X-Content-Type-Options: nosniff
+  Content-Security-Policy: frame-ancestors 'self' https://*.telegram.org https://web.telegram.org https://*.t.me;
+
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable

@@ -1,0 +1,16 @@
+{
+  "short_name": "FoxCoin",
+  "name": "Fox Coin — Tap to Earn",
+  "icons": [
+    {
+      "src": "/fox-icon.svg",
+      "type": "image/svg+xml",
+      "sizes": "192x192 512x512"
+    }
+  ],
+  "start_url": "/",
+  "background_color": "#0B0E17",
+  "theme_color": "#0B0E17",
+  "display": "standalone",
+  "orientation": "portrait"
+}
