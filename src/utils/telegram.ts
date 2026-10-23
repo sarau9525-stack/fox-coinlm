@@ -52,6 +52,9 @@ declare global {
           notificationOccurred: (type: 'error' | 'success' | 'warning') => void;
           selectionChanged: () => void;
         };
+        version?: string;
+        platform?: string;
+        isVersionAtLeast?: (version: string) => boolean;
         ready: () => void;
         expand: () => void;
         close: () => void;
@@ -63,10 +66,24 @@ declare global {
           url: string,
           callback?: (status: 'paid' | 'cancelled' | 'failed' | 'pending') => void
         ) => void;
+        onEvent?: (eventType: string, eventHandler: (eventData?: any) => void) => void;
+        offEvent?: (eventType: string, eventHandler: (eventData?: any) => void) => void;
       };
     };
   }
 }
+
+export type TelegramInvoiceStatus = 'paid' | 'cancelled' | 'failed' | 'pending' | 'external' | 'preview';
+
+// Capture the stock uninitialized v6.0 openInvoice function (if present on load) so we never
+// invoke it when WebApp version is 6.0, while still allowing custom test mocks on openInvoice.
+const stockUnsupportedOpenInvoice =
+  typeof window !== 'undefined' &&
+  window.Telegram?.WebApp &&
+  typeof window.Telegram.WebApp.isVersionAtLeast === 'function' &&
+  !window.Telegram.WebApp.isVersionAtLeast('6.1')
+    ? window.Telegram.WebApp.openInvoice
+    : undefined;
 
 export class TelegramService {
   public static isAvailable(): boolean {
@@ -77,14 +94,48 @@ export class TelegramService {
     return typeof window !== 'undefined' ? window.Telegram?.WebApp : undefined;
   }
 
+  /**
+   * Checks whether the active Telegram WebApp runtime supports a given Bot API version (e.g. '6.1').
+   * Returns false when running in the default browser fallback of telegram-web-app.js (v6.0).
+   */
+  public static isVersionAtLeast(minVersion: string): boolean {
+    const tg = this.getWebApp();
+    if (!tg) return false;
+
+    if (typeof tg.isVersionAtLeast === 'function') {
+      try {
+        return Boolean(tg.isVersionAtLeast(minVersion));
+      } catch {
+        return false;
+      }
+    }
+
+    if (typeof tg.version === 'string') {
+      const vParts = tg.version.split('.').map(Number);
+      const minParts = minVersion.split('.').map(Number);
+      for (let i = 0; i < Math.max(vParts.length, minParts.length); i++) {
+        const a = vParts[i] || 0;
+        const b = minParts[i] || 0;
+        if (a > b) return true;
+        if (a < b) return false;
+      }
+      return true;
+    }
+
+    // If neither isVersionAtLeast nor version is defined (e.g. lightweight mock), treat as supported
+    return true;
+  }
+
   public static init() {
     const tg = this.getWebApp();
     if (tg) {
       try {
         tg.ready();
         tg.expand();
-        tg.setHeaderColor('#0B0E17');
-        tg.setBackgroundColor('#0B0E17');
+        if (this.isVersionAtLeast('6.1')) {
+          tg.setHeaderColor('#0B0E17');
+          tg.setBackgroundColor('#0B0E17');
+        }
       } catch (err) {
         console.warn('Telegram WebApp init warning:', err);
       }
@@ -108,7 +159,7 @@ export class TelegramService {
 
   public static triggerHaptic(style: 'light' | 'medium' | 'heavy' = 'light') {
     const tg = this.getWebApp();
-    if (tg?.HapticFeedback) {
+    if (tg?.HapticFeedback && this.isVersionAtLeast('6.1')) {
       try {
         tg.HapticFeedback.impactOccurred(style);
         return;
@@ -123,7 +174,7 @@ export class TelegramService {
 
   public static triggerNotificationHaptic(type: 'success' | 'warning' | 'error' = 'success') {
     const tg = this.getWebApp();
-    if (tg?.HapticFeedback) {
+    if (tg?.HapticFeedback && this.isVersionAtLeast('6.1')) {
       try {
         tg.HapticFeedback.notificationOccurred(type);
         return;
@@ -136,37 +187,100 @@ export class TelegramService {
 
   public static openLink(url: string) {
     const tg = this.getWebApp();
-    if (tg?.openTelegramLink && (url.startsWith('https://t.me') || url.startsWith('tg:'))) {
-      tg.openTelegramLink(url);
-    } else if (tg?.openLink) {
-      tg.openLink(url);
-    } else {
-      window.open(url, '_blank');
+    if (this.isAvailable() && this.isVersionAtLeast('6.1')) {
+      if (tg?.openTelegramLink && (url.startsWith('https://t.me') || url.startsWith('tg:'))) {
+        try {
+          tg.openTelegramLink(url);
+          return;
+        } catch {}
+      }
+      if (tg?.openLink) {
+        try {
+          tg.openLink(url);
+          return;
+        } catch {}
+      }
+    }
+    if (typeof document !== 'undefined') {
+      const a = document.createElement('a');
+      a.href = url;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
     }
   }
 
   /**
-   * Opens a Telegram Stars (XTR) invoice link natively via Telegram.WebApp.openInvoice
-   * or falls back to opening the t.me/$... invoice link in Telegram.
+   * Opens a Telegram Stars (XTR) invoice via Telegram Mini App's native `openInvoice` API (v6.1+).
+   * When running in standalone browser preview (where `Telegram.WebApp.version` is `"6.0"`),
+   * skips calling the unsupported v6.0 stub and resolves with `'preview'` so the interactive
+   * in-app Telegram Stars checkout sheet opens without throwing console errors.
    */
-  public static openStarsInvoice(
-    invoiceUrl: string
-  ): Promise<'paid' | 'cancelled' | 'failed' | 'pending' | 'external'> {
+  public static openInvoice(
+    invoiceUrl: string,
+    callback?: (status: TelegramInvoiceStatus) => void
+  ): Promise<TelegramInvoiceStatus> {
     return new Promise((resolve) => {
+      let settled = false;
       const tg = this.getWebApp();
-      if (tg && typeof tg.openInvoice === 'function') {
+
+      const finish = (status: TelegramInvoiceStatus) => {
+        if (settled) return;
+        settled = true;
+        if (tg?.offEvent && handleInvoiceClosedEvent) {
+          try {
+            tg.offEvent('invoiceClosed', handleInvoiceClosedEvent);
+          } catch {}
+        }
+        if (callback) callback(status);
+        resolve(status);
+      };
+
+      const handleInvoiceClosedEvent = (eventData?: { url?: string; status?: TelegramInvoiceStatus }) => {
+        if (eventData?.status) {
+          finish(eventData.status);
+        }
+      };
+
+      const hasSupportedNativeInvoice =
+        Boolean(tg && typeof tg.openInvoice === 'function') &&
+        (this.isVersionAtLeast('6.1') ||
+          (stockUnsupportedOpenInvoice !== undefined && tg?.openInvoice !== stockUnsupportedOpenInvoice));
+
+      if (tg && typeof tg.openInvoice === 'function' && hasSupportedNativeInvoice) {
         try {
+          if (typeof tg.onEvent === 'function') {
+            tg.onEvent('invoiceClosed', handleInvoiceClosedEvent);
+          }
+
           tg.openInvoice(invoiceUrl, (status) => {
-            resolve(status || 'cancelled');
+            finish(status || 'cancelled');
           });
+
+          if (!this.isAvailable()) {
+            setTimeout(() => {
+              if (!settled) {
+                finish('preview');
+              }
+            }, 120);
+          }
           return;
         } catch (err) {
           console.warn('Telegram.WebApp.openInvoice fallback:', err);
         }
       }
-      // Fallback: open the t.me/$... invoice link directly in Telegram app
-      this.openLink(invoiceUrl);
-      resolve('external');
+
+      // Standalone preview / WebApp 6.0 fallback
+      finish('preview');
     });
+  }
+
+  public static openStarsInvoice(
+    invoiceUrl: string,
+    callback?: (status: TelegramInvoiceStatus) => void
+  ): Promise<TelegramInvoiceStatus> {
+    return this.openInvoice(invoiceUrl, callback);
   }
 }

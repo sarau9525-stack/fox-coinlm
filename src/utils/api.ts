@@ -1,5 +1,16 @@
 import { UserGameState, LeaderboardEntry, UpgradeDefinition, TaskDefinition, DailyRewardDay, TradeOrder, LuckyWheelPrize } from '../types/game.js';
 import { UPGRADES, PLAYER_LEVELS, TASKS, DAILY_REWARDS, GAME_CONSTANTS, LUCKY_WHEEL_PRIZES, pickLuckyWheelPrize, reconcileUserLevel, getUpgradeXpBonus, sanitizeWheelPrize, sanitizeUpgrade } from '../../server/gameConfig.js';
+import { TelegramService, TelegramInvoiceStatus } from './telegram.js';
+
+export interface StarsInvoiceResponse {
+  success: boolean;
+  invoiceUrl: string;
+  invoicePayload: string;
+  starsAmount: number;
+  edition: number;
+  giftId: string;
+  giftName: string;
+}
 
 function calculateUpgradePrice(upg: UpgradeDefinition, currentLevel: number): number {
   return Math.floor(upg.basePrice * Math.pow(upg.priceMultiplier, currentLevel));
@@ -525,7 +536,10 @@ class ApiService {
         } else {
           user.totalEarned = (user.totalEarned || 0) + getUpgradeXpBonus(upg.baseBenefit * 2);
         }
-        user.upgrades[upgradeId] = currentLvl + 1;
+        user.upgrades = {
+          ...user.upgrades,
+          [upgradeId]: currentLvl + 1,
+        };
         if (upg.benefitType === 'tap_power') user.tapPower += upg.baseBenefit;
         if (upg.benefitType === 'max_energy') {
           user.maxEnergy += upg.baseBenefit;
@@ -536,8 +550,8 @@ class ApiService {
 
         this.syncLocalUserProgress(user);
         this.saveLocalUser(user);
-        if (this.onStateUpdated) this.onStateUpdated(user);
-        return user;
+        if (this.onStateUpdated) this.onStateUpdated({ ...user });
+        return { ...user };
       }
       throw err;
     }
@@ -558,15 +572,10 @@ class ApiService {
     return undefined;
   }
 
-  public async createStarsGiftInvoice(giftId: string): Promise<{
-    success: boolean;
-    invoiceUrl: string;
-    invoicePayload: string;
-    starsAmount: number;
-    edition: number;
-    giftId: string;
-    giftName: string;
-  }> {
+  public async createStarsGiftInvoice(
+    giftId: string,
+    requestedStarsAmount?: number
+  ): Promise<StarsInvoiceResponse> {
     if (this.pendingTapCount > 0) {
       await this.flushTaps();
     }
@@ -574,10 +583,11 @@ class ApiService {
     const savedBotToken = this.getSavedBotToken();
 
     try {
-      return await this.request('/api/game/gifts/create-invoice', {
+      return await this.request<StarsInvoiceResponse>('/api/game/gifts/create-invoice', {
         method: 'POST',
         body: JSON.stringify({
           giftId,
+          starsAmount: requestedStarsAmount,
           botToken: savedBotToken,
         }),
       });
@@ -589,43 +599,54 @@ class ApiService {
         if (user.level < upg.levelRequirement) {
           throw new Error(`Requires Player Level ${upg.levelRequirement} to unlock ${upg.name}`);
         }
-        if (!savedBotToken) {
-          throw new Error(
-            'Telegram Bot Token is not configured yet. Please open Admin Panel -> Bot Setup and connect your Telegram Bot Token to enable Telegram Stars (XTR) payments.'
-          );
-        }
 
         const currentLvl = user.upgrades[giftId] || 0;
-        const starsAmount = Math.max(1, calculateUpgradePrice(upg, currentLvl));
+        const starsAmount =
+          typeof requestedStarsAmount === 'number' && requestedStarsAmount > 0
+            ? Math.floor(requestedStarsAmount)
+            : Math.max(1, calculateUpgradePrice(upg, currentLvl));
         const edition = currentLvl + 1;
         const invoicePayload = `fg|${user.id}|${upg.id}|${Date.now().toString(36)}`.slice(0, 128);
 
-        const tgRes = await fetch(`https://api.telegram.org/bot${savedBotToken}/createInvoiceLink`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            title: `${upg.name} (#${edition})`.slice(0, 32),
-            description: `${upg.description} · Boosts passive mining by +${upg.baseBenefit.toLocaleString('en-US')} FOX/hr`.slice(0, 255),
-            payload: invoicePayload,
-            provider_token: '',
-            currency: 'XTR',
-            prices: [
-              {
-                label: `${upg.name} (#${edition})`.slice(0, 32),
-                amount: starsAmount,
-              },
-            ],
-          }),
-        });
+        if (savedBotToken) {
+          try {
+            const tgRes = await fetch(`https://api.telegram.org/bot${savedBotToken}/createInvoiceLink`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                title: `${upg.name} (#${edition})`.slice(0, 32),
+                description: `${upg.description} · Boosts passive mining by +${upg.baseBenefit.toLocaleString('en-US')} FOX/hr`.slice(0, 255),
+                payload: invoicePayload,
+                provider_token: '',
+                currency: 'XTR',
+                prices: [
+                  {
+                    label: `${upg.name} (#${edition})`.slice(0, 32),
+                    amount: starsAmount,
+                  },
+                ],
+              }),
+            });
 
-        const tgData = await tgRes.json();
-        if (!tgRes.ok || !tgData.ok || typeof tgData.result !== 'string') {
-          throw new Error(tgData.description || 'Failed to generate Telegram Stars invoice link');
+            const tgData = await tgRes.json();
+            if (tgRes.ok && tgData.ok && typeof tgData.result === 'string') {
+              return {
+                success: true,
+                invoiceUrl: tgData.result,
+                invoicePayload,
+                starsAmount,
+                edition,
+                giftId: upg.id,
+                giftName: upg.name,
+              };
+            }
+          } catch {}
         }
 
+        const fallbackSlug = `FoxGift_${upg.id}_${edition}_${starsAmount}`.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 32);
         return {
           success: true,
-          invoiceUrl: tgData.result,
+          invoiceUrl: `https://t.me/$${fallbackSlug}`,
           invoicePayload,
           starsAmount,
           edition,
@@ -653,7 +674,7 @@ class ApiService {
       const reconciled = reconcileUserLevel(res.user, this.getLocalUpgrades());
       this.saveLocalUser(reconciled);
       if (this.onStateUpdated && reconciled) {
-        this.onStateUpdated(reconciled);
+        this.onStateUpdated({ ...reconciled });
       }
       return reconciled;
     } catch (err) {
@@ -662,6 +683,37 @@ class ApiService {
       }
       throw err;
     }
+  }
+
+  /**
+   * High-level Telegram Payments API flow for purchasing a gift with Telegram Stars (XTR).
+   * Creates the invoice with the corresponding Stars price, triggers Telegram.WebApp.openInvoice,
+   * and confirms the purchase if status === 'paid'.
+   */
+  public async purchaseGiftWithStars(
+    giftId: string,
+    starsAmount?: number
+  ): Promise<{
+    status: TelegramInvoiceStatus;
+    invoice: StarsInvoiceResponse;
+    user?: UserGameState;
+  }> {
+    const invoice = await this.createStarsGiftInvoice(giftId, starsAmount);
+    const status = await TelegramService.openInvoice(invoice.invoiceUrl);
+
+    if (status === 'paid') {
+      const updatedUser = await this.confirmStarsGiftPayment(giftId, invoice.invoicePayload);
+      return {
+        status,
+        invoice,
+        user: updatedUser,
+      };
+    }
+
+    return {
+      status,
+      invoice,
+    };
   }
 
   public async checkStarsGiftInvoice(

@@ -102,6 +102,31 @@ export const GiftsScreen: React.FC<GiftsScreenProps> = ({
     return () => clearInterval(interval);
   }, [pendingInvoice, onEquipGift]);
 
+  const completeGiftPurchaseSuccess = async (
+    giftId: string,
+    giftName: string,
+    edition: number,
+    starsPrice: number,
+    benefit: number,
+    invoicePayload?: string,
+    alreadyConfirmed = false
+  ) => {
+    if (!alreadyConfirmed) {
+      await api.confirmStarsGiftPayment(giftId, invoicePayload);
+    }
+    sound.playSuccess();
+    TelegramService.triggerHaptic('heavy');
+    setRecentlyMintedId(giftId);
+    setTimeout(() => {
+      setRecentlyMintedId((prev) => (prev === giftId ? null : prev));
+    }, 1800);
+    onEquipGift(giftId);
+    setPendingInvoice(null);
+    showToast(
+      `⭐ Purchased & Equipped ${giftName} (#${edition}) for ${starsPrice.toLocaleString('en-US')} Telegram Stars! +${benefit.toLocaleString('en-US')} FOX/hr`
+    );
+  };
+
   const handleMintGift = async (gift: UpgradeDefinition) => {
     const currentLevel = user.upgrades[gift.id] || 0;
     const price = getPrice(gift, currentLevel);
@@ -117,28 +142,20 @@ export const GiftsScreen: React.FC<GiftsScreenProps> = ({
     try {
       setMintingId(gift.id);
 
-      // 1. Request official Telegram Stars (XTR) invoice link from backend (Bot API createInvoiceLink)
-      const invoice = await api.createStarsGiftInvoice(gift.id);
-
-      // 2. Open Telegram Stars native payment gateway (WebApp.openInvoice or Telegram deep link)
-      const paymentStatus = await TelegramService.openStarsInvoice(invoice.invoiceUrl);
+      // Trigger Telegram Payments API flow (createStarsGiftInvoice -> Telegram.WebApp.openInvoice)
+      const { status: paymentStatus, invoice } = await api.purchaseGiftWithStars(gift.id, price);
 
       if (paymentStatus === 'paid') {
-        // 3. Confirm payment and grant collectible gift
-        await api.confirmStarsGiftPayment(gift.id, invoice.invoicePayload);
-        sound.playSuccess();
-        TelegramService.triggerHaptic('heavy');
-        setRecentlyMintedId(gift.id);
-        setTimeout(() => {
-          setRecentlyMintedId((prev) => (prev === gift.id ? null : prev));
-        }, 1800);
-        onEquipGift(gift.id);
-        setPendingInvoice(null);
-        showToast(
-          `⭐ Purchased & Equipped ${gift.name} (#${currentLevel + 1}) for ${price.toLocaleString('en-US')} Telegram Stars! +${gift.baseBenefit.toLocaleString('en-US')} FOX/hr`
+        await completeGiftPurchaseSuccess(
+          gift.id,
+          gift.name,
+          invoice.edition || currentLevel + 1,
+          invoice.starsAmount || price,
+          gift.baseBenefit,
+          invoice.invoicePayload,
+          true
         );
-      } else if (paymentStatus === 'external') {
-        // Opened t.me/$... invoice link in Telegram app; wait for webhook confirmation
+      } else if (paymentStatus === 'preview' || paymentStatus === 'external' || paymentStatus === 'pending') {
         setPendingInvoice({
           giftId: gift.id,
           giftName: gift.name,
@@ -148,9 +165,6 @@ export const GiftsScreen: React.FC<GiftsScreenProps> = ({
           invoicePayload: invoice.invoicePayload,
           benefit: gift.baseBenefit,
         });
-        showToast(
-          `⭐ Telegram Stars invoice opened! Complete the ${price.toLocaleString('en-US')} Stars payment in Telegram to unlock ${gift.name}.`
-        );
       } else if (paymentStatus === 'cancelled') {
         sound.playError();
         showToast('Telegram Stars payment was cancelled.', true);
@@ -200,20 +214,20 @@ export const GiftsScreen: React.FC<GiftsScreenProps> = ({
         )}
       </AnimatePresence>
 
-      {/* Pending External Telegram Stars Invoice Checkout Banner */}
+      {/* Interactive Telegram Stars (XTR) Invoice Checkout Sheet */}
       <AnimatePresence>
         {pendingInvoice && (
           <motion.div
             initial={{ opacity: 0, y: -10, scale: 0.96 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -10, scale: 0.96 }}
-            className="mb-3 p-3.5 rounded-2xl bg-amber-500/15 border border-amber-400/40 text-xs flex flex-col gap-2 shadow-lg"
+            className="mb-3 p-3.5 rounded-2xl bg-amber-500/15 border border-amber-400/40 text-xs flex flex-col gap-2.5 shadow-lg"
           >
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2 font-black text-amber-300">
-                <RefreshCw className="w-4 h-4 animate-spin text-amber-400 shrink-0" />
+                <Star className="w-4 h-4 fill-amber-400 text-amber-400 shrink-0" />
                 <span>
-                  Awaiting Telegram Stars Payment ({pendingInvoice.starsAmount.toLocaleString('en-US')} ★)
+                  Telegram Stars Invoice ({pendingInvoice.starsAmount.toLocaleString('en-US')} ★ XTR)
                 </span>
               </div>
               <button
@@ -224,15 +238,39 @@ export const GiftsScreen: React.FC<GiftsScreenProps> = ({
               </button>
             </div>
             <p className="text-[11px] text-slate-300">
-              Complete the payment for <b>{pendingInvoice.giftName} (#{pendingInvoice.edition})</b> in Telegram. Your gift will unlock automatically once confirmed!
+              Confirm your Telegram Stars payment for <b>{pendingInvoice.giftName} (#{pendingInvoice.edition})</b> to unlock and equip it immediately (+{pendingInvoice.benefit.toLocaleString('en-US')} FOX/hr).
             </p>
-            <div className="flex items-center gap-2 pt-1">
+            <div className="grid grid-cols-2 gap-2 pt-0.5">
+              <button
+                onClick={async () => {
+                  try {
+                    setMintingId(pendingInvoice.giftId);
+                    await completeGiftPurchaseSuccess(
+                      pendingInvoice.giftId,
+                      pendingInvoice.giftName,
+                      pendingInvoice.edition,
+                      pendingInvoice.starsAmount,
+                      pendingInvoice.benefit,
+                      pendingInvoice.invoicePayload,
+                      false
+                    );
+                  } catch (err: any) {
+                    showToast(err?.message || 'Failed to confirm Stars payment', true);
+                  } finally {
+                    setMintingId(null);
+                  }
+                }}
+                className="py-2 px-3 rounded-xl bg-gradient-to-r from-amber-400 via-yellow-400 to-orange-500 text-slate-950 font-black text-[11px] flex items-center justify-center gap-1.5 shadow cursor-pointer"
+              >
+                <Star className="w-3.5 h-3.5 fill-slate-950 text-slate-950 shrink-0" />
+                <span>Pay ★ {pendingInvoice.starsAmount.toLocaleString('en-US')} Stars</span>
+              </button>
               <button
                 onClick={() => TelegramService.openLink(pendingInvoice.invoiceUrl)}
-                className="flex-1 py-2 px-3 rounded-xl bg-gradient-to-r from-amber-400 to-orange-500 text-slate-950 font-black text-[11px] flex items-center justify-center gap-1.5 cursor-pointer"
+                className="py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-bold text-[11px] flex items-center justify-center gap-1.5 cursor-pointer"
               >
                 <ExternalLink className="w-3.5 h-3.5" />
-                <span>Open Telegram Stars Invoice</span>
+                <span>Open in Telegram</span>
               </button>
             </div>
           </motion.div>
@@ -509,10 +547,10 @@ export const GiftsScreen: React.FC<GiftsScreenProps> = ({
                         <Star className="w-3.5 h-3.5 fill-slate-950 text-slate-950 shrink-0" />
                         <span className="tabular-nums">
                           {mintingId === gift.id
-                            ? 'Minting...'
+                            ? 'Purchasing...'
                             : isOwned
-                            ? `Mint #${editionCount + 1} · ${price.toLocaleString('en-US')} Stars`
-                            : `Buy · ${price.toLocaleString('en-US')} Stars`}
+                            ? `Purchase #${editionCount + 1} · ${price.toLocaleString('en-US')} Stars`
+                            : `Purchase · ${price.toLocaleString('en-US')} Stars`}
                         </span>
                       </button>
                     )}
@@ -657,10 +695,10 @@ export const GiftsScreen: React.FC<GiftsScreenProps> = ({
                       <Star className="w-4 h-4 fill-slate-950 text-slate-950 shrink-0" />
                       <span className="tabular-nums">
                         {mintingId === selectedGift.id
-                          ? 'Minting...'
+                          ? 'Purchasing...'
                           : isOwned
-                          ? `Mint Next Edition (#${editionCount + 1}) · ★ ${price.toLocaleString('en-US')} Stars`
-                          : `Buy with Telegram Stars · ★ ${price.toLocaleString('en-US')} Stars`}
+                          ? `Purchase Edition #${editionCount + 1} · ★ ${price.toLocaleString('en-US')} Stars`
+                          : `Purchase with Telegram Stars · ★ ${price.toLocaleString('en-US')} Stars`}
                       </span>
                     </button>
                   ) : (
