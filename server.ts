@@ -16,6 +16,7 @@ import {
   getTelegramWebhookInfo,
   deleteTelegramWebhook,
   processTelegramWebhookUpdate,
+  createTelegramStarsInvoiceLink,
   maskToken,
 } from './server/telegramWebhook.js';
 import { encryptSensitive } from './server/database.js';
@@ -277,6 +278,97 @@ app.post('/api/game/upgrade', requireAuth, (req: AuthenticatedRequest, res) => {
 
   res.json({
     user: result.state,
+  });
+});
+
+// Create Telegram Stars (XTR) Invoice Link for Collectible Fox Gifts
+app.post('/api/game/gifts/create-invoice', requireAuth, async (req: AuthenticatedRequest, res) => {
+  const { giftId, botToken: clientBotToken } = req.body;
+  if (!giftId) {
+    return res.status(400).json({ error: 'giftId is required' });
+  }
+
+  const recordRes = db.createStarsInvoiceRecord(req.userId!, String(giftId));
+  if (!recordRes.success || !recordRes.upgrade || !recordRes.invoicePayload || !recordRes.starsAmount) {
+    return res.status(400).json({ error: recordRes.error || 'Could not create Stars invoice' });
+  }
+
+  const effectiveBotToken =
+    (clientBotToken && isValidBotTokenFormat(String(clientBotToken)) ? String(clientBotToken).trim() : null) ||
+    db.getEffectiveBotToken();
+
+  if (!effectiveBotToken) {
+    return res.status(400).json({
+      error:
+        'Telegram Bot Token is not configured yet. Please open Admin Panel -> Bot Setup and connect your Telegram Bot Token to enable Telegram Stars (XTR) payments.',
+    });
+  }
+
+  const upg = recordRes.upgrade;
+  const edition = recordRes.edition || 1;
+  const starsAmount = recordRes.starsAmount;
+
+  const invoiceRes = await createTelegramStarsInvoiceLink(effectiveBotToken, {
+    title: `${upg.name} (#${edition})`,
+    description: `${upg.description} · Boosts passive mining by +${upg.baseBenefit.toLocaleString('en-US')} FOX/hr`,
+    payload: recordRes.invoicePayload,
+    starsAmount,
+    label: `${upg.name} (#${edition})`,
+  });
+
+  if (!invoiceRes.success || !invoiceRes.invoiceUrl) {
+    return res.status(400).json({
+      error: invoiceRes.description || 'Failed to generate Telegram Stars invoice link',
+    });
+  }
+
+  res.json({
+    success: true,
+    invoiceUrl: invoiceRes.invoiceUrl,
+    invoicePayload: recordRes.invoicePayload,
+    starsAmount,
+    edition,
+    giftId: upg.id,
+    giftName: upg.name,
+  });
+});
+
+// Confirm Telegram Stars (XTR) Gift Payment (called after WebApp.openInvoice('paid') or webhook)
+app.post('/api/game/gifts/confirm-payment', requireAuth, (req: AuthenticatedRequest, res) => {
+  const { giftId, invoicePayload } = req.body;
+  if (!giftId && !invoicePayload) {
+    return res.status(400).json({ error: 'giftId or invoicePayload is required' });
+  }
+
+  const fulfillRes = db.fulfillStarsGiftPayment({
+    userId: req.userId!,
+    giftId: giftId ? String(giftId) : undefined,
+    invoicePayload: invoicePayload ? String(invoicePayload) : undefined,
+  });
+
+  if (!fulfillRes.success || !fulfillRes.state) {
+    return res.status(400).json({ error: fulfillRes.error || 'Failed to confirm Stars gift payment' });
+  }
+
+  res.json({
+    success: true,
+    user: fulfillRes.state,
+    alreadyFulfilled: fulfillRes.alreadyFulfilled,
+  });
+});
+
+// Check Telegram Stars (XTR) Invoice Status (for external Telegram checkout polling)
+app.get('/api/game/gifts/check-invoice', requireAuth, (req: AuthenticatedRequest, res) => {
+  const invoicePayload = String(req.query.invoicePayload || '');
+  if (!invoicePayload) {
+    return res.status(400).json({ error: 'invoicePayload query param is required' });
+  }
+
+  const statusRes = db.getStarsInvoiceStatus(invoicePayload);
+  res.json({
+    found: statusRes.found,
+    status: statusRes.status || 'pending',
+    user: statusRes.user || db.getUserById(req.userId!),
   });
 });
 

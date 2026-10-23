@@ -543,6 +543,148 @@ class ApiService {
     }
   }
 
+  private getSavedBotToken(): string | undefined {
+    if (typeof window !== 'undefined') {
+      try {
+        const raw = localStorage.getItem(LOCAL_BOT_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed?.botToken && String(parsed.botToken).includes(':')) {
+            return String(parsed.botToken).trim();
+          }
+        }
+      } catch {}
+    }
+    return undefined;
+  }
+
+  public async createStarsGiftInvoice(giftId: string): Promise<{
+    success: boolean;
+    invoiceUrl: string;
+    invoicePayload: string;
+    starsAmount: number;
+    edition: number;
+    giftId: string;
+    giftName: string;
+  }> {
+    if (this.pendingTapCount > 0) {
+      await this.flushTaps();
+    }
+
+    const savedBotToken = this.getSavedBotToken();
+
+    try {
+      return await this.request('/api/game/gifts/create-invoice', {
+        method: 'POST',
+        body: JSON.stringify({
+          giftId,
+          botToken: savedBotToken,
+        }),
+      });
+    } catch (err: any) {
+      if (this.isStaticFallbackError(err)) {
+        const user = this.getLocalUser();
+        const upg = this.getLocalUpgrades().find((u) => u.id === giftId && u.category === 'gift');
+        if (!upg) throw new Error('Gift item not found');
+        if (user.level < upg.levelRequirement) {
+          throw new Error(`Requires Player Level ${upg.levelRequirement} to unlock ${upg.name}`);
+        }
+        if (!savedBotToken) {
+          throw new Error(
+            'Telegram Bot Token is not configured yet. Please open Admin Panel -> Bot Setup and connect your Telegram Bot Token to enable Telegram Stars (XTR) payments.'
+          );
+        }
+
+        const currentLvl = user.upgrades[giftId] || 0;
+        const starsAmount = Math.max(1, calculateUpgradePrice(upg, currentLvl));
+        const edition = currentLvl + 1;
+        const invoicePayload = `fg|${user.id}|${upg.id}|${Date.now().toString(36)}`.slice(0, 128);
+
+        const tgRes = await fetch(`https://api.telegram.org/bot${savedBotToken}/createInvoiceLink`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title: `${upg.name} (#${edition})`.slice(0, 32),
+            description: `${upg.description} · Boosts passive mining by +${upg.baseBenefit.toLocaleString('en-US')} FOX/hr`.slice(0, 255),
+            payload: invoicePayload,
+            provider_token: '',
+            currency: 'XTR',
+            prices: [
+              {
+                label: `${upg.name} (#${edition})`.slice(0, 32),
+                amount: starsAmount,
+              },
+            ],
+          }),
+        });
+
+        const tgData = await tgRes.json();
+        if (!tgRes.ok || !tgData.ok || typeof tgData.result !== 'string') {
+          throw new Error(tgData.description || 'Failed to generate Telegram Stars invoice link');
+        }
+
+        return {
+          success: true,
+          invoiceUrl: tgData.result,
+          invoicePayload,
+          starsAmount,
+          edition,
+          giftId: upg.id,
+          giftName: upg.name,
+        };
+      }
+      throw err;
+    }
+  }
+
+  public async confirmStarsGiftPayment(
+    giftId: string,
+    invoicePayload?: string
+  ): Promise<UserGameState> {
+    try {
+      const res = await this.request<{ success: boolean; user: UserGameState }>(
+        '/api/game/gifts/confirm-payment',
+        {
+          method: 'POST',
+          body: JSON.stringify({ giftId, invoicePayload }),
+        }
+      );
+
+      const reconciled = reconcileUserLevel(res.user, this.getLocalUpgrades());
+      this.saveLocalUser(reconciled);
+      if (this.onStateUpdated && reconciled) {
+        this.onStateUpdated(reconciled);
+      }
+      return reconciled;
+    } catch (err) {
+      if (this.isStaticFallbackError(err)) {
+        return this.purchaseUpgrade(giftId);
+      }
+      throw err;
+    }
+  }
+
+  public async checkStarsGiftInvoice(
+    invoicePayload: string
+  ): Promise<{ found: boolean; status: 'pending' | 'paid'; user?: UserGameState }> {
+    try {
+      const res = await this.request<{ found: boolean; status: 'pending' | 'paid'; user?: UserGameState }>(
+        `/api/game/gifts/check-invoice?invoicePayload=${encodeURIComponent(invoicePayload)}`
+      );
+      if (res.status === 'paid' && res.user) {
+        const reconciled = reconcileUserLevel(res.user, this.getLocalUpgrades());
+        this.saveLocalUser(reconciled);
+        if (this.onStateUpdated) {
+          this.onStateUpdated(reconciled);
+        }
+        return { ...res, user: reconciled };
+      }
+      return res;
+    } catch {
+      return { found: false, status: 'pending' };
+    }
+  }
+
   public async claimPassive(): Promise<{ user: UserGameState; claimedAmount: number }> {
     try {
       const res = await this.request<{ user: UserGameState; claimedAmount: number }>('/api/game/claim-passive', {
@@ -943,11 +1085,38 @@ class ApiService {
     try {
       const headers: Record<string, string> = {};
       if (adminSecret) headers['x-admin-secret'] = adminSecret;
-      return await this.request('/api/admin/telegram/auto-setup', {
+      const res = await this.request<{
+        success: boolean;
+        description: string;
+        botUsername: string;
+        botFirstName?: string;
+        appUrl: string;
+        webhookUrl: string;
+        telegramLink: string;
+      }>('/api/admin/telegram/auto-setup', {
         method: 'POST',
         headers,
         body: JSON.stringify({ botToken }),
       });
+
+      if (typeof window !== 'undefined' && botToken && botToken.trim()) {
+        const cleanToken = botToken.trim();
+        localStorage.setItem(
+          LOCAL_BOT_KEY,
+          JSON.stringify({
+            hasToken: true,
+            botToken: cleanToken,
+            maskedToken: `${cleanToken.slice(0, 6)}...${cleanToken.slice(-4)}`,
+            webhookUrl: res.webhookUrl,
+            botUsername: res.botUsername,
+            botFirstName: res.botFirstName,
+            isConfigured: true,
+            lastWebhookSetupDate: Date.now(),
+          })
+        );
+      }
+
+      return res;
     } catch (err) {
       if (this.isStaticFallbackError(err)) {
         const cleanToken = botToken.trim();
@@ -992,6 +1161,7 @@ class ApiService {
             LOCAL_BOT_KEY,
             JSON.stringify({
               hasToken: true,
+              botToken: cleanToken,
               maskedToken: `${cleanToken.slice(0, 6)}...${cleanToken.slice(-4)}`,
               webhookUrl,
               botUsername,

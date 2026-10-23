@@ -142,7 +142,7 @@ export async function setTelegramWebhook(
   try {
     const payload: Record<string, any> = {
       url: webhookUrl,
-      allowed_updates: ['message', 'callback_query'],
+      allowed_updates: ['message', 'callback_query', 'pre_checkout_query'],
       drop_pending_updates: false,
     };
 
@@ -275,6 +275,68 @@ export async function sendTelegramMessage(botToken: string, chatId: number | str
 }
 
 /**
+ * Creates an official Telegram Stars (XTR) invoice link via Telegram Bot API createInvoiceLink
+ */
+export async function createTelegramStarsInvoiceLink(
+  botToken: string,
+  params: {
+    title: string;
+    description: string;
+    payload: string;
+    starsAmount: number;
+    label?: string;
+  }
+): Promise<{ success: boolean; invoiceUrl?: string; description?: string }> {
+  if (!isValidBotTokenFormat(botToken)) {
+    return {
+      success: false,
+      description: 'Telegram Bot Token is not configured or invalid. Please configure your bot token in Admin Panel -> Bot Setup.',
+    };
+  }
+
+  try {
+    const endpoint = `https://api.telegram.org/bot${botToken.trim()}/createInvoiceLink`;
+    const body = {
+      title: String(params.title || 'Fox Collectible Gift').slice(0, 32),
+      description: String(params.description || 'Limited Telegram Collectible Fox Gift').slice(0, 255),
+      payload: String(params.payload).slice(0, 128),
+      provider_token: '', // Must be empty string for Telegram Stars (XTR)
+      currency: 'XTR',
+      prices: [
+        {
+          label: String(params.label || params.title || 'Fox Gift').slice(0, 32),
+          amount: Math.max(1, Math.floor(Number(params.starsAmount) || 1)),
+        },
+      ],
+    };
+
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    const data = (await res.json()) as any;
+    if (!res.ok || !data.ok || typeof data.result !== 'string') {
+      return {
+        success: false,
+        description: data.description || `Telegram Stars createInvoiceLink error (${res.status})`,
+      };
+    }
+
+    return {
+      success: true,
+      invoiceUrl: data.result,
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      description: `Failed to connect to Telegram Stars gateway: ${err.message}`,
+    };
+  }
+}
+
+/**
  * Handles incoming webhook updates with persistent deduplication
  */
 export async function processTelegramWebhookUpdate(
@@ -297,19 +359,78 @@ export async function processTelegramWebhookUpdate(
   }
   db.markUpdateProcessed(updateId);
 
-  // Process message command
-  const message = update.message;
-  if (!message || !message.text) {
+  // 1. Handle Telegram Stars pre_checkout_query (must answer within 10s)
+  if (update.pre_checkout_query && update.pre_checkout_query.id) {
+    try {
+      await fetch(`https://api.telegram.org/bot${botToken}/answerPreCheckoutQuery`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pre_checkout_query_id: update.pre_checkout_query.id,
+          ok: true,
+        }),
+      });
+    } catch (err) {
+      console.error('Failed to answer pre_checkout_query:', err);
+    }
     return { handled: true, isDuplicate: false };
   }
 
-  const chatId = message.chat.id;
+  const message = update.message;
+  if (!message) {
+    return { handled: true, isDuplicate: false };
+  }
+
+  const chatId = message.chat?.id;
   const from = message.from;
+  const gameUrl = appUrl.startsWith('http') ? appUrl : `https://${appUrl}`;
+
+  // 2. Handle Telegram Stars successful_payment event
+  if (message.successful_payment) {
+    const payment = message.successful_payment;
+    const invoicePayload = String(payment.invoice_payload || '');
+    const chargeId = String(payment.telegram_payment_charge_id || '');
+    const starsPaid = Number(payment.total_amount || 0);
+
+    const fulfillRes = db.fulfillStarsGiftPayment({
+      invoicePayload,
+      telegramUserId: from?.id,
+      chargeId,
+    });
+
+    if (chatId) {
+      const giftName = fulfillRes.gift?.name || 'Telegram Collectible Fox Gift';
+      const yieldBoost = fulfillRes.gift?.baseBenefit || 0;
+      const receiptText =
+        `⭐ <b>Telegram Stars Payment Confirmed!</b>\n\n` +
+        `🎁 <b>Item Unlocked:</b> ${giftName}\n` +
+        `💫 <b>Paid:</b> ${starsPaid.toLocaleString('en-US')} Telegram Stars (XTR)\n` +
+        (yieldBoost > 0 ? `⚡ <b>Passive Yield Boost:</b> +${yieldBoost.toLocaleString('en-US')} FOX/hr\n\n` : '\n') +
+        `Your new Collectible Fox Gift has been added to your vault!`;
+
+      await sendTelegramMessage(botToken, chatId, receiptText, {
+        inline_keyboard: [
+          [
+            {
+              text: '🎁 Open Fox Gift Vault',
+              web_app: { url: gameUrl },
+            },
+          ],
+        ],
+      });
+    }
+
+    return { handled: true, isDuplicate: false };
+  }
+
+  // 3. Process message command
+  if (!message.text) {
+    return { handled: true, isDuplicate: false };
+  }
+
   const rawText = message.text.trim();
   const command = rawText.split(' ')[0].toLowerCase();
   const args = rawText.split(' ').slice(1).join(' ');
-
-  const gameUrl = appUrl.startsWith('http') ? appUrl : `https://${appUrl}`;
 
   const channelHandle = process.env.TELEGRAM_CHANNEL || '@FOX_COINEX';
   const channelUrl = 'https://t.me/FOX_COINEX';

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Gift,
@@ -10,11 +10,14 @@ import {
   Star,
   Award,
   X,
+  ExternalLink,
+  RefreshCw,
 } from 'lucide-react';
 import { UpgradeDefinition, UserGameState } from '../types/game.js';
 import { FoxGiftAvatar, getFoxGiftMetadata } from './FoxGiftAvatar.js';
 import { sound } from '../utils/audio.js';
 import { TelegramService } from '../utils/telegram.js';
+import { api } from '../utils/api.js';
 
 interface GiftsScreenProps {
   user: UserGameState;
@@ -31,13 +34,21 @@ export const GiftsScreen: React.FC<GiftsScreenProps> = ({
   botUsername = 'FOXCOINBot',
   equippedGiftId,
   onEquipGift,
-  onPurchaseGift,
 }) => {
   const [filter, setFilter] = useState<'all' | 'owned' | 'epic' | 'legendary'>('all');
   const [mintingId, setMintingId] = useState<string | null>(null);
   const [recentlyMintedId, setRecentlyMintedId] = useState<string | null>(null);
   const [selectedGiftId, setSelectedGiftId] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<{ text: string; isError?: boolean } | null>(null);
+  const [pendingInvoice, setPendingInvoice] = useState<{
+    giftId: string;
+    giftName: string;
+    starsAmount: number;
+    edition: number;
+    invoiceUrl: string;
+    invoicePayload: string;
+    benefit: number;
+  } | null>(null);
 
   const giftItems = upgrades.filter((u) => u.category === 'gift');
   const selectedGift = giftItems.find((g) => g.id === selectedGiftId) || null;
@@ -65,8 +76,31 @@ export const GiftsScreen: React.FC<GiftsScreenProps> = ({
 
   const showToast = (text: string, isError = false) => {
     setToastMessage({ text, isError });
-    setTimeout(() => setToastMessage(null), 3200);
+    setTimeout(() => setToastMessage(null), 3800);
   };
+
+  // Poll webhook payment status when an invoice is opened externally in Telegram
+  useEffect(() => {
+    if (!pendingInvoice) return;
+    const interval = setInterval(async () => {
+      const check = await api.checkStarsGiftInvoice(pendingInvoice.invoicePayload);
+      if (check.status === 'paid') {
+        sound.playSuccess();
+        TelegramService.triggerHaptic('heavy');
+        setRecentlyMintedId(pendingInvoice.giftId);
+        setTimeout(() => {
+          setRecentlyMintedId((prev) => (prev === pendingInvoice.giftId ? null : prev));
+        }, 1800);
+        onEquipGift(pendingInvoice.giftId);
+        showToast(
+          `⭐ Telegram Stars Payment Confirmed! Equipped ${pendingInvoice.giftName} (#${pendingInvoice.edition}) · +${pendingInvoice.benefit.toLocaleString('en-US')} FOX/hr`
+        );
+        setPendingInvoice(null);
+      }
+    }, 2500);
+
+    return () => clearInterval(interval);
+  }, [pendingInvoice, onEquipGift]);
 
   const handleMintGift = async (gift: UpgradeDefinition) => {
     const currentLevel = user.upgrades[gift.id] || 0;
@@ -82,19 +116,52 @@ export const GiftsScreen: React.FC<GiftsScreenProps> = ({
 
     try {
       setMintingId(gift.id);
-      await onPurchaseGift(gift.id);
-      sound.playSuccess();
-      TelegramService.triggerHaptic('heavy');
-      setRecentlyMintedId(gift.id);
-      setTimeout(() => {
-        setRecentlyMintedId((prev) => (prev === gift.id ? null : prev));
-      }, 1800);
-      onEquipGift(gift.id);
-      showToast(`⭐ Purchased & Equipped ${gift.name} (#${currentLevel + 1}) for ${price.toLocaleString('en-US')} Telegram Stars! +${gift.baseBenefit.toLocaleString('en-US')} FOX/hr`);
+
+      // 1. Request official Telegram Stars (XTR) invoice link from backend (Bot API createInvoiceLink)
+      const invoice = await api.createStarsGiftInvoice(gift.id);
+
+      // 2. Open Telegram Stars native payment gateway (WebApp.openInvoice or Telegram deep link)
+      const paymentStatus = await TelegramService.openStarsInvoice(invoice.invoiceUrl);
+
+      if (paymentStatus === 'paid') {
+        // 3. Confirm payment and grant collectible gift
+        await api.confirmStarsGiftPayment(gift.id, invoice.invoicePayload);
+        sound.playSuccess();
+        TelegramService.triggerHaptic('heavy');
+        setRecentlyMintedId(gift.id);
+        setTimeout(() => {
+          setRecentlyMintedId((prev) => (prev === gift.id ? null : prev));
+        }, 1800);
+        onEquipGift(gift.id);
+        setPendingInvoice(null);
+        showToast(
+          `⭐ Purchased & Equipped ${gift.name} (#${currentLevel + 1}) for ${price.toLocaleString('en-US')} Telegram Stars! +${gift.baseBenefit.toLocaleString('en-US')} FOX/hr`
+        );
+      } else if (paymentStatus === 'external') {
+        // Opened t.me/$... invoice link in Telegram app; wait for webhook confirmation
+        setPendingInvoice({
+          giftId: gift.id,
+          giftName: gift.name,
+          starsAmount: invoice.starsAmount || price,
+          edition: invoice.edition || currentLevel + 1,
+          invoiceUrl: invoice.invoiceUrl,
+          invoicePayload: invoice.invoicePayload,
+          benefit: gift.baseBenefit,
+        });
+        showToast(
+          `⭐ Telegram Stars invoice opened! Complete the ${price.toLocaleString('en-US')} Stars payment in Telegram to unlock ${gift.name}.`
+        );
+      } else if (paymentStatus === 'cancelled') {
+        sound.playError();
+        showToast('Telegram Stars payment was cancelled.', true);
+      } else {
+        sound.playError();
+        showToast('Telegram Stars payment could not be completed.', true);
+      }
     } catch (err: any) {
       sound.playError();
       TelegramService.triggerHaptic('heavy');
-      showToast(err?.message || 'Could not mint gift right now', true);
+      showToast(err?.message || 'Could not connect to Telegram Stars gateway', true);
     } finally {
       setMintingId(null);
     }
@@ -129,6 +196,45 @@ export const GiftsScreen: React.FC<GiftsScreenProps> = ({
           >
             <Sparkles className={`w-4 h-4 shrink-0 ${toastMessage.isError ? 'text-red-400' : 'text-emerald-400'}`} />
             <span>{toastMessage.text}</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Pending External Telegram Stars Invoice Checkout Banner */}
+      <AnimatePresence>
+        {pendingInvoice && (
+          <motion.div
+            initial={{ opacity: 0, y: -10, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -10, scale: 0.96 }}
+            className="mb-3 p-3.5 rounded-2xl bg-amber-500/15 border border-amber-400/40 text-xs flex flex-col gap-2 shadow-lg"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 font-black text-amber-300">
+                <RefreshCw className="w-4 h-4 animate-spin text-amber-400 shrink-0" />
+                <span>
+                  Awaiting Telegram Stars Payment ({pendingInvoice.starsAmount.toLocaleString('en-US')} ★)
+                </span>
+              </div>
+              <button
+                onClick={() => setPendingInvoice(null)}
+                className="text-slate-400 hover:text-white p-1 cursor-pointer"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+            <p className="text-[11px] text-slate-300">
+              Complete the payment for <b>{pendingInvoice.giftName} (#{pendingInvoice.edition})</b> in Telegram. Your gift will unlock automatically once confirmed!
+            </p>
+            <div className="flex items-center gap-2 pt-1">
+              <button
+                onClick={() => TelegramService.openLink(pendingInvoice.invoiceUrl)}
+                className="flex-1 py-2 px-3 rounded-xl bg-gradient-to-r from-amber-400 to-orange-500 text-slate-950 font-black text-[11px] flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+                <span>Open Telegram Stars Invoice</span>
+              </button>
+            </div>
           </motion.div>
         )}
       </AnimatePresence>

@@ -59,6 +59,10 @@ declare global {
         setBackgroundColor: (color: string) => void;
         openTelegramLink: (url: string) => void;
         openLink: (url: string) => void;
+        openInvoice?: (
+          url: string,
+          callback?: (status: 'paid' | 'cancelled' | 'failed' | 'pending') => void
+        ) => void;
       };
     };
   }
@@ -139,5 +143,30 @@ export class TelegramService {
     } else {
       window.open(url, '_blank');
     }
+  }
+
+  /**
+   * Opens a Telegram Stars (XTR) invoice link natively via Telegram.WebApp.openInvoice
+   * or falls back to opening the t.me/$... invoice link in Telegram.
+   */
+  public static openStarsInvoice(
+    invoiceUrl: string
+  ): Promise<'paid' | 'cancelled' | 'failed' | 'pending' | 'external'> {
+    return new Promise((resolve) => {
+      const tg = this.getWebApp();
+      if (tg && typeof tg.openInvoice === 'function') {
+        try {
+          tg.openInvoice(invoiceUrl, (status) => {
+            resolve(status || 'cancelled');
+          });
+          return;
+        } catch (err) {
+          console.warn('Telegram.WebApp.openInvoice fallback:', err);
+        }
+      }
+      // Fallback: open the t.me/$... invoice link directly in Telegram app
+      this.openLink(invoiceUrl);
+      resolve('external');
+    });
   }
 }

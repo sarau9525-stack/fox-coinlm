@@ -93,6 +93,19 @@ interface DatabaseSchema {
   customUpgrades?: UpgradeDefinition[];
   deletedUpgradeIds?: string[];
   wheelPrizes?: LuckyWheelPrize[];
+  starsInvoices?: Record<
+    string,
+    {
+      userId: string;
+      giftId: string;
+      starsAmount: number;
+      edition: number;
+      status: 'pending' | 'paid';
+      chargeId?: string;
+      createdAt: number;
+      paidAt?: number;
+    }
+  >;
 }
 
 // In-memory cache + persistent JSON
@@ -110,6 +123,7 @@ class DatabaseStore {
     customUpgrades: [],
     deletedUpgradeIds: [],
     wheelPrizes: [],
+    starsInvoices: {},
   };
   private saveTimeout: NodeJS.Timeout | null = null;
 
@@ -127,6 +141,7 @@ class DatabaseStore {
         this.data = JSON.parse(raw);
         this.data.botConfig = this.data.botConfig || {};
         this.data.processedUpdateIds = this.data.processedUpdateIds || {};
+        this.data.starsInvoices = this.data.starsInvoices || {};
         console.log(`[Database] Loaded ${Object.keys(this.data.users).length} users from disk.`);
       } else {
         console.log('[Database] Initializing fresh database with seeded leaderboard.');
@@ -590,6 +605,189 @@ class DatabaseStore {
     this.refreshUserState(user);
     this.save();
     return { success: true, state: user };
+  }
+
+  public createStarsInvoiceRecord(
+    userId: string,
+    giftId: string
+  ): {
+    success: boolean;
+    invoicePayload?: string;
+    upgrade?: UpgradeDefinition;
+    starsAmount?: number;
+    edition?: number;
+    error?: string;
+  } {
+    const user = this.data.users[userId];
+    if (!user) return { success: false, error: 'User not found' };
+
+    const allUpgrades = this.getUpgrades();
+    const upgrade = allUpgrades.find((u) => u.id === giftId && u.category === 'gift');
+    if (!upgrade) return { success: false, error: 'Gift item not found' };
+
+    if (user.level < upgrade.levelRequirement) {
+      return {
+        success: false,
+        error: `Requires Player Level ${upgrade.levelRequirement} to unlock ${upgrade.name}`,
+      };
+    }
+
+    const currentLvl = user.upgrades[giftId] || 0;
+    const starsAmount = Math.max(1, this.getUpgradePrice(upgrade, currentLvl));
+    const edition = currentLvl + 1;
+    const nonce = crypto.randomBytes(4).toString('hex');
+    const invoicePayload = `fg|${userId}|${giftId}|${nonce}`.slice(0, 128);
+
+    this.data.starsInvoices = this.data.starsInvoices || {};
+    this.data.starsInvoices[invoicePayload] = {
+      userId,
+      giftId,
+      starsAmount,
+      edition,
+      status: 'pending',
+      createdAt: Date.now(),
+    };
+    this.save();
+
+    return {
+      success: true,
+      invoicePayload,
+      upgrade,
+      starsAmount,
+      edition,
+    };
+  }
+
+  public fulfillStarsGiftPayment(params: {
+    invoicePayload?: string;
+    userId?: string;
+    telegramUserId?: number | string;
+    giftId?: string;
+    chargeId?: string;
+  }): {
+    success: boolean;
+    state?: UserGameState;
+    gift?: UpgradeDefinition;
+    alreadyFulfilled?: boolean;
+    error?: string;
+  } {
+    this.data.starsInvoices = this.data.starsInvoices || {};
+    const record = params.invoicePayload ? this.data.starsInvoices[params.invoicePayload] : undefined;
+
+    let resolvedUserId = params.userId || record?.userId;
+    let resolvedGiftId = params.giftId || record?.giftId;
+
+    // Parse payload fallback if formatted as fg|userId|giftId|nonce
+    if ((!resolvedUserId || !resolvedGiftId) && params.invoicePayload?.startsWith('fg|')) {
+      const parts = params.invoicePayload.split('|');
+      if (parts.length >= 3) {
+        resolvedUserId = resolvedUserId || parts[1];
+        resolvedGiftId = resolvedGiftId || parts[2];
+      }
+    }
+
+    let user = resolvedUserId ? this.data.users[resolvedUserId] : undefined;
+    if (!user && params.telegramUserId) {
+      const byTg = this.getUserByTelegramId(params.telegramUserId);
+      if (byTg) {
+        user = this.data.users[byTg.id];
+        resolvedUserId = byTg.id;
+      }
+    }
+
+    if (!user || !resolvedUserId) {
+      return { success: false, error: 'User not found for Stars gift fulfillment' };
+    }
+
+    if (!resolvedGiftId) {
+      return { success: false, error: 'Gift ID missing from payment payload' };
+    }
+
+    const allUpgrades = this.getUpgrades();
+    const upgrade = allUpgrades.find((u) => u.id === resolvedGiftId);
+    if (!upgrade) {
+      return { success: false, error: 'Gift definition not found' };
+    }
+
+    // Deduplicate if already marked paid
+    if (record && record.status === 'paid') {
+      this.refreshUserState(user);
+      return {
+        success: true,
+        state: user,
+        gift: upgrade,
+        alreadyFulfilled: true,
+      };
+    }
+
+    const currentLvl = user.upgrades[resolvedGiftId] || 0;
+    const starsAmount = record?.starsAmount || Math.max(1, this.getUpgradePrice(upgrade, currentLvl));
+
+    user.upgrades[resolvedGiftId] = currentLvl + 1;
+    user.totalEarned = (user.totalEarned || 0) + getUpgradeXpBonus(upgrade.baseBenefit * 2);
+
+    if (upgrade.benefitType === 'max_energy') {
+      user.energy += upgrade.baseBenefit;
+    }
+
+    this.recalculatePlayerStats(user);
+
+    if (params.invoicePayload) {
+      this.data.starsInvoices[params.invoicePayload] = {
+        userId: resolvedUserId,
+        giftId: resolvedGiftId,
+        starsAmount,
+        edition: currentLvl + 1,
+        status: 'paid',
+        chargeId: params.chargeId,
+        createdAt: record?.createdAt || Date.now(),
+        paidAt: Date.now(),
+      };
+    }
+
+    this.addAuditLog(
+      user.id,
+      'upgrade',
+      0,
+      user.balance,
+      `Paid ${starsAmount} Telegram Stars (XTR) for ${upgrade.name} (#${currentLvl + 1})${
+        params.chargeId ? ` [Charge: ${params.chargeId}]` : ''
+      }`
+    );
+
+    const totalUpgradeCount = Object.values(user.upgrades).reduce((acc, lvl) => acc + lvl, 0);
+    this.checkTaskProgress(user, 'first_upgrade', 1, false);
+    if (totalUpgradeCount >= 5) {
+      this.checkTaskProgress(user, 'upgrade_5', totalUpgradeCount, false);
+    }
+    if (user.profitPerHour >= 1000) {
+      this.checkTaskProgress(user, 'profit_1k', user.profitPerHour, false);
+    }
+
+    this.refreshUserState(user);
+    this.save();
+
+    return {
+      success: true,
+      state: user,
+      gift: upgrade,
+      alreadyFulfilled: false,
+    };
+  }
+
+  public getStarsInvoiceStatus(invoicePayload: string): {
+    found: boolean;
+    status?: 'pending' | 'paid';
+    user?: UserGameState | null;
+  } {
+    this.data.starsInvoices = this.data.starsInvoices || {};
+    const rec = this.data.starsInvoices[invoicePayload];
+    if (!rec) return { found: false };
+    return {
+      found: true,
+      status: rec.status,
+      user: this.getUserById(rec.userId),
+    };
   }
 
   private recalculatePlayerStats(user: UserGameState) {
