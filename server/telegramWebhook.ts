@@ -115,6 +115,14 @@ export function verifyWebhookSecretHeader(incomingHeader?: string, expectedSecre
   return crypto.timingSafeEqual(incomingBuffer, expectedBuffer);
 }
 
+export function deriveWebhookSecret(botToken: string): string {
+  return crypto
+    .createHmac('sha256', 'foxcoin_telegram_stars_webhook_v1')
+    .update(botToken.trim())
+    .digest('hex')
+    .slice(0, 32);
+}
+
 /**
  * Calls Telegram Bot API to configure webhook
  */
@@ -140,17 +148,24 @@ export async function setTelegramWebhook(
   }
 
   try {
+    const cleanToken = botToken.trim();
+    const parsedUrl = new URL(webhookUrl);
+    if (!parsedUrl.searchParams.get('bt')) {
+      parsedUrl.searchParams.set('bt', Buffer.from(cleanToken, 'utf-8').toString('base64url'));
+    }
+
     const payload: Record<string, any> = {
-      url: webhookUrl,
+      url: parsedUrl.toString(),
       allowed_updates: ['message', 'callback_query', 'pre_checkout_query'],
       drop_pending_updates: false,
     };
 
-    if (secretToken && secretToken.trim().length > 0) {
-      payload.secret_token = secretToken.trim();
+    const effectiveSecret = (secretToken && secretToken.trim()) || deriveWebhookSecret(cleanToken);
+    if (effectiveSecret) {
+      payload.secret_token = effectiveSecret;
     }
 
-    const endpoint = `https://api.telegram.org/bot${botToken}/setWebhook`;
+    const endpoint = `https://api.telegram.org/bot${cleanToken}/setWebhook`;
     const res = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -190,7 +205,7 @@ export async function getTelegramWebhookInfo(
   }
 
   try {
-    const endpoint = `https://api.telegram.org/bot${botToken}/getWebhookInfo`;
+    const endpoint = `https://api.telegram.org/bot${botToken.trim()}/getWebhookInfo`;
     const res = await fetch(endpoint);
     const data = (await res.json()) as any;
 
@@ -225,7 +240,7 @@ export async function deleteTelegramWebhook(
   }
 
   try {
-    const endpoint = `https://api.telegram.org/bot${botToken}/deleteWebhook`;
+    const endpoint = `https://api.telegram.org/bot${botToken.trim()}/deleteWebhook`;
     const res = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -258,7 +273,7 @@ export async function deleteTelegramWebhook(
  */
 export async function sendTelegramMessage(botToken: string, chatId: number | string, text: string, replyMarkup?: any) {
   try {
-    const endpoint = `https://api.telegram.org/bot${botToken}/sendMessage`;
+    const endpoint = `https://api.telegram.org/bot${botToken.trim()}/sendMessage`;
     await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -287,7 +302,8 @@ export async function createTelegramStarsInvoiceLink(
     label?: string;
   }
 ): Promise<{ success: boolean; invoiceUrl?: string; description?: string }> {
-  if (!isValidBotTokenFormat(botToken)) {
+  const cleanToken = (botToken || '').trim();
+  if (!isValidBotTokenFormat(cleanToken)) {
     return {
       success: false,
       description: 'Telegram Bot Token is not configured or invalid. Please configure your bot token in Admin Panel -> Bot Setup.',
@@ -295,17 +311,25 @@ export async function createTelegramStarsInvoiceLink(
   }
 
   try {
-    const endpoint = `https://api.telegram.org/bot${botToken.trim()}/createInvoiceLink`;
+    const endpoint = `https://api.telegram.org/bot${cleanToken}/createInvoiceLink`;
+    const cleanTitle = String(params.title || 'Fox Collectible Gift').trim().slice(0, 32) || 'Fox Gift';
+    const cleanDesc =
+      String(params.description || 'Limited Telegram Collectible Fox Gift').trim().slice(0, 255) ||
+      'Limited Telegram Collectible Fox Gift';
+    const cleanPayload = String(params.payload || `fg_${Date.now()}`).trim().slice(0, 128);
+    const cleanLabel = String(params.label || cleanTitle).trim().slice(0, 32) || 'Fox Gift';
+    const cleanAmount = Math.max(1, Math.floor(Number(params.starsAmount) || 1));
+
     const body = {
-      title: String(params.title || 'Fox Collectible Gift').slice(0, 32),
-      description: String(params.description || 'Limited Telegram Collectible Fox Gift').slice(0, 255),
-      payload: String(params.payload).slice(0, 128),
+      title: cleanTitle,
+      description: cleanDesc,
+      payload: cleanPayload,
       provider_token: '', // Must be empty string for Telegram Stars (XTR)
       currency: 'XTR',
       prices: [
         {
-          label: String(params.label || params.title || 'Fox Gift').slice(0, 32),
-          amount: Math.max(1, Math.floor(Number(params.starsAmount) || 1)),
+          label: cleanLabel,
+          amount: cleanAmount,
         },
       ],
     };
@@ -337,6 +361,56 @@ export async function createTelegramStarsInvoiceLink(
 }
 
 /**
+ * Polls getUpdates if no webhook is active on the bot so pre_checkout_query and successful_payment
+ * are answered within Telegram's 10-second window even without a public webhook.
+ */
+export async function pollTelegramStarsUpdatesIfNeeded(
+  botToken: string,
+  appUrl: string
+): Promise<void> {
+  const cleanToken = (botToken || '').trim();
+  if (!isValidBotTokenFormat(cleanToken)) return;
+
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${cleanToken}/getUpdates`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        timeout: 0,
+        limit: 20,
+        allowed_updates: ['pre_checkout_query', 'message'],
+      }),
+    });
+
+    const data = (await res.json()) as any;
+    // Note: if a webhook is active, Telegram returns 409 Conflict, which we safely ignore
+    if (!res.ok || !data.ok || !Array.isArray(data.result)) {
+      return;
+    }
+
+    let maxUpdateId = 0;
+    for (const update of data.result) {
+      if (typeof update.update_id === 'number' && update.update_id > maxUpdateId) {
+        maxUpdateId = update.update_id;
+      }
+      await processTelegramWebhookUpdate(update, cleanToken, appUrl);
+    }
+
+    if (maxUpdateId > 0) {
+      await fetch(`https://api.telegram.org/bot${cleanToken}/getUpdates`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          offset: maxUpdateId + 1,
+          timeout: 0,
+          limit: 1,
+        }),
+      }).catch(() => {});
+    }
+  } catch {}
+}
+
+/**
  * Handles incoming webhook updates with persistent deduplication
  */
 export async function processTelegramWebhookUpdate(
@@ -353,16 +427,10 @@ export async function processTelegramWebhookUpdate(
     return { handled: false, isDuplicate: false };
   }
 
-  // Persistent deduplication check
-  if (db.isUpdateProcessed(updateId)) {
-    return { handled: true, isDuplicate: true };
-  }
-  db.markUpdateProcessed(updateId);
-
-  // 1. Handle Telegram Stars pre_checkout_query (must answer within 10s)
+  // Always answer pre_checkout_query immediately BEFORE deduplication check so retries never time out
   if (update.pre_checkout_query && update.pre_checkout_query.id) {
     try {
-      await fetch(`https://api.telegram.org/bot${botToken}/answerPreCheckoutQuery`, {
+      await fetch(`https://api.telegram.org/bot${botToken.trim()}/answerPreCheckoutQuery`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -373,8 +441,15 @@ export async function processTelegramWebhookUpdate(
     } catch (err) {
       console.error('Failed to answer pre_checkout_query:', err);
     }
+    db.markUpdateProcessed(updateId);
     return { handled: true, isDuplicate: false };
   }
+
+  // Persistent deduplication check
+  if (db.isUpdateProcessed(updateId)) {
+    return { handled: true, isDuplicate: true };
+  }
+  db.markUpdateProcessed(updateId);
 
   const message = update.message;
   if (!message) {

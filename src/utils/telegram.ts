@@ -75,13 +75,10 @@ declare global {
 
 export type TelegramInvoiceStatus = 'paid' | 'cancelled' | 'failed' | 'pending' | 'external' | 'preview';
 
-// Capture the stock uninitialized v6.0 openInvoice function (if present on load) so we never
-// invoke it when WebApp version is 6.0, while still allowing custom test mocks on openInvoice.
-const stockUnsupportedOpenInvoice =
-  typeof window !== 'undefined' &&
-  window.Telegram?.WebApp &&
-  typeof window.Telegram.WebApp.isVersionAtLeast === 'function' &&
-  !window.Telegram.WebApp.isVersionAtLeast('6.1')
+// Capture the initial Telegram.WebApp.openInvoice reference on load so we can distinguish
+// between the stock Telegram SDK method and any custom test mock injected at runtime.
+const initialWebAppOpenInvoice =
+  typeof window !== 'undefined' && window.Telegram?.WebApp
     ? window.Telegram.WebApp.openInvoice
     : undefined;
 
@@ -215,12 +212,14 @@ export class TelegramService {
   /**
    * Opens a Telegram Stars (XTR) invoice via Telegram Mini App's native `openInvoice` API (v6.1+).
    * When running in standalone browser preview (where `Telegram.WebApp.version` is `"6.0"`),
-   * skips calling the unsupported v6.0 stub and resolves with `'preview'` so the interactive
-   * in-app Telegram Stars checkout sheet opens without throwing console errors.
+   * or when the invoice is a non-live preview slug (`isLiveInvoice === false`), skips calling
+   * the native Telegram invoice validation (which would reject synthetic slugs) and resolves
+   * with `'preview'` so the interactive in-app Telegram Stars checkout sheet opens cleanly.
    */
   public static openInvoice(
     invoiceUrl: string,
-    callback?: (status: TelegramInvoiceStatus) => void
+    callback?: (status: TelegramInvoiceStatus) => void,
+    options?: { isLiveInvoice?: boolean }
   ): Promise<TelegramInvoiceStatus> {
     return new Promise((resolve) => {
       let settled = false;
@@ -244,12 +243,21 @@ export class TelegramService {
         }
       };
 
-      const hasSupportedNativeInvoice =
+      const isCustomMockOpenInvoice =
         Boolean(tg && typeof tg.openInvoice === 'function') &&
-        (this.isVersionAtLeast('6.1') ||
-          (stockUnsupportedOpenInvoice !== undefined && tg?.openInvoice !== stockUnsupportedOpenInvoice));
+        tg?.openInvoice !== initialWebAppOpenInvoice;
 
-      if (tg && typeof tg.openInvoice === 'function' && hasSupportedNativeInvoice) {
+      const isSyntheticPreviewSlug =
+        options?.isLiveInvoice === false ||
+        invoiceUrl.includes('$FoxGift_') ||
+        invoiceUrl.includes('$FoxStarsInvoice');
+
+      const canUseNativeTelegramInvoice =
+        Boolean(tg && typeof tg.openInvoice === 'function') &&
+        (isCustomMockOpenInvoice ||
+          (this.isAvailable() && this.isVersionAtLeast('6.1') && !isSyntheticPreviewSlug));
+
+      if (tg && typeof tg.openInvoice === 'function' && canUseNativeTelegramInvoice) {
         try {
           if (typeof tg.onEvent === 'function') {
             tg.onEvent('invoiceClosed', handleInvoiceClosedEvent);
@@ -259,7 +267,7 @@ export class TelegramService {
             finish(status || 'cancelled');
           });
 
-          if (!this.isAvailable()) {
+          if (!this.isAvailable() && !isCustomMockOpenInvoice) {
             setTimeout(() => {
               if (!settled) {
                 finish('preview');
@@ -272,15 +280,16 @@ export class TelegramService {
         }
       }
 
-      // Standalone preview / WebApp 6.0 fallback
+      // Standalone preview / WebApp 6.0 / unconfigured Bot Token fallback
       finish('preview');
     });
   }
 
   public static openStarsInvoice(
     invoiceUrl: string,
-    callback?: (status: TelegramInvoiceStatus) => void
+    callback?: (status: TelegramInvoiceStatus) => void,
+    options?: { isLiveInvoice?: boolean }
   ): Promise<TelegramInvoiceStatus> {
-    return this.openInvoice(invoiceUrl, callback);
+    return this.openInvoice(invoiceUrl, callback, options);
   }
 }

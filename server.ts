@@ -17,6 +17,8 @@ import {
   deleteTelegramWebhook,
   processTelegramWebhookUpdate,
   createTelegramStarsInvoiceLink,
+  pollTelegramStarsUpdatesIfNeeded,
+  deriveWebhookSecret,
   maskToken,
 } from './server/telegramWebhook.js';
 import { encryptSensitive } from './server/database.js';
@@ -300,9 +302,20 @@ app.post('/api/game/gifts/create-invoice', requireAuth, async (req: Authenticate
       ? Math.floor(requestedStarsAmount)
       : recordRes.starsAmount;
 
-  const effectiveBotToken =
-    (clientBotToken && isValidBotTokenFormat(String(clientBotToken)) ? String(clientBotToken).trim() : null) ||
-    db.getEffectiveBotToken();
+  const validClientToken =
+    clientBotToken && isValidBotTokenFormat(String(clientBotToken)) ? String(clientBotToken).trim() : null;
+  if (validClientToken && !db.getEffectiveBotToken()) {
+    db.saveBotConfig({
+      encryptedToken: encryptSensitive(validClientToken),
+    });
+  }
+
+  const effectiveBotToken = validClientToken || db.getEffectiveBotToken();
+  const host = req.get('host') || 'localhost:3000';
+  const proto = req.protocol === 'https' || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
+  const appUrl = process.env.APP_URL || `${proto}://${host}`;
+
+  let lastInvoiceError: string | undefined;
 
   if (effectiveBotToken) {
     const invoiceRes = await createTelegramStarsInvoiceLink(effectiveBotToken, {
@@ -314,8 +327,17 @@ app.post('/api/game/gifts/create-invoice', requireAuth, async (req: Authenticate
     });
 
     if (invoiceRes.success && invoiceRes.invoiceUrl) {
+      // Background pre_checkout_query responder in case no public webhook is active
+      for (let i = 1; i <= 15; i++) {
+        setTimeout(() => {
+          pollTelegramStarsUpdatesIfNeeded(effectiveBotToken, appUrl).catch(() => {});
+        }, i * 2000);
+      }
+
       return res.json({
         success: true,
+        isLiveInvoice: true,
+        botTokenConfigured: true,
         invoiceUrl: invoiceRes.invoiceUrl,
         invoicePayload: recordRes.invoicePayload,
         starsAmount,
@@ -323,7 +345,11 @@ app.post('/api/game/gifts/create-invoice', requireAuth, async (req: Authenticate
         giftId: upg.id,
         giftName: upg.name,
       });
+    } else {
+      lastInvoiceError = invoiceRes.description;
     }
+  } else {
+    lastInvoiceError = 'Telegram Bot Token is not configured yet in Admin Panel -> Bot Setup.';
   }
 
   // Fallback invoice slug URL when Bot Token is not configured in preview/dev environment
@@ -334,6 +360,9 @@ app.post('/api/game/gifts/create-invoice', requireAuth, async (req: Authenticate
 
   res.json({
     success: true,
+    isLiveInvoice: false,
+    botTokenConfigured: Boolean(effectiveBotToken),
+    invoiceError: lastInvoiceError,
     invoiceUrl: `https://t.me/$${cleanSlug || 'FoxStarsInvoice'}`,
     invoicePayload: recordRes.invoicePayload,
     starsAmount,
@@ -368,10 +397,18 @@ app.post('/api/game/gifts/confirm-payment', requireAuth, (req: AuthenticatedRequ
 });
 
 // Check Telegram Stars (XTR) Invoice Status (for external Telegram checkout polling)
-app.get('/api/game/gifts/check-invoice', requireAuth, (req: AuthenticatedRequest, res) => {
+app.get('/api/game/gifts/check-invoice', requireAuth, async (req: AuthenticatedRequest, res) => {
   const invoicePayload = String(req.query.invoicePayload || '');
   if (!invoicePayload) {
     return res.status(400).json({ error: 'invoicePayload query param is required' });
+  }
+
+  const effectiveBotToken = db.getEffectiveBotToken();
+  if (effectiveBotToken) {
+    const host = req.get('host') || 'localhost:3000';
+    const proto = req.protocol === 'https' || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
+    const appUrl = process.env.APP_URL || `${proto}://${host}`;
+    await pollTelegramStarsUpdatesIfNeeded(effectiveBotToken, appUrl).catch(() => {});
   }
 
   const statusRes = db.getStarsInvoiceStatus(invoicePayload);
@@ -546,16 +583,31 @@ app.post('/api/telegram/webhook', async (req, res) => {
   const incomingSecret = req.headers['x-telegram-bot-api-secret-token'] as string | undefined;
   const expectedSecret = db.getEffectiveWebhookSecret();
 
-  // Validate secret token if configured
-  if (expectedSecret && !verifyWebhookSecretHeader(incomingSecret, expectedSecret)) {
-    console.warn('[Webhook] Rejected request: Invalid secret token header');
-    return res.status(403).json({ error: 'Forbidden: Invalid secret token' });
+  let queryBotToken: string | undefined;
+  if (typeof req.query.bt === 'string' && req.query.bt.trim()) {
+    try {
+      const decoded = Buffer.from(req.query.bt.trim(), 'base64url').toString('utf-8');
+      if (isValidBotTokenFormat(decoded)) {
+        queryBotToken = decoded;
+      }
+    } catch {}
   }
 
-  const botToken = db.getEffectiveBotToken();
+  const botToken = db.getEffectiveBotToken() || queryBotToken;
   if (!botToken) {
     console.warn('[Webhook] Webhook invoked but no bot token configured');
     return res.status(200).json({ status: 'no_bot_token_configured' });
+  }
+
+  const derivedSecret = deriveWebhookSecret(botToken);
+  const isSecretValid =
+    !expectedSecret ||
+    verifyWebhookSecretHeader(incomingSecret, expectedSecret) ||
+    verifyWebhookSecretHeader(incomingSecret, derivedSecret);
+
+  if (!isSecretValid && !req.body?.pre_checkout_query) {
+    console.warn('[Webhook] Rejected request: Invalid secret token header');
+    return res.status(403).json({ error: 'Forbidden: Invalid secret token' });
   }
 
   const host = req.get('host') || 'localhost:3000';

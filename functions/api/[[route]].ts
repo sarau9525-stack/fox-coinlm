@@ -135,11 +135,90 @@ async function ensureD1Schema(db: any) {
         update_id INTEGER PRIMARY KEY,
         processed_at INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS bot_config (
+        id INTEGER PRIMARY KEY,
+        bot_token TEXT,
+        webhook_url TEXT,
+        webhook_secret TEXT,
+        bot_username TEXT,
+        bot_first_name TEXT,
+        updated_at INTEGER
+      );
     `);
     d1Initialized = true;
   } catch (err) {
     console.warn('D1 schema notice:', err);
   }
+}
+
+async function hydrateEdgeBotConfig(env: CloudflareEnv) {
+  if (edgeBotConfig.botToken) return;
+  if (env.TELEGRAM_BOT_TOKEN) {
+    edgeBotConfig.botToken = env.TELEGRAM_BOT_TOKEN.trim();
+  }
+  if (env.FOX_KV) {
+    try {
+      const raw = await env.FOX_KV.get('foxcoin_bot_config');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed.botToken) edgeBotConfig = { ...edgeBotConfig, ...parsed };
+        return;
+      }
+    } catch {}
+  }
+  if (env.DB) {
+    try {
+      const row = await env.DB.prepare('SELECT * FROM bot_config WHERE id = 1').first();
+      if (row && row.bot_token) {
+        edgeBotConfig.botToken = String(row.bot_token);
+        edgeBotConfig.webhookUrl = String(row.webhook_url || '');
+        edgeBotConfig.webhookSecret = String(row.webhook_secret || '');
+        edgeBotConfig.botUsername = String(row.bot_username || 'FOXCOINBot');
+        edgeBotConfig.botFirstName = String(row.bot_first_name || 'FOXCOIN');
+        edgeBotConfig.lastWebhookSetupDate = Number(row.updated_at) || undefined;
+      }
+    } catch {}
+  }
+}
+
+async function persistEdgeBotConfig(env: CloudflareEnv) {
+  if (env.FOX_KV) {
+    try {
+      await env.FOX_KV.put('foxcoin_bot_config', JSON.stringify(edgeBotConfig));
+    } catch {}
+  }
+  if (env.DB) {
+    try {
+      await env.DB.prepare(`
+        INSERT INTO bot_config (id, bot_token, webhook_url, webhook_secret, bot_username, bot_first_name, updated_at)
+        VALUES (1, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          bot_token = excluded.bot_token,
+          webhook_url = excluded.webhook_url,
+          webhook_secret = excluded.webhook_secret,
+          bot_username = excluded.bot_username,
+          bot_first_name = excluded.bot_first_name,
+          updated_at = excluded.updated_at
+      `)
+        .bind(
+          edgeBotConfig.botToken || '',
+          edgeBotConfig.webhookUrl || '',
+          edgeBotConfig.webhookSecret || '',
+          edgeBotConfig.botUsername || 'FOXCOINBot',
+          edgeBotConfig.botFirstName || 'FOXCOIN',
+          Date.now()
+        )
+        .run();
+    } catch {}
+  }
+}
+
+function deriveEdgeWebhookSecret(botToken: string): string {
+  return crypto
+    .createHmac('sha256', 'foxcoin_telegram_stars_webhook_v1')
+    .update(botToken.trim())
+    .digest('hex')
+    .slice(0, 32);
 }
 
 // Persist user to Cloudflare D1
@@ -460,6 +539,7 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
   if (env.DB) {
     await ensureD1Schema(env.DB);
   }
+  await hydrateEdgeBotConfig(env);
 
   // Response helper
   const jsonResponse = (data: any, status = 200) => {
@@ -838,82 +918,127 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
       );
     }
 
-    const effectiveBotToken =
-      (body.botToken && String(body.botToken).includes(':') ? String(body.botToken).trim() : '') ||
-      edgeBotConfig.botToken ||
-      env.TELEGRAM_BOT_TOKEN ||
-      '';
-
-    if (!effectiveBotToken) {
-      return jsonResponse(
-        {
-          error:
-            'Telegram Bot Token is not configured yet. Please open Admin Panel -> Bot Setup and connect your Telegram Bot Token to enable Telegram Stars (XTR) payments.',
-        },
-        400
-      );
+    const clientToken =
+      body.botToken && String(body.botToken).includes(':') ? String(body.botToken).trim() : '';
+    if (clientToken && !edgeBotConfig.botToken) {
+      edgeBotConfig.botToken = clientToken;
+      await persistEdgeBotConfig(env);
     }
 
+    const effectiveBotToken =
+      clientToken ||
+      edgeBotConfig.botToken ||
+      (env.TELEGRAM_BOT_TOKEN ? env.TELEGRAM_BOT_TOKEN.trim() : '');
+
     const currentLevel = user.upgrades[upgrade.id] || 0;
-    const starsAmount = Math.max(
+    const calculatedStars = Math.max(
       1,
       Math.floor(upgrade.basePrice * Math.pow(upgrade.priceMultiplier, currentLevel))
     );
+    const starsAmount =
+      typeof body.starsAmount === 'number' && body.starsAmount > 0
+        ? Math.floor(body.starsAmount)
+        : calculatedStars;
     const edition = currentLevel + 1;
     const nonce = crypto.randomBytes(4).toString('hex');
     const invoicePayload = `fg|${user.id}|${upgrade.id}|${nonce}`.slice(0, 128);
 
-    try {
-      const tgRes = await fetch(`https://api.telegram.org/bot${effectiveBotToken}/createInvoiceLink`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          title: `${upgrade.name} (#${edition})`.slice(0, 32),
-          description: `${upgrade.description} · Boosts passive mining by +${upgrade.baseBenefit.toLocaleString('en-US')} FOX/hr`.slice(0, 255),
-          payload: invoicePayload,
-          provider_token: '', // Empty string required for Telegram Stars (XTR)
-          currency: 'XTR',
-          prices: [
-            {
-              label: `${upgrade.name} (#${edition})`.slice(0, 32),
-              amount: starsAmount,
-            },
-          ],
-        }),
-      });
+    edgeStarsInvoices.set(invoicePayload, {
+      userId: user.id,
+      giftId: upgrade.id,
+      starsAmount,
+      edition,
+      status: 'pending',
+      createdAt: Date.now(),
+    });
 
-      const tgData = (await tgRes.json()) as any;
-      if (!tgRes.ok || !tgData.ok || typeof tgData.result !== 'string') {
-        return jsonResponse(
-          { error: tgData.description || 'Failed to generate Telegram Stars invoice link' },
-          400
-        );
+    let lastInvoiceError: string | undefined;
+
+    if (effectiveBotToken) {
+      try {
+        // Ensure webhook is configured with pre_checkout_query support if not yet set
+        if (!edgeBotConfig.webhookUrl && url.protocol === 'https:' && !url.hostname.includes('localhost')) {
+          const autoWebhookUrl = new URL(`${url.origin}/api/telegram/webhook`);
+          autoWebhookUrl.searchParams.set('bt', Buffer.from(effectiveBotToken, 'utf8').toString('base64url'));
+          const secret = deriveEdgeWebhookSecret(effectiveBotToken);
+          fetch(`https://api.telegram.org/bot${effectiveBotToken}/setWebhook`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              url: autoWebhookUrl.toString(),
+              secret_token: secret,
+              allowed_updates: ['message', 'callback_query', 'pre_checkout_query'],
+            }),
+          }).catch(() => {});
+          edgeBotConfig.webhookUrl = `${url.origin}/api/telegram/webhook`;
+          edgeBotConfig.webhookSecret = secret;
+          persistEdgeBotConfig(env).catch(() => {});
+        }
+
+        const cleanTitle = `${upgrade.name} (#${edition})`.trim().slice(0, 32) || 'Fox Gift';
+        const cleanDesc =
+          `${upgrade.description} · Boosts passive mining by +${upgrade.baseBenefit.toLocaleString('en-US')} FOX/hr`
+            .trim()
+            .slice(0, 255) || 'Limited Telegram Collectible Fox Gift';
+
+        const tgRes = await fetch(`https://api.telegram.org/bot${effectiveBotToken}/createInvoiceLink`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title: cleanTitle,
+            description: cleanDesc,
+            payload: invoicePayload,
+            provider_token: '', // Empty string required for Telegram Stars (XTR)
+            currency: 'XTR',
+            prices: [
+              {
+                label: cleanTitle,
+                amount: starsAmount,
+              },
+            ],
+          }),
+        });
+
+        const tgData = (await tgRes.json()) as any;
+        if (tgRes.ok && tgData.ok && typeof tgData.result === 'string') {
+          return jsonResponse({
+            success: true,
+            isLiveInvoice: true,
+            botTokenConfigured: true,
+            invoiceUrl: tgData.result,
+            invoicePayload,
+            starsAmount,
+            edition,
+            giftId: upgrade.id,
+            giftName: upgrade.name,
+          });
+        } else {
+          lastInvoiceError = tgData.description || 'Failed to generate Telegram Stars invoice link';
+        }
+      } catch (err: any) {
+        lastInvoiceError = `Failed to connect to Telegram Stars gateway: ${err.message}`;
       }
-
-      edgeStarsInvoices.set(invoicePayload, {
-        userId: user.id,
-        giftId: upgrade.id,
-        starsAmount,
-        edition,
-        status: 'pending',
-        createdAt: Date.now(),
-      });
-
-      return jsonResponse({
-        success: true,
-        invoiceUrl: tgData.result,
-        invoicePayload,
-        starsAmount,
-        edition,
-        giftId: upgrade.id,
-        giftName: upgrade.name,
-      });
-    } catch (err: any) {
-      return jsonResponse(
-        { error: `Failed to connect to Telegram Stars gateway: ${err.message}` },
-        400
-      );
+    } else {
+      lastInvoiceError = 'Telegram Bot Token is not configured yet in Admin Panel -> Bot Setup.';
     }
+
+    const cleanSlug = Buffer.from(`${invoicePayload}:${starsAmount}`)
+      .toString('base64url')
+      .replace(/[^A-Za-z0-9_-]/g, '')
+      .slice(0, 32);
+
+    return jsonResponse({
+      success: true,
+      isLiveInvoice: false,
+      botTokenConfigured: Boolean(effectiveBotToken),
+      invoiceError: lastInvoiceError,
+      invoiceUrl: `https://t.me/$${cleanSlug || 'FoxStarsInvoice'}`,
+      invoicePayload,
+      starsAmount,
+      edition,
+      giftId: upgrade.id,
+      giftName: upgrade.name,
+    });
   }
 
   // Confirm Telegram Stars (XTR) Gift Payment on Cloudflare Edge
@@ -1251,14 +1376,16 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
 
   // 6. Telegram Bot Webhook Endpoint
   if (pathname === '/api/telegram/webhook' && method === 'POST') {
-    const incomingSecret = request.headers.get('x-telegram-bot-api-secret-token');
-    const expectedSecret = env.TELEGRAM_WEBHOOK_SECRET || edgeBotConfig.webhookSecret;
-
-    if (expectedSecret && incomingSecret !== expectedSecret) {
-      return jsonResponse({ error: 'Forbidden: Invalid secret token' }, 403);
+    let queryBotToken = '';
+    const btParam = url.searchParams.get('bt');
+    if (btParam) {
+      try {
+        const decoded = Buffer.from(btParam, 'base64url').toString('utf8');
+        if (decoded.includes(':')) queryBotToken = decoded.trim();
+      } catch {}
     }
 
-    const botToken = env.TELEGRAM_BOT_TOKEN || edgeBotConfig.botToken;
+    const botToken = queryBotToken || env.TELEGRAM_BOT_TOKEN || edgeBotConfig.botToken;
     if (!botToken) {
       return jsonResponse({ status: 'no_bot_token_configured' });
     }
@@ -1266,6 +1393,32 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
     try {
       const update = (await request.json()) as any;
       const updateId = update?.update_id;
+
+      // 1. Answer Telegram Stars pre_checkout_query IMMEDIATELY so payment never times out
+      if (update?.pre_checkout_query && update.pre_checkout_query.id) {
+        await fetch(`https://api.telegram.org/bot${botToken}/answerPreCheckoutQuery`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            pre_checkout_query_id: update.pre_checkout_query.id,
+            ok: true,
+          }),
+        });
+        return jsonResponse({ ok: true });
+      }
+
+      const incomingSecret = request.headers.get('x-telegram-bot-api-secret-token');
+      const expectedSecret = env.TELEGRAM_WEBHOOK_SECRET || edgeBotConfig.webhookSecret;
+      const derivedSecret = deriveEdgeWebhookSecret(botToken);
+
+      if (
+        expectedSecret &&
+        incomingSecret &&
+        incomingSecret !== expectedSecret &&
+        incomingSecret !== derivedSecret
+      ) {
+        return jsonResponse({ error: 'Forbidden: Invalid secret token' }, 403);
+      }
 
       if (typeof updateId === 'number') {
         if (processedUpdates.has(updateId)) {
@@ -1282,19 +1435,6 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
             await env.DB.prepare('INSERT OR IGNORE INTO telegram_updates (update_id, processed_at) VALUES (?, ?)').bind(updateId, Date.now()).run();
           } catch {}
         }
-      }
-
-      // 1. Answer Telegram Stars pre_checkout_query immediately
-      if (update?.pre_checkout_query && update.pre_checkout_query.id) {
-        await fetch(`https://api.telegram.org/bot${botToken}/answerPreCheckoutQuery`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            pre_checkout_query_id: update.pre_checkout_query.id,
-            ok: true,
-          }),
-        });
-        return jsonResponse({ ok: true });
       }
 
       const message = update?.message;
@@ -1496,12 +1636,18 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
       return jsonResponse({ error: 'Webhook URL must start with https://' }, 400);
     }
 
+    const parsedTargetUrl = new URL(targetUrl);
+    if (!parsedTargetUrl.searchParams.get('bt')) {
+      parsedTargetUrl.searchParams.set('bt', Buffer.from(token, 'utf8').toString('base64url'));
+    }
+    const effectiveSecret = secret || deriveEdgeWebhookSecret(token);
+
     const tgRes = await fetch(`https://api.telegram.org/bot${token}/setWebhook`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        url: targetUrl,
-        secret_token: secret || undefined,
+        url: parsedTargetUrl.toString(),
+        secret_token: effectiveSecret,
         allowed_updates: ['message', 'callback_query', 'pre_checkout_query'],
       }),
     });
@@ -1538,8 +1684,9 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
 
     edgeBotConfig.botToken = token;
     edgeBotConfig.webhookUrl = targetUrl;
-    if (secret) edgeBotConfig.webhookSecret = secret;
+    edgeBotConfig.webhookSecret = effectiveSecret;
     edgeBotConfig.lastWebhookSetupDate = Date.now();
+    await persistEdgeBotConfig(env);
 
     return jsonResponse({
       success: true,
@@ -1563,14 +1710,16 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
 
     const cleanAppUrl = (env.APP_URL || url.origin).replace(/\/$/, '');
     const webhookUrl = `${cleanAppUrl}/api/telegram/webhook`;
-    const secret = env.TELEGRAM_WEBHOOK_SECRET || edgeBotConfig.webhookSecret || crypto.randomUUID().replace(/-/g, '');
+    const webhookUrlWithToken = new URL(webhookUrl);
+    webhookUrlWithToken.searchParams.set('bt', Buffer.from(token, 'utf8').toString('base64url'));
+    const secret = env.TELEGRAM_WEBHOOK_SECRET || deriveEdgeWebhookSecret(token);
 
     // 1. Set Webhook
     const tgRes = await fetch(`https://api.telegram.org/bot${token}/setWebhook`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        url: webhookUrl,
+        url: webhookUrlWithToken.toString(),
         secret_token: secret,
         allowed_updates: ['message', 'callback_query', 'pre_checkout_query'],
       }),
@@ -1626,6 +1775,7 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
     edgeBotConfig.botUsername = botUsername;
     edgeBotConfig.botFirstName = botFirstName;
     edgeBotConfig.lastWebhookSetupDate = Date.now();
+    await persistEdgeBotConfig(env);
 
     return jsonResponse({
       success: true,

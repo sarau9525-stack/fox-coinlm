@@ -4,6 +4,9 @@ import { TelegramService, TelegramInvoiceStatus } from './telegram.js';
 
 export interface StarsInvoiceResponse {
   success: boolean;
+  isLiveInvoice?: boolean;
+  botTokenConfigured?: boolean;
+  invoiceError?: string;
   invoiceUrl: string;
   invoicePayload: string;
   starsAmount: number;
@@ -557,7 +560,7 @@ class ApiService {
     }
   }
 
-  private getSavedBotToken(): string | undefined {
+  public getSavedBotToken(): string | undefined {
     if (typeof window !== 'undefined') {
       try {
         const raw = localStorage.getItem(LOCAL_BOT_KEY);
@@ -572,6 +575,76 @@ class ApiService {
     return undefined;
   }
 
+  public saveClientBotToken(botToken: string): void {
+    const clean = (botToken || '').trim();
+    if (!clean.includes(':') || typeof window === 'undefined') return;
+    try {
+      const existingRaw = localStorage.getItem(LOCAL_BOT_KEY);
+      const existing = existingRaw ? JSON.parse(existingRaw) : {};
+      localStorage.setItem(
+        LOCAL_BOT_KEY,
+        JSON.stringify({
+          ...existing,
+          hasToken: true,
+          botToken: clean,
+          maskedToken: `${clean.slice(0, 6)}...${clean.slice(-4)}`,
+          isConfigured: true,
+        })
+      );
+    } catch {}
+  }
+
+  /**
+   * Answers any pending pre_checkout_query via getUpdates if no webhook is active on the bot,
+   * ensuring Telegram Stars payments never time out after 10 seconds.
+   */
+  private startClientPreCheckoutWatcher(botToken?: string) {
+    const token = (botToken || this.getSavedBotToken() || '').trim();
+    if (!token || !token.includes(':')) return;
+
+    for (let i = 1; i <= 14; i++) {
+      setTimeout(async () => {
+        try {
+          const res = await fetch(`https://api.telegram.org/bot${token}/getUpdates`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              timeout: 0,
+              limit: 15,
+              allowed_updates: ['pre_checkout_query', 'message'],
+            }),
+          });
+          const data = await res.json();
+          if (!res.ok || !data?.ok || !Array.isArray(data.result)) return;
+
+          let maxId = 0;
+          for (const upd of data.result) {
+            if (typeof upd.update_id === 'number' && upd.update_id > maxId) {
+              maxId = upd.update_id;
+            }
+            if (upd.pre_checkout_query?.id) {
+              await fetch(`https://api.telegram.org/bot${token}/answerPreCheckoutQuery`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  pre_checkout_query_id: upd.pre_checkout_query.id,
+                  ok: true,
+                }),
+              });
+            }
+          }
+          if (maxId > 0) {
+            await fetch(`https://api.telegram.org/bot${token}/getUpdates`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ offset: maxId + 1, timeout: 0, limit: 1 }),
+            }).catch(() => {});
+          }
+        } catch {}
+      }, i * 1800);
+    }
+  }
+
   public async createStarsGiftInvoice(
     giftId: string,
     requestedStarsAmount?: number
@@ -583,7 +656,7 @@ class ApiService {
     const savedBotToken = this.getSavedBotToken();
 
     try {
-      return await this.request<StarsInvoiceResponse>('/api/game/gifts/create-invoice', {
+      const serverInvoice = await this.request<StarsInvoiceResponse>('/api/game/gifts/create-invoice', {
         method: 'POST',
         body: JSON.stringify({
           giftId,
@@ -591,6 +664,12 @@ class ApiService {
           botToken: savedBotToken,
         }),
       });
+
+      if (serverInvoice.isLiveInvoice && savedBotToken) {
+        this.startClientPreCheckoutWatcher(savedBotToken);
+      }
+
+      return serverInvoice;
     } catch (err: any) {
       if (this.isStaticFallbackError(err)) {
         const user = this.getLocalUser();
@@ -608,20 +687,28 @@ class ApiService {
         const edition = currentLvl + 1;
         const invoicePayload = `fg|${user.id}|${upg.id}|${Date.now().toString(36)}`.slice(0, 128);
 
+        let lastErr: string | undefined;
+
         if (savedBotToken) {
           try {
+            const cleanTitle = `${upg.name} (#${edition})`.trim().slice(0, 32) || 'Fox Gift';
+            const cleanDesc =
+              `${upg.description} · Boosts passive mining by +${upg.baseBenefit.toLocaleString('en-US')} FOX/hr`
+                .trim()
+                .slice(0, 255) || 'Limited Telegram Collectible Fox Gift';
+
             const tgRes = await fetch(`https://api.telegram.org/bot${savedBotToken}/createInvoiceLink`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                title: `${upg.name} (#${edition})`.slice(0, 32),
-                description: `${upg.description} · Boosts passive mining by +${upg.baseBenefit.toLocaleString('en-US')} FOX/hr`.slice(0, 255),
+                title: cleanTitle,
+                description: cleanDesc,
                 payload: invoicePayload,
                 provider_token: '',
                 currency: 'XTR',
                 prices: [
                   {
-                    label: `${upg.name} (#${edition})`.slice(0, 32),
+                    label: cleanTitle,
                     amount: starsAmount,
                   },
                 ],
@@ -630,8 +717,11 @@ class ApiService {
 
             const tgData = await tgRes.json();
             if (tgRes.ok && tgData.ok && typeof tgData.result === 'string') {
+              this.startClientPreCheckoutWatcher(savedBotToken);
               return {
                 success: true,
+                isLiveInvoice: true,
+                botTokenConfigured: true,
                 invoiceUrl: tgData.result,
                 invoicePayload,
                 starsAmount,
@@ -639,13 +729,22 @@ class ApiService {
                 giftId: upg.id,
                 giftName: upg.name,
               };
+            } else {
+              lastErr = tgData?.description || 'Telegram createInvoiceLink failed';
             }
-          } catch {}
+          } catch (e: any) {
+            lastErr = e?.message;
+          }
+        } else {
+          lastErr = 'Telegram Bot Token is not configured yet in Admin Panel -> Bot Setup.';
         }
 
         const fallbackSlug = `FoxGift_${upg.id}_${edition}_${starsAmount}`.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 32);
         return {
           success: true,
+          isLiveInvoice: false,
+          botTokenConfigured: Boolean(savedBotToken),
+          invoiceError: lastErr,
           invoiceUrl: `https://t.me/$${fallbackSlug}`,
           invoicePayload,
           starsAmount,
@@ -699,7 +798,9 @@ class ApiService {
     user?: UserGameState;
   }> {
     const invoice = await this.createStarsGiftInvoice(giftId, starsAmount);
-    const status = await TelegramService.openInvoice(invoice.invoiceUrl);
+    const status = await TelegramService.openInvoice(invoice.invoiceUrl, undefined, {
+      isLiveInvoice: invoice.isLiveInvoice,
+    });
 
     if (status === 'paid') {
       const updatedUser = await this.confirmStarsGiftPayment(giftId, invoice.invoicePayload);

@@ -48,7 +48,12 @@ export const GiftsScreen: React.FC<GiftsScreenProps> = ({
     invoiceUrl: string;
     invoicePayload: string;
     benefit: number;
+    isLiveInvoice?: boolean;
+    invoiceError?: string;
   } | null>(null);
+  const [showQuickBotInput, setShowQuickBotInput] = useState(false);
+  const [quickBotToken, setQuickBotToken] = useState('');
+  const [savingBotToken, setSavingBotToken] = useState(false);
 
   const giftItems = upgrades.filter((u) => u.category === 'gift');
   const selectedGift = giftItems.find((g) => g.id === selectedGiftId) || null;
@@ -122,6 +127,7 @@ export const GiftsScreen: React.FC<GiftsScreenProps> = ({
     }, 1800);
     onEquipGift(giftId);
     setPendingInvoice(null);
+    setSelectedGiftId(null);
     showToast(
       `⭐ Purchased & Equipped ${giftName} (#${edition}) for ${starsPrice.toLocaleString('en-US')} Telegram Stars! +${benefit.toLocaleString('en-US')} FOX/hr`
     );
@@ -155,7 +161,13 @@ export const GiftsScreen: React.FC<GiftsScreenProps> = ({
           invoice.invoicePayload,
           true
         );
-      } else if (paymentStatus === 'preview' || paymentStatus === 'external' || paymentStatus === 'pending') {
+      } else if (
+        paymentStatus === 'preview' ||
+        paymentStatus === 'external' ||
+        paymentStatus === 'pending' ||
+        paymentStatus === 'failed'
+      ) {
+        setSelectedGiftId(null);
         setPendingInvoice({
           giftId: gift.id,
           giftName: gift.name,
@@ -164,13 +176,15 @@ export const GiftsScreen: React.FC<GiftsScreenProps> = ({
           invoiceUrl: invoice.invoiceUrl,
           invoicePayload: invoice.invoicePayload,
           benefit: gift.baseBenefit,
+          isLiveInvoice: invoice.isLiveInvoice,
+          invoiceError:
+            paymentStatus === 'failed'
+              ? 'Telegram could not complete the native Stars payment (verify your Stars balance or Bot Token webhook).'
+              : invoice.invoiceError,
         });
       } else if (paymentStatus === 'cancelled') {
         sound.playError();
         showToast('Telegram Stars payment was cancelled.', true);
-      } else {
-        sound.playError();
-        showToast('Telegram Stars payment could not be completed.', true);
       }
     } catch (err: any) {
       sound.playError();
@@ -178,6 +192,36 @@ export const GiftsScreen: React.FC<GiftsScreenProps> = ({
       showToast(err?.message || 'Could not connect to Telegram Stars gateway', true);
     } finally {
       setMintingId(null);
+    }
+  };
+
+  const handleQuickSaveBotToken = async () => {
+    const clean = quickBotToken.trim();
+    if (!clean.includes(':')) {
+      showToast('Please enter a valid BotFather token (e.g. 123456789:ABC...)', true);
+      return;
+    }
+    try {
+      setSavingBotToken(true);
+      api.saveClientBotToken(clean);
+      try {
+        await api.autoSetupTelegramBot(clean, '123456');
+      } catch {}
+      setShowQuickBotInput(false);
+      setQuickBotToken('');
+      showToast('Bot Token connected! Creating live Telegram Stars invoice...');
+
+      if (pendingInvoice) {
+        const gift = giftItems.find((g) => g.id === pendingInvoice.giftId);
+        if (gift) {
+          setPendingInvoice(null);
+          await handleMintGift(gift);
+        }
+      }
+    } catch (err: any) {
+      showToast(err?.message || 'Failed to save Bot Token', true);
+    } finally {
+      setSavingBotToken(false);
     }
   };
 
@@ -227,7 +271,7 @@ export const GiftsScreen: React.FC<GiftsScreenProps> = ({
               <div className="flex items-center gap-2 font-black text-amber-300">
                 <Star className="w-4 h-4 fill-amber-400 text-amber-400 shrink-0" />
                 <span>
-                  Telegram Stars Invoice ({pendingInvoice.starsAmount.toLocaleString('en-US')} ★ XTR)
+                  Telegram Stars Checkout ({pendingInvoice.starsAmount.toLocaleString('en-US')} ★ XTR)
                 </span>
               </div>
               <button
@@ -240,6 +284,39 @@ export const GiftsScreen: React.FC<GiftsScreenProps> = ({
             <p className="text-[11px] text-slate-300">
               Confirm your Telegram Stars payment for <b>{pendingInvoice.giftName} (#{pendingInvoice.edition})</b> to unlock and equip it immediately (+{pendingInvoice.benefit.toLocaleString('en-US')} FOX/hr).
             </p>
+
+            {pendingInvoice.invoiceError && !pendingInvoice.isLiveInvoice && (
+              <div className="p-2 rounded-xl bg-slate-950/75 border border-amber-500/30 text-[10px] text-amber-200/90 flex flex-col gap-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span>⚡ Live Bot Token not linked on this server yet (Preview Checkout active).</span>
+                  <button
+                    onClick={() => setShowQuickBotInput((v) => !v)}
+                    className="text-amber-400 underline font-bold shrink-0 cursor-pointer"
+                  >
+                    {showQuickBotInput ? 'Hide' : 'Link Bot Token'}
+                  </button>
+                </div>
+                {showQuickBotInput && (
+                  <div className="flex items-center gap-1.5 pt-1">
+                    <input
+                      type="text"
+                      value={quickBotToken}
+                      onChange={(e) => setQuickBotToken(e.target.value)}
+                      placeholder="Paste BotFather Token (123456:ABC...)"
+                      className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-[10px] text-white outline-none focus:border-amber-400"
+                    />
+                    <button
+                      onClick={handleQuickSaveBotToken}
+                      disabled={savingBotToken}
+                      className="px-2.5 py-1.5 rounded-lg bg-amber-400 text-slate-950 font-black text-[10px] shrink-0 cursor-pointer"
+                    >
+                      {savingBotToken ? 'Linking...' : 'Connect'}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="grid grid-cols-2 gap-2 pt-0.5">
               <button
                 onClick={async () => {
@@ -265,13 +342,23 @@ export const GiftsScreen: React.FC<GiftsScreenProps> = ({
                 <Star className="w-3.5 h-3.5 fill-slate-950 text-slate-950 shrink-0" />
                 <span>Pay ★ {pendingInvoice.starsAmount.toLocaleString('en-US')} Stars</span>
               </button>
-              <button
-                onClick={() => TelegramService.openLink(pendingInvoice.invoiceUrl)}
-                className="py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-bold text-[11px] flex items-center justify-center gap-1.5 cursor-pointer"
-              >
-                <ExternalLink className="w-3.5 h-3.5" />
-                <span>Open in Telegram</span>
-              </button>
+              {pendingInvoice.isLiveInvoice ? (
+                <button
+                  onClick={() => TelegramService.openLink(pendingInvoice.invoiceUrl)}
+                  className="py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-bold text-[11px] flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>Open in Telegram</span>
+                </button>
+              ) : (
+                <button
+                  onClick={() => setShowQuickBotInput((v) => !v)}
+                  className="py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-bold text-[11px] flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>{showQuickBotInput ? 'Close Setup' : 'Link Bot Token'}</span>
+                </button>
+              )}
             </div>
           </motion.div>
         )}
