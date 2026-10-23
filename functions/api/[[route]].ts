@@ -292,6 +292,13 @@ async function hydrateEdgeUsers(env: CloudflareEnv, force = false) {
   if (!force && now - lastUsersHydratedAt < 4000) return;
   lastUsersHydratedAt = now;
 
+  // Purge any legacy mock bot entries from memory
+  for (const uid of Array.from(edgeUsers.keys())) {
+    if (uid.startsWith('bot_') || uid.startsWith('seed_')) {
+      edgeUsers.delete(uid);
+    }
+  }
+
   // 1. Hydrate from Cloudflare KV if bound
   if (env.FOX_KV) {
     try {
@@ -299,7 +306,7 @@ async function hydrateEdgeUsers(env: CloudflareEnv, force = false) {
       if (rawKv) {
         const parsedMap = JSON.parse(rawKv) as Record<string, UserGameState>;
         for (const [uid, kvUser] of Object.entries(parsedMap)) {
-          if (!uid || !kvUser) continue;
+          if (!uid || !kvUser || uid.startsWith('bot_') || uid.startsWith('seed_')) continue;
           const existing = edgeUsers.get(uid);
           if (!existing || (kvUser.totalEarned || 0) >= (existing.totalEarned || 0)) {
             edgeUsers.set(uid, {
@@ -317,10 +324,13 @@ async function hydrateEdgeUsers(env: CloudflareEnv, force = false) {
   // 2. Hydrate from Cloudflare D1 SQLite database if bound (Primary source of truth)
   if (env.DB) {
     try {
-      const res = await env.DB.prepare('SELECT * FROM users ORDER BY updated_at DESC LIMIT 2000').all();
+      const res = await env.DB.prepare(
+        "SELECT * FROM users WHERE id NOT LIKE 'bot_%' AND id NOT LIKE 'seed_%' ORDER BY balance DESC, updated_at DESC LIMIT 2000"
+      ).all();
       if (res && Array.isArray(res.results)) {
         for (const row of res.results) {
           const d1User = mapD1RowToUser(row);
+          if (d1User.id.startsWith('bot_') || d1User.id.startsWith('seed_')) continue;
           const existing = edgeUsers.get(d1User.id);
           if (
             !existing ||
@@ -505,67 +515,12 @@ async function getTradesFromD1(db: any, userId: string): Promise<TradeOrder[]> {
   return edgeTrades.filter((t) => t.userId === userId);
 }
 
-// Seed initial leaderboard mock users on isolate boot
+// No mock bot seeding: Leaderboard and User list exclusively show real registered users
 function seedInitialUsers() {
-  if (edgeUsers.size > 0) return;
-
-  const seedPlayers = [
-    { id: 'bot_1', username: 'GoldenFoxMaster', displayName: 'Golden Fox 🦊', balance: 142_500_000, profitPerHour: 450_000, level: 8 },
-    { id: 'bot_2', username: 'Satoshi_Den', displayName: 'Satoshi Den ⚡', balance: 98_340_000, profitPerHour: 380_000, level: 7 },
-    { id: 'bot_3', username: 'CyberVixen', displayName: 'Cyber Vixen 💎', balance: 64_120_000, profitPerHour: 240_000, level: 7 },
-    { id: 'bot_4', username: 'FoxCommander', displayName: 'Commander Reynard', balance: 39_800_000, profitPerHour: 185_000, level: 7 },
-    { id: 'bot_5', username: 'FoxyMillionaire', displayName: 'Foxy Mill 🚀', balance: 18_900_000, profitPerHour: 110_000, level: 6 },
-    { id: 'bot_6', username: 'AmberTail', displayName: 'Amber Tail 🔥', balance: 9_450_000, profitPerHour: 65_000, level: 6 },
-    { id: 'bot_7', username: 'CryptoBurrower', displayName: 'Burrow Miner ⛏️', balance: 4_320_000, profitPerHour: 34_000, level: 5 },
-    { id: 'bot_8', username: 'SilverPaw', displayName: 'Silver Paw 🥈', balance: 1_280_000, profitPerHour: 15_000, level: 5 },
-    { id: 'bot_9', username: 'SwiftFox', displayName: 'Swift Fox 💨', balance: 840_000, profitPerHour: 9_500, level: 4 },
-    { id: 'bot_10', username: 'MoonFox', displayName: 'Moon Fox 🌙', balance: 350_000, profitPerHour: 5_200, level: 4 },
-  ];
-
-  const now = Date.now();
-  for (const sp of seedPlayers) {
-    const levelObj = PLAYER_LEVELS.find((l) => l.level === sp.level) || PLAYER_LEVELS[0];
-    const nextLevelObj = PLAYER_LEVELS.find((l) => l.level === sp.level + 1) || PLAYER_LEVELS[PLAYER_LEVELS.length - 1];
-
-    edgeUsers.set(sp.id, {
-      id: sp.id,
-      username: sp.username,
-      displayName: sp.displayName,
-      isGuest: false,
-      isTelegram: true,
-      balance: sp.balance,
-      totalEarned: sp.balance * 1.5,
-      totalTaps: 45000,
-      level: sp.level,
-      levelName: levelObj.name,
-      currentLevelMinCoins: levelObj.minCoins,
-      nextLevelMinCoins: nextLevelObj.minCoins,
-      energy: 1000,
-      maxEnergy: 1000 + sp.level * 500,
-      energyRegenRate: 1 + Math.floor(sp.level / 2),
-      tapPower: 1 + sp.level * 2,
-      profitPerHour: sp.profitPerHour,
-      unclaimedPassive: 0,
-      lastPassiveClaimTimestamp: now,
-      maxOfflineHours: GAME_CONSTANTS.MAX_OFFLINE_HOURS,
-      upgrades: { tap_power: sp.level, berry_stand: sp.level },
-      dailyStreak: 3,
-      lastDailyClaimDate: null,
-      canClaimDaily: true,
-      dailyRewardDays: DAILY_REWARDS,
-      tasks: {},
-      referralCode: `FOX_${sp.username.substring(0, 4).toUpperCase()}`,
-      referralCount: Math.floor(sp.level * 3.5),
-      referralEarnings: sp.level * 15000,
-      claimedMilestones: Math.floor(sp.level / 2),
-      boosters: {
-        fullEnergyRemaining: 6,
-        nextFullEnergyAt: 0,
-        turboActiveUntil: 0,
-        nextTurboAt: 0,
-      },
-      createdAt: now - 86400000 * 10,
-    });
+  for (const uid of Array.from(edgeUsers.keys())) {
+    if (uid.startsWith('bot_') || uid.startsWith('seed_')) {
+      edgeUsers.delete(uid);
+    }
   }
 }
 
@@ -1615,15 +1570,26 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
     return jsonResponse({ trades });
   }
 
-  // Global Leaderboard
+  // Global Leaderboard (exclusively real registered users from Cloudflare D1 / KV)
   if (pathname === '/api/game/leaderboard') {
+    await hydrateEdgeUsers(env, true);
     const user = getAuthUser();
-    const sorted = Array.from(edgeUsers.values())
-      .map((u) => refreshEdgeUserState(u))
-      .sort((a, b) => b.balance - a.balance)
-      .slice(0, 50);
+    if (user && !user.id.startsWith('bot_') && !user.id.startsWith('seed_')) {
+      edgeUsers.set(user.id, user);
+      await persistUserToD1(env.DB, user);
+    }
 
-    const entries: LeaderboardEntry[] = sorted.map((u, idx) => ({
+    const limit = Math.min(200, Math.max(10, Number(url.searchParams.get('limit') || 50)));
+    const allRealSorted = Array.from(edgeUsers.values())
+      .filter((u) => u && u.id && !u.id.startsWith('bot_') && !u.id.startsWith('seed_'))
+      .map((u) => refreshEdgeUserState(u))
+      .sort((a, b) => {
+        if (b.balance !== a.balance) return b.balance - a.balance;
+        if (b.profitPerHour !== a.profitPerHour) return b.profitPerHour - a.profitPerHour;
+        return (b.totalEarned || 0) - (a.totalEarned || 0);
+      });
+
+    const entries: LeaderboardEntry[] = allRealSorted.slice(0, limit).map((u, idx) => ({
       rank: idx + 1,
       id: u.id,
       username: u.username,
@@ -1635,13 +1601,28 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
       isCurrentPlayer: user?.id === u.id,
     }));
 
-    const playerEntry = entries.find((e) => e.isCurrentPlayer);
+    let playerEntry = entries.find((e) => e.isCurrentPlayer);
+    if (!playerEntry && user) {
+      const fullIdx = allRealSorted.findIndex((u) => u.id === user.id);
+      const rank = fullIdx >= 0 ? fullIdx + 1 : allRealSorted.length + 1;
+      playerEntry = {
+        rank,
+        id: user.id,
+        username: user.username,
+        displayName: user.displayName || user.username,
+        balance: user.balance,
+        level: user.level,
+        levelName: user.levelName,
+        profitPerHour: user.profitPerHour,
+        isCurrentPlayer: true,
+      };
+    }
 
     return jsonResponse({
       list: entries,
       playerEntry,
       entries,
-      totalPlayers: edgeUsers.size,
+      totalPlayers: allRealSorted.length,
       currentUserRank: playerEntry?.rank || 1,
     });
   }

@@ -31,47 +31,57 @@ export const LeaderboardScreen: React.FC<LeaderboardScreenProps> = ({ user }) =>
   }, []);
 
   const top3 = entries.slice(0, 3);
-  const remaining = entries.slice(3);
 
   return (
     <div className="w-full max-w-md mx-auto px-4 pb-28 pt-2 text-white">
       {/* Title & Refresh */}
       <div className="flex items-center justify-between mb-4 px-1">
         <div>
-          <h3 className="text-xl font-black text-transparent bg-clip-text bg-gradient-to-r from-amber-200 via-amber-400 to-orange-400">
-            Hall of Foxes
-          </h3>
-          <p className="text-xs text-slate-400">Top Fox Coin mining syndicates</p>
+          <div className="flex items-center gap-2">
+            <h3 className="text-xl font-black text-transparent bg-clip-text bg-gradient-to-r from-amber-200 via-amber-400 to-orange-400">
+              Hall of Foxes
+            </h3>
+            <span className="px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/30 text-[10px] font-black text-amber-300">
+              {entries.length} Players
+            </span>
+          </div>
+          <p className="text-xs text-slate-400">Real player rankings from FOXCOIN Database</p>
         </div>
         <button
           onClick={fetchLeaderboard}
           disabled={isLoading}
-          className="p-2 rounded-xl bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700 text-slate-300 transition active:scale-95"
+          className="p-2 rounded-xl bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700 text-slate-300 transition active:scale-95 cursor-pointer"
           title="Refresh"
         >
           <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin text-amber-400' : ''}`} />
         </button>
       </div>
 
-      {/* Podium for Top 3 */}
-      {top3.length >= 3 && (
+      {/* Podium for Top 1-3 Real Players */}
+      {top3.length >= 1 && (
         <div className="grid grid-cols-3 gap-2 items-end mb-6 pt-4">
           {/* #2 Rank */}
-          <div className="flex flex-col items-center bg-slate-900/90 border border-slate-700/60 rounded-2xl p-2.5 pb-3 shadow-md relative">
-            <span className="absolute -top-3 w-6 h-6 rounded-full bg-slate-300 text-slate-900 font-black text-xs flex items-center justify-center border-2 border-[#0B0E17]">
-              2
-            </span>
-            <div className="w-11 h-11 rounded-full bg-slate-800 border-2 border-slate-400 overflow-hidden mb-1 mt-1">
-              <img src={foxGoldCoinImg} alt="Avatar" className="w-full h-full object-cover" />
+          {top3[1] ? (
+            <div className="flex flex-col items-center bg-slate-900/90 border border-slate-700/60 rounded-2xl p-2.5 pb-3 shadow-md relative">
+              <span className="absolute -top-3 w-6 h-6 rounded-full bg-slate-300 text-slate-900 font-black text-xs flex items-center justify-center border-2 border-[#0B0E17]">
+                2
+              </span>
+              <div className="w-11 h-11 rounded-full bg-slate-800 border-2 border-slate-400 overflow-hidden mb-1 mt-1">
+                <img src={foxGoldCoinImg} alt="Avatar" className="w-full h-full object-cover" />
+              </div>
+              <span className="font-bold text-xs text-slate-200 truncate max-w-full text-center">
+                {top3[1].displayName}
+              </span>
+              <span className="text-[10px] text-amber-300 font-extrabold mt-0.5">
+                {Math.floor(top3[1].balance).toLocaleString('en-US')}
+              </span>
+              <span className="text-[9px] text-slate-400">{top3[1].levelName}</span>
             </div>
-            <span className="font-bold text-xs text-slate-200 truncate max-w-full text-center">
-              {top3[1].displayName}
-            </span>
-            <span className="text-[10px] text-amber-300 font-extrabold mt-0.5">
-              {Math.floor(top3[1].balance).toLocaleString('en-US')}
-            </span>
-            <span className="text-[9px] text-slate-400">{top3[1].levelName}</span>
-          </div>
+          ) : (
+            <div className="flex flex-col items-center justify-center bg-slate-900/40 border border-dashed border-slate-800 rounded-2xl p-2.5 pb-3 min-h-[112px] text-center">
+              <span className="text-[10px] font-bold text-slate-600">#2 Open</span>
+            </div>
+          )}
 
           {/* #1 Rank (Champion) */}
           <div className="flex flex-col items-center bg-gradient-to-b from-amber-500/20 to-slate-900 border-2 border-amber-500/60 rounded-2xl p-2.5 pb-4 shadow-xl shadow-amber-500/10 relative scale-105 z-10">
@@ -94,27 +104,33 @@ export const LeaderboardScreen: React.FC<LeaderboardScreenProps> = ({ user }) =>
           </div>
 
           {/* #3 Rank */}
-          <div className="flex flex-col items-center bg-slate-900/90 border border-slate-700/60 rounded-2xl p-2.5 pb-3 shadow-md relative">
-            <span className="absolute -top-3 w-6 h-6 rounded-full bg-amber-700 text-amber-100 font-black text-xs flex items-center justify-center border-2 border-[#0B0E17]">
-              3
-            </span>
-            <div className="w-11 h-11 rounded-full bg-slate-800 border-2 border-amber-700 overflow-hidden mb-1 mt-1">
-              <img src={foxGoldCoinImg} alt="Avatar" className="w-full h-full object-cover" />
+          {top3[2] ? (
+            <div className="flex flex-col items-center bg-slate-900/90 border border-slate-700/60 rounded-2xl p-2.5 pb-3 shadow-md relative">
+              <span className="absolute -top-3 w-6 h-6 rounded-full bg-amber-700 text-amber-100 font-black text-xs flex items-center justify-center border-2 border-[#0B0E17]">
+                3
+              </span>
+              <div className="w-11 h-11 rounded-full bg-slate-800 border-2 border-amber-700 overflow-hidden mb-1 mt-1">
+                <img src={foxGoldCoinImg} alt="Avatar" className="w-full h-full object-cover" />
+              </div>
+              <span className="font-bold text-xs text-slate-200 truncate max-w-full text-center">
+                {top3[2].displayName}
+              </span>
+              <span className="text-[10px] text-amber-300 font-extrabold mt-0.5">
+                {Math.floor(top3[2].balance).toLocaleString('en-US')}
+              </span>
+              <span className="text-[9px] text-slate-400">{top3[2].levelName}</span>
             </div>
-            <span className="font-bold text-xs text-slate-200 truncate max-w-full text-center">
-              {top3[2].displayName}
-            </span>
-            <span className="text-[10px] text-amber-300 font-extrabold mt-0.5">
-              {Math.floor(top3[2].balance).toLocaleString('en-US')}
-            </span>
-            <span className="text-[9px] text-slate-400">{top3[2].levelName}</span>
-          </div>
+          ) : (
+            <div className="flex flex-col items-center justify-center bg-slate-900/40 border border-dashed border-slate-800 rounded-2xl p-2.5 pb-3 min-h-[112px] text-center">
+              <span className="text-[10px] font-bold text-slate-600">#3 Open</span>
+            </div>
+          )}
         </div>
       )}
 
-      {/* Leaderboard Table */}
+      {/* Full Leaderboard Table of All Registered Users */}
       <div className="bg-slate-900/80 border border-slate-800 rounded-2xl overflow-hidden shadow-lg divide-y divide-slate-800/80">
-        {remaining.map((entry) => {
+        {entries.map((entry) => {
           const isMe = entry.isCurrentPlayer || entry.id === user.id;
 
           return (
@@ -125,7 +141,17 @@ export const LeaderboardScreen: React.FC<LeaderboardScreenProps> = ({ user }) =>
               }`}
             >
               <div className="flex items-center gap-3">
-                <span className="w-6 text-center font-bold text-xs text-slate-400">
+                <span
+                  className={`w-6 h-6 rounded-full flex items-center justify-center font-black text-xs ${
+                    entry.rank === 1
+                      ? 'bg-amber-400 text-slate-950'
+                      : entry.rank === 2
+                      ? 'bg-slate-300 text-slate-950'
+                      : entry.rank === 3
+                      ? 'bg-amber-700 text-amber-100'
+                      : 'text-slate-400'
+                  }`}
+                >
                   {entry.rank}
                 </span>
 
@@ -144,7 +170,9 @@ export const LeaderboardScreen: React.FC<LeaderboardScreenProps> = ({ user }) =>
                       </span>
                     )}
                   </div>
-                  <span className="text-[10px] text-slate-400">{entry.levelName}</span>
+                  <span className="text-[10px] text-slate-400">
+                    @{entry.username} · {entry.levelName}
+                  </span>
                 </div>
               </div>
 

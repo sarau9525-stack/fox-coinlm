@@ -142,14 +142,16 @@ class DatabaseStore {
         this.data.botConfig = this.data.botConfig || {};
         this.data.processedUpdateIds = this.data.processedUpdateIds || {};
         this.data.starsInvoices = this.data.starsInvoices || {};
-        console.log(`[Database] Loaded ${Object.keys(this.data.users).length} users from disk.`);
+        this.seedInitialData();
+        this.saveSync();
+        console.log(`[Database] Loaded ${Object.keys(this.data.users).length} real users from disk.`);
       } else {
-        console.log('[Database] Initializing fresh database with seeded leaderboard.');
+        console.log('[Database] Initializing fresh database.');
         this.seedInitialData();
         this.saveSync();
       }
     } catch (err) {
-      console.error('[Database] Failed to load DB file, starting clean with seeds:', err);
+      console.error('[Database] Failed to load DB file, starting clean:', err);
       this.seedInitialData();
     }
   }
@@ -174,65 +176,17 @@ class DatabaseStore {
   }
 
   private seedInitialData() {
-    const seedPlayers = [
-      { id: 'bot_1', username: 'GoldenFoxMaster', displayName: 'Golden Fox 🦊', balance: 142_500_000, profitPerHour: 450_000, level: 8 },
-      { id: 'bot_2', username: 'Satoshi_Den', displayName: 'Satoshi Den ⚡', balance: 98_340_000, profitPerHour: 380_000, level: 7 },
-      { id: 'bot_3', username: 'CyberVixen', displayName: 'Cyber Vixen 💎', balance: 64_120_000, profitPerHour: 240_000, level: 7 },
-      { id: 'bot_4', username: 'FoxCommander', displayName: 'Commander Reynard', balance: 39_800_000, profitPerHour: 185_000, level: 7 },
-      { id: 'bot_5', username: 'FoxyMillionaire', displayName: 'Foxy Mill 🚀', balance: 18_900_000, profitPerHour: 110_000, level: 6 },
-      { id: 'bot_6', username: 'AmberTail', displayName: 'Amber Tail 🔥', balance: 9_450_000, profitPerHour: 65_000, level: 6 },
-      { id: 'bot_7', username: 'CryptoBurrower', displayName: 'Burrow Miner ⛏️', balance: 4_320_000, profitPerHour: 34_000, level: 5 },
-      { id: 'bot_8', username: 'SilverPaw', displayName: 'Silver Paw 🥈', balance: 1_280_000, profitPerHour: 15_000, level: 5 },
-      { id: 'bot_9', username: 'SwiftFox', displayName: 'Swift Fox 💨', balance: 840_000, profitPerHour: 9_500, level: 4 },
-      { id: 'bot_10', username: 'MoonFox', displayName: 'Moon Fox 🌙', balance: 350_000, profitPerHour: 5_200, level: 4 },
-    ];
-
-    const now = Date.now();
-    for (const sp of seedPlayers) {
-      const levelObj = PLAYER_LEVELS.find((l) => l.level === sp.level) || PLAYER_LEVELS[0];
-      const nextLevelObj = PLAYER_LEVELS.find((l) => l.level === sp.level + 1) || PLAYER_LEVELS[PLAYER_LEVELS.length - 1];
-
-      const user: UserGameState = {
-        id: sp.id,
-        username: sp.username,
-        displayName: sp.displayName,
-        isGuest: false,
-        isTelegram: true,
-        balance: sp.balance,
-        totalEarned: sp.balance * 1.5,
-        totalTaps: 45000,
-        level: sp.level,
-        levelName: levelObj.name,
-        currentLevelMinCoins: levelObj.minCoins,
-        nextLevelMinCoins: nextLevelObj.minCoins,
-        energy: 1000,
-        maxEnergy: 1000 + sp.level * 500,
-        energyRegenRate: 1 + Math.floor(sp.level / 2),
-        tapPower: 1 + sp.level * 2,
-        profitPerHour: sp.profitPerHour,
-        unclaimedPassive: 0,
-        lastPassiveClaimTimestamp: now,
-        maxOfflineHours: GAME_CONSTANTS.MAX_OFFLINE_HOURS,
-        upgrades: { tap_power: sp.level, berry_stand: sp.level, coffee_roastery: sp.level },
-        dailyStreak: 3,
-        lastDailyClaimDate: null,
-        canClaimDaily: true,
-        dailyRewardDays: DAILY_REWARDS,
-        tasks: {},
-        referralCode: `FOX_${sp.username.substring(0, 4).toUpperCase()}`,
-        referralCount: Math.floor(sp.level * 3.5),
-        referralEarnings: sp.level * 15000,
-        boosters: {
-          fullEnergyRemaining: 6,
-          nextFullEnergyAt: 0,
-          turboActiveUntil: 0,
-          nextTurboAt: 0,
-        },
-        createdAt: now - 86400000 * 10,
-      };
-
-      this.data.users[sp.id] = user;
-      this.data.referralCodeToUserId[user.referralCode] = sp.id;
+    // Purge any legacy mock bot users so rankings reflect only real registered users
+    if (this.data.users) {
+      for (const uid of Object.keys(this.data.users)) {
+        if (uid.startsWith('bot_') || uid.startsWith('seed_')) {
+          const refCode = this.data.users[uid]?.referralCode;
+          if (refCode && this.data.referralCodeToUserId) {
+            delete this.data.referralCodeToUserId[refCode];
+          }
+          delete this.data.users[uid];
+        }
+      }
     }
   }
 
@@ -1148,15 +1102,21 @@ class DatabaseStore {
     return this.data.trades.filter((t) => t.userId === userId);
   }
 
-  // Leaderboard
+  // Leaderboard (exclusively real registered users)
   public getLeaderboard(limit = 50, currentUserId?: string): { list: LeaderboardEntry[]; playerEntry?: LeaderboardEntry } {
-    const allUsers = Object.values(this.data.users).map((u) => this.refreshUserState(u));
-    allUsers.sort((a, b) => b.balance - a.balance);
+    const allUsers = Object.values(this.data.users)
+      .filter((u) => u && u.id && !u.id.startsWith('bot_') && !u.id.startsWith('seed_'))
+      .map((u) => this.refreshUserState(u));
+    allUsers.sort((a, b) => {
+      if (b.balance !== a.balance) return b.balance - a.balance;
+      if (b.profitPerHour !== a.profitPerHour) return b.profitPerHour - a.profitPerHour;
+      return (b.totalEarned || 0) - (a.totalEarned || 0);
+    });
 
     const list: LeaderboardEntry[] = allUsers.slice(0, limit).map((u, index) => ({
       rank: index + 1,
       id: u.id,
-      displayName: u.displayName,
+      displayName: u.displayName || u.username,
       username: u.username,
       balance: u.balance,
       profitPerHour: u.profitPerHour,
@@ -1173,7 +1133,7 @@ class DatabaseStore {
         playerEntry = {
           rank: idx + 1,
           id: u.id,
-          displayName: u.displayName,
+          displayName: u.displayName || u.username,
           username: u.username,
           balance: u.balance,
           profitPerHour: u.profitPerHour,
@@ -1288,13 +1248,10 @@ class DatabaseStore {
   }
 
   public getAllUsers(): UserGameState[] {
-    const all = Object.values(this.data.users).map((u) => this.refreshUserState(u));
-    return all.sort((a, b) => {
-      const aIsSeed = a.id.startsWith('seed_');
-      const bIsSeed = b.id.startsWith('seed_');
-      if (aIsSeed !== bIsSeed) return aIsSeed ? 1 : -1;
-      return b.balance - a.balance;
-    });
+    const all = Object.values(this.data.users)
+      .filter((u) => u && u.id && !u.id.startsWith('bot_') && !u.id.startsWith('seed_'))
+      .map((u) => this.refreshUserState(u));
+    return all.sort((a, b) => b.balance - a.balance);
   }
 
   public adminAdjustUserBalance(params: {

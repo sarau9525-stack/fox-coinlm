@@ -1179,13 +1179,33 @@ class ApiService {
     } catch (err) {
       if (this.isStaticFallbackError(err)) {
         const user = this.getLocalUser();
-        const mockList: LeaderboardEntry[] = [
-          { rank: 1, id: '1', displayName: 'Golden Fox 🦊', username: 'GoldenFoxMaster', balance: 142500000, profitPerHour: 450000, level: 8, levelName: 'Master Fox' },
-          { rank: 2, id: '2', displayName: 'Satoshi Den ⚡', username: 'Satoshi_Den', balance: 98340000, profitPerHour: 380000, level: 7, levelName: 'Legendary Fox' },
-          { rank: 3, id: '3', displayName: 'Cyber Vixen 💎', username: 'CyberVixen', balance: 64120000, profitPerHour: 240000, level: 7, levelName: 'Legendary Fox' },
-          { rank: 4, id: user.id, displayName: user.displayName, username: user.username, balance: user.balance, profitPerHour: user.profitPerHour, level: user.level, levelName: user.levelName, isCurrentPlayer: true },
-        ];
-        return { list: mockList, playerEntry: mockList[3] };
+        const extraRaw = typeof window !== 'undefined' ? localStorage.getItem('foxcoin_local_all_users_v1') : null;
+        let storedUsers: UserGameState[] = [];
+        if (extraRaw) {
+          try {
+            storedUsers = JSON.parse(extraRaw);
+          } catch {}
+        }
+        const realUsers = storedUsers.filter(
+          (u) => u && u.id && !u.id.startsWith('bot_') && !u.id.startsWith('seed_') && u.id !== user.id
+        );
+        realUsers.push(user);
+        realUsers.sort((a, b) => b.balance - a.balance);
+
+        const list: LeaderboardEntry[] = realUsers.slice(0, limit).map((u, idx) => ({
+          rank: idx + 1,
+          id: u.id,
+          displayName: u.displayName || u.username,
+          username: u.username,
+          balance: u.balance,
+          profitPerHour: u.profitPerHour,
+          level: u.level,
+          levelName: u.levelName,
+          isCurrentPlayer: u.id === user.id,
+        }));
+
+        const playerEntry = list.find((e) => e.isCurrentPlayer) || list[0];
+        return { list, playerEntry };
       }
       throw err;
     }
