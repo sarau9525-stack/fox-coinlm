@@ -514,10 +514,44 @@ export async function processTelegramWebhookUpdate(
   if (command === '/start') {
     // Check if referral code was passed: /start ref_FOX_XXXX
     let refGreeting = '';
-    if (args && args.startsWith('ref_')) {
-      const refCode = args.replace('ref_', '');
+    const refCode = args ? (args.startsWith('ref_') ? args.replace('ref_', '').trim() : args.trim()) : '';
+    if (refCode) {
       refGreeting = `\n🎁 <b>Referral Bonus Active!</b> You joined via invite code <code>${refCode}</code> for a <b>+5,000 FOX</b> starter gift!`;
     }
+
+    let tgDbUser = from?.id ? db.getUserByTelegramId(from.id) : null;
+    if (!tgDbUser && from?.id) {
+      tgDbUser = db.createNewUser({
+        telegramId: from.id,
+        username: from.username || `tg_${from.id}`,
+        displayName: `${from.first_name || ''} ${from.last_name || ''}`.trim() || 'Fox Miner',
+        isTelegram: true,
+        referredByCode: refCode || undefined,
+      });
+    }
+
+    let botUsername = db.getBotConfig().botUsername?.replace(/^@/, '').trim();
+    if (!botUsername || botUsername === 'FoxCoinOfficialBot' || botUsername === 'FOXCOINBot') {
+      try {
+        const meRes = await fetch(`https://api.telegram.org/bot${botToken.trim()}/getMe`);
+        const meData = (await meRes.json()) as any;
+        if (meData?.ok && meData.result?.username) {
+          botUsername = String(meData.result.username).trim();
+          db.saveBotConfig({
+            botUsername,
+            botFirstName: meData.result.first_name || 'FOXCOIN',
+          });
+        }
+      } catch {}
+    }
+
+    const launchUrl = refCode
+      ? `${gameUrl}${gameUrl.includes('?') ? '&' : '?'}ref=${encodeURIComponent(refCode)}`
+      : gameUrl;
+    const shareReferralUrl =
+      botUsername && tgDbUser?.referralCode
+        ? `https://t.me/${botUsername}?start=ref_${tgDbUser.referralCode}`
+        : gameUrl;
 
     const greeting =
       `🦊 <b>Welcome to FOXCOIN, ${from?.first_name || 'Fox Miner'}!</b>\n\n` +
@@ -544,13 +578,13 @@ export async function processTelegramWebhookUpdate(
         [
           {
             text: '🚀 3. Launch FOXCOIN Mini App 🦊',
-            web_app: { url: gameUrl },
+            web_app: { url: launchUrl },
           },
         ],
         [
           {
             text: '👥 Invite Friends ($10 per 10 friends)',
-            url: `https://t.me/share/url?url=${encodeURIComponent(gameUrl)}&text=${encodeURIComponent(
+            url: `https://t.me/share/url?url=${encodeURIComponent(shareReferralUrl)}&text=${encodeURIComponent(
               'Join FOXCOIN with me! 💰 Earn 10,000 FOX ($10.00 USD) for every 10 friends!'
             )}`,
           },

@@ -24,6 +24,7 @@ interface FriendsScreenProps {
   user: UserGameState;
   botUsername?: string;
   onTradeTab?: () => void;
+  onBotUsernameUpdated?: (newBotUsername: string) => void;
 }
 
 interface MilestoneTier {
@@ -97,10 +98,55 @@ export const FriendsScreen: React.FC<FriendsScreenProps> = ({
   user,
   botUsername = 'FOXCOINBot',
   onTradeTab,
+  onBotUsernameUpdated,
 }) => {
   const [copied, setCopied] = useState<boolean>(false);
   const [isClaiming, setIsClaiming] = useState<boolean>(false);
   const [claimSuccess, setClaimSuccess] = useState<string | null>(null);
+  const [activeBotUsername, setActiveBotUsername] = useState<string>(() => {
+    return api.getSavedBotUsername() || botUsername.replace(/^@/, '').trim() || 'FOXCOINBot';
+  });
+  const [isEditingBot, setIsEditingBot] = useState<boolean>(false);
+  const [botInput, setBotInput] = useState<string>('');
+  const [isSavingBot, setIsSavingBot] = useState<boolean>(false);
+  const [botSaveMessage, setBotSaveMessage] = useState<string | null>(null);
+
+  React.useEffect(() => {
+    let mounted = true;
+    api.resolveBotUsername(botUsername).then((resolved) => {
+      if (mounted && resolved) {
+        const clean = resolved.replace(/^@/, '').trim();
+        setActiveBotUsername(clean);
+        if (onBotUsernameUpdated && clean !== botUsername.replace(/^@/, '').trim()) {
+          onBotUsernameUpdated(clean);
+        }
+      }
+    });
+    return () => {
+      mounted = false;
+    };
+  }, [botUsername, onBotUsernameUpdated]);
+
+  const handleSaveCustomBot = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!botInput.trim() || isSavingBot) return;
+    setIsSavingBot(true);
+    setBotSaveMessage(null);
+    try {
+      const savedUsername = await api.saveBotUsername(botInput.trim());
+      setActiveBotUsername(savedUsername);
+      onBotUsernameUpdated?.(savedUsername);
+      setIsEditingBot(false);
+      setBotInput('');
+      sound.playSuccess();
+      setBotSaveMessage(`Referral link updated to @${savedUsername}`);
+      setTimeout(() => setBotSaveMessage(null), 3500);
+    } catch (err: any) {
+      setBotSaveMessage(err?.message || 'Could not update bot username');
+    } finally {
+      setIsSavingBot(false);
+    }
+  };
 
   // Milestone calculations: 10 friends = 10,000 FOX ($10 USD)
   const currentCount = user.referralCount || 0;
@@ -144,17 +190,14 @@ export const FriendsScreen: React.FC<FriendsScreenProps> = ({
     Math.round((currentCount / activeTier.target) * 100)
   );
 
-  // Generate deep link and web link
-  const origin = typeof window !== 'undefined' ? window.location.origin : 'https://foxcoin.pages.dev';
-  const cleanBot = botUsername.replace('@', '');
+  // Generate deep link matching active Telegram bot
+  const cleanBot = (activeBotUsername || botUsername || 'FOXCOINBot').replace(/^@/, '').trim();
   const tgDeepLink = `https://t.me/${cleanBot}?start=ref_${user.referralCode}`;
-  const webLink = `${origin}?ref=${user.referralCode}`;
 
   const shareText = `🦊 Join FOXCOIN with me! Tap to earn FOX, trade for real USDT on the exchange, and get a +5,000 FOX starter gift! 💰🔥`;
 
   const handleCopyLink = () => {
-    const linkToCopy = user.isTelegram ? tgDeepLink : webLink;
-    navigator.clipboard.writeText(linkToCopy);
+    navigator.clipboard.writeText(tgDeepLink);
     setCopied(true);
     sound.playCoin();
     TelegramService.triggerHaptic('medium');
@@ -589,14 +632,48 @@ export const FriendsScreen: React.FC<FriendsScreenProps> = ({
         </button>
       </div>
 
-      {/* Referral Code preview */}
-      <div className="mt-4 p-3 bg-slate-900/60 border border-slate-800/60 rounded-xl text-center">
-        <span className="text-[10px] text-slate-400 uppercase tracking-widest font-semibold block">
-          Your Exclusive Referral Code
-        </span>
-        <span className="text-sm font-black text-amber-400 tracking-wider">
-          {user.referralCode}
-        </span>
+      {/* Referral Link & Bot Username Preview */}
+      <div className="mt-4 p-3.5 bg-slate-900/75 border border-slate-800/80 rounded-2xl text-center">
+        <div className="flex items-center justify-between text-[10px] text-slate-400 uppercase tracking-wider font-semibold mb-1.5">
+          <span>Your Referral Link (@{cleanBot})</span>
+          <button
+            type="button"
+            onClick={() => {
+              setBotInput(cleanBot);
+              setIsEditingBot((v) => !v);
+            }}
+            className="text-amber-400 hover:text-amber-300 font-bold normal-case cursor-pointer"
+          >
+            {isEditingBot ? 'Cancel' : 'Change Bot ID'}
+          </button>
+        </div>
+
+        <div className="text-xs font-mono font-bold text-amber-300 bg-slate-950/90 border border-slate-800 rounded-xl py-2 px-2.5 break-all select-all">
+          {tgDeepLink}
+        </div>
+
+        {isEditingBot && (
+          <form onSubmit={handleSaveCustomBot} className="mt-2.5 flex items-center gap-1.5">
+            <input
+              type="text"
+              value={botInput}
+              onChange={(e) => setBotInput(e.target.value)}
+              placeholder="@YourBotUsername or Bot Token"
+              className="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-amber-400"
+            />
+            <button
+              type="submit"
+              disabled={isSavingBot}
+              className="px-3.5 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs cursor-pointer shrink-0"
+            >
+              {isSavingBot ? '...' : 'Save'}
+            </button>
+          </form>
+        )}
+
+        {botSaveMessage && (
+          <div className="mt-2 text-[11px] font-bold text-emerald-400">{botSaveMessage}</div>
+        )}
       </div>
     </div>
   );

@@ -170,6 +170,12 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
       loadUsers(effectiveSecret);
       const data = await api.getAdminTelegramConfig(effectiveSecret);
       setServerConfig(data);
+      if (data.botUsername && onConfigUpdated && config && data.botUsername !== config.telegramBotUsername) {
+        onConfigUpdated({
+          ...config,
+          telegramBotUsername: data.botUsername,
+        });
+      }
       if (data.suggestedWebhookUrl && !webhookUrl) {
         setWebhookUrl(data.webhookUrl || data.suggestedWebhookUrl);
       }
@@ -318,6 +324,12 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
       });
 
       setAutoSetupResult(res);
+      if (res.botUsername && onConfigUpdated && config) {
+        onConfigUpdated({
+          ...config,
+          telegramBotUsername: res.botUsername,
+        });
+      }
       setNotification({
         type: 'success',
         message: `🎉 Bot activated! Webhook, Mini App Menu Button, and Commands are live on @${res.botUsername}!`,
@@ -359,6 +371,12 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
       );
 
       sound.playLevelUp();
+      if (res.botUsername && onConfigUpdated && config) {
+        onConfigUpdated({
+          ...config,
+          telegramBotUsername: res.botUsername,
+        });
+      }
       setNotification({
         type: 'success',
         message: `Success! ${res.description}. Bot: @${res.botUsername || 'configured'}`,

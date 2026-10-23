@@ -724,21 +724,53 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
     return false;
   };
 
+  const resolveEdgeBotUsername = async (): Promise<string> => {
+    const saved = edgeBotConfig.botUsername?.replace(/^@/, '').trim();
+    const effectiveToken = edgeBotConfig.botToken || (env.TELEGRAM_BOT_TOKEN ? env.TELEGRAM_BOT_TOKEN.trim() : '');
+
+    if (effectiveToken && (!saved || saved === 'FOXCOINBot' || saved === 'FoxCoinOfficialBot')) {
+      try {
+        const meRes = await fetch(`https://api.telegram.org/bot${effectiveToken}/getMe`);
+        const meData = (await meRes.json()) as any;
+        if (meData?.ok && meData.result?.username) {
+          const fetched = String(meData.result.username).trim();
+          edgeBotConfig.botUsername = fetched;
+          edgeBotConfig.botFirstName = meData.result.first_name || edgeBotConfig.botFirstName;
+          await persistEdgeBotConfig(env);
+          return fetched;
+        }
+      } catch {}
+    }
+
+    if (saved && saved !== 'FOXCOINBot' && saved !== 'FoxCoinOfficialBot') {
+      return saved;
+    }
+
+    const envUsername = (env.TELEGRAM_BOT_USERNAME || '').replace(/^@/, '').trim();
+    if (envUsername && envUsername !== 'FoxCoinOfficialBot') {
+      return envUsername;
+    }
+
+    return saved || envUsername || 'FOXCOINBot';
+  };
+
   // 1. Health check
   if (pathname === '/api/health') {
+    const resolvedUsername = await resolveEdgeBotUsername();
     return jsonResponse({
       status: 'ok',
       engine: 'Cloudflare Pages Functions (Edge Runtime)',
       d1Database: !!env.DB,
       kvCache: !!env.FOX_KV,
-      botName: env.TELEGRAM_BOT_NAME || 'FOXCOIN',
-      botUsername: env.TELEGRAM_BOT_USERNAME || 'FOXCOINBot',
+      botName: edgeBotConfig.botFirstName || env.TELEGRAM_BOT_NAME || 'FOXCOIN',
+      botUsername: resolvedUsername,
       timestamp: Date.now(),
     });
   }
 
   // 2. Game Config
   if (pathname === '/api/game/config') {
+    const telegramBotUsername = await resolveEdgeBotUsername();
     return jsonResponse({
       upgrades: edgeUpgrades,
       wheelPrizes: edgeWheelPrizes,
@@ -746,8 +778,48 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
       tasks: TASKS,
       dailyRewards: DAILY_REWARDS,
       constants: GAME_CONSTANTS,
-      telegramBotUsername: env.TELEGRAM_BOT_USERNAME || edgeBotConfig.botUsername || 'FOXCOINBot',
+      telegramBotUsername,
     });
+  }
+
+  if (pathname === '/api/game/bot-username' && method === 'POST') {
+    let body: any = {};
+    try {
+      body = await request.json();
+    } catch {}
+    const { botUsername, botToken } = body || {};
+
+    if (botToken && String(botToken).includes(':')) {
+      const cleanToken = String(botToken).trim();
+      edgeBotConfig.botToken = cleanToken;
+      try {
+        const meRes = await fetch(`https://api.telegram.org/bot${cleanToken}/getMe`);
+        const meData = (await meRes.json()) as any;
+        if (meData?.ok && meData.result?.username) {
+          edgeBotConfig.botUsername = String(meData.result.username).trim();
+          edgeBotConfig.botFirstName = meData.result.first_name || 'FOXCOIN';
+          await persistEdgeBotConfig(env);
+          return jsonResponse({ success: true, botUsername: edgeBotConfig.botUsername });
+        }
+      } catch {}
+    }
+
+    if (botUsername && typeof botUsername === 'string') {
+      const cleanUsername = botUsername
+        .replace(/^https?:\/\/t\.me\//i, '')
+        .replace(/^@/, '')
+        .split('?')[0]
+        .split('/')[0]
+        .trim();
+      if (cleanUsername) {
+        edgeBotConfig.botUsername = cleanUsername;
+        await persistEdgeBotConfig(env);
+        return jsonResponse({ success: true, botUsername: cleanUsername });
+      }
+    }
+
+    const resolved = await resolveEdgeBotUsername();
+    return jsonResponse({ success: true, botUsername: resolved });
   }
 
   // 3. Authentication Routes
@@ -1576,10 +1648,46 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
         const youtubeUrl = 'https://www.youtube.com/@FOX-COINl';
 
         if (command === '/start') {
+          const args = text.split(' ').slice(1).join(' ');
+          const refCode = args ? (args.startsWith('ref_') ? args.replace('ref_', '').trim() : args.trim()) : '';
+          let refGreeting = '';
+          if (refCode) {
+            refGreeting = `\n🎁 <b>Referral Bonus Active!</b> You joined via invite code <code>${refCode}</code> for a <b>+5,000 FOX</b> starter gift!\n`;
+          }
+
+          const from = message.from;
+          let tgEdgeUser: UserGameState | undefined;
+          if (from?.id) {
+            const uid = `tg_${from.id}`;
+            tgEdgeUser = edgeUsers.get(uid);
+            if (!tgEdgeUser) {
+              tgEdgeUser = createNewUserRecord(
+                uid,
+                from.username || from.first_name || 'TeleFox',
+                true,
+                false,
+                refCode || undefined
+              );
+              tgEdgeUser.telegramId = from.id;
+              tgEdgeUser.displayName = `${from.first_name || ''} ${from.last_name || ''}`.trim() || tgEdgeUser.username;
+              if (env.DB) await persistUserToD1(env.DB, tgEdgeUser);
+            }
+          }
+
+          const resolvedBotUsername = await resolveEdgeBotUsername();
+          const launchUrl = refCode
+            ? `${appUrl}${appUrl.includes('?') ? '&' : '?'}ref=${encodeURIComponent(refCode)}`
+            : appUrl;
+          const shareReferralUrl =
+            resolvedBotUsername && tgEdgeUser?.referralCode
+              ? `https://t.me/${resolvedBotUsername}?start=ref_${tgEdgeUser.referralCode}`
+              : appUrl;
+
           const greeting =
             `🦊 <b>Welcome to FOXCOIN!</b>\n\n` +
-            `💰 <b>Tap to mine FOX, invite friends for $10 USD per 10 invites, and trade referral rewards on our crypto exchange!</b>\n\n` +
-            `📢 <b>Mandatory Requirement:</b> You must join both official channels (<b>${channelHandle}</b> on Telegram & <b>@FOX-COINl</b> on YouTube) to activate mining and withdrawals.\n\n` +
+            `💰 <b>Tap to mine FOX, invite friends for $10 USD per 10 invites, and trade referral rewards on our crypto exchange!</b>\n` +
+            refGreeting +
+            `\n📢 <b>Mandatory Requirement:</b> You must join both official channels (<b>${channelHandle}</b> on Telegram & <b>@FOX-COINl</b> on YouTube) to activate mining and withdrawals.\n\n` +
             `👇 <b>Join Both Channels & Launch App:</b>`;
 
           await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
@@ -1606,13 +1714,13 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
                   [
                     {
                       text: '🚀 3. Launch FOXCOIN Mini App 🦊',
-                      web_app: { url: appUrl },
+                      web_app: { url: launchUrl },
                     },
                   ],
                   [
                     {
                       text: '👥 Invite Friends ($10 per 10 friends)',
-                      url: `https://t.me/share/url?url=${encodeURIComponent(appUrl)}&text=${encodeURIComponent(
+                      url: `https://t.me/share/url?url=${encodeURIComponent(shareReferralUrl)}&text=${encodeURIComponent(
                         'Join FOXCOIN with me! 💰 Earn 10,000 FOX ($10.00 USD) for every 10 friends!'
                       )}`,
                     },
@@ -1662,13 +1770,14 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
     const effectiveToken = env.TELEGRAM_BOT_TOKEN || edgeBotConfig.botToken;
     const baseAppUrl = env.APP_URL || url.origin;
     const suggestedWebhookUrl = `${baseAppUrl.replace(/\/$/, '')}/api/telegram/webhook`;
+    const resolvedUsername = await resolveEdgeBotUsername();
 
     return jsonResponse({
       isConfigured: !!(effectiveToken && edgeBotConfig.webhookUrl),
       hasToken: !!effectiveToken,
       maskedToken: effectiveToken ? `${effectiveToken.slice(0, 4)}...${effectiveToken.slice(-4)}` : undefined,
-      botUsername: env.TELEGRAM_BOT_USERNAME || edgeBotConfig.botUsername || 'FOXCOINBot',
-      botFirstName: env.TELEGRAM_BOT_NAME || edgeBotConfig.botFirstName || 'FOXCOIN',
+      botUsername: resolvedUsername,
+      botFirstName: edgeBotConfig.botFirstName || env.TELEGRAM_BOT_NAME || 'FOXCOIN',
       webhookUrl: edgeBotConfig.webhookUrl,
       hasWebhookSecret: !!(env.TELEGRAM_WEBHOOK_SECRET || edgeBotConfig.webhookSecret),
       lastWebhookSetupDate: edgeBotConfig.lastWebhookSetupDate,
@@ -1709,6 +1818,17 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
     });
     const tgData = (await tgRes.json()) as any;
 
+    let botUsername = edgeBotConfig.botUsername || env.TELEGRAM_BOT_USERNAME || 'FOXCOINBot';
+    try {
+      const meRes = await fetch(`https://api.telegram.org/bot${token}/getMe`);
+      const meData = (await meRes.json()) as any;
+      if (meData?.ok && meData.result?.username) {
+        botUsername = String(meData.result.username).trim();
+        edgeBotConfig.botUsername = botUsername;
+        edgeBotConfig.botFirstName = meData.result.first_name || edgeBotConfig.botFirstName;
+      }
+    } catch {}
+
     // Also configure Telegram Mini App menu button & commands
     const cleanAppUrl = (env.APP_URL || url.origin).replace(/\/$/, '');
     try {
@@ -1747,7 +1867,7 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
     return jsonResponse({
       success: true,
       description: tgData.description,
-      botUsername: env.TELEGRAM_BOT_USERNAME || 'FOXCOINBot',
+      botUsername,
       webhookUrl: targetUrl,
     });
   }

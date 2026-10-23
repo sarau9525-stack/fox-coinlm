@@ -111,7 +111,43 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', time: Date.now(), service: 'fox-coin-backend' });
 });
 
-app.get('/api/game/config', (req, res) => {
+async function resolveEffectiveBotUsername(): Promise<string> {
+  const botConfig = db.getBotConfig();
+  const savedUsername = botConfig.botUsername?.replace(/^@/, '').trim();
+  const effectiveToken = db.getEffectiveBotToken();
+
+  if (
+    effectiveToken &&
+    (!savedUsername || savedUsername === 'FoxCoinOfficialBot' || savedUsername === 'FOXCOINBot')
+  ) {
+    try {
+      const meRes = await fetch(`https://api.telegram.org/bot${effectiveToken}/getMe`);
+      const meData = (await meRes.json()) as any;
+      if (meData?.ok && meData.result?.username) {
+        const fetchedUsername = String(meData.result.username).trim();
+        db.saveBotConfig({
+          botUsername: fetchedUsername,
+          botFirstName: meData.result.first_name || botConfig.botFirstName,
+        });
+        return fetchedUsername;
+      }
+    } catch {}
+  }
+
+  if (savedUsername && savedUsername !== 'FoxCoinOfficialBot') {
+    return savedUsername;
+  }
+
+  const envUsername = (process.env.TELEGRAM_BOT_USERNAME || '').replace(/^@/, '').trim();
+  if (envUsername && envUsername !== 'FoxCoinOfficialBot') {
+    return envUsername;
+  }
+
+  return savedUsername || envUsername || 'FOXCOINBot';
+}
+
+app.get('/api/game/config', async (req, res) => {
+  const telegramBotUsername = await resolveEffectiveBotUsername();
   res.json({
     upgrades: db.getUpgrades(),
     wheelPrizes: db.getWheelPrizes(),
@@ -119,8 +155,47 @@ app.get('/api/game/config', (req, res) => {
     tasks: TASKS,
     dailyRewards: DAILY_REWARDS,
     constants: GAME_CONSTANTS,
-    telegramBotUsername: process.env.TELEGRAM_BOT_USERNAME || 'FoxCoinOfficialBot',
+    telegramBotUsername,
   });
+});
+
+app.post('/api/game/bot-username', async (req, res) => {
+  const { botUsername, botToken } = req.body || {};
+
+  if (botToken && isValidBotTokenFormat(String(botToken).trim())) {
+    const cleanToken = String(botToken).trim();
+    db.saveBotConfig({
+      encryptedToken: encryptSensitive(cleanToken),
+    });
+    try {
+      const meRes = await fetch(`https://api.telegram.org/bot${cleanToken}/getMe`);
+      const meData = (await meRes.json()) as any;
+      if (meData?.ok && meData.result?.username) {
+        const resolved = String(meData.result.username).trim();
+        db.saveBotConfig({
+          botUsername: resolved,
+          botFirstName: meData.result.first_name || 'FOXCOIN',
+        });
+        return res.json({ success: true, botUsername: resolved });
+      }
+    } catch {}
+  }
+
+  if (botUsername && typeof botUsername === 'string') {
+    const cleanUsername = botUsername
+      .replace(/^https?:\/\/t\.me\//i, '')
+      .replace(/^@/, '')
+      .split('?')[0]
+      .split('/')[0]
+      .trim();
+    if (cleanUsername) {
+      db.saveBotConfig({ botUsername: cleanUsername });
+      return res.json({ success: true, botUsername: cleanUsername });
+    }
+  }
+
+  const resolved = await resolveEffectiveBotUsername();
+  res.json({ success: true, botUsername: resolved });
 });
 
 /* ==========================================================================
@@ -308,6 +383,7 @@ app.post('/api/game/gifts/create-invoice', requireAuth, async (req: Authenticate
     db.saveBotConfig({
       encryptedToken: encryptSensitive(validClientToken),
     });
+    resolveEffectiveBotUsername().catch(() => {});
   }
 
   const effectiveBotToken = validClientToken || db.getEffectiveBotToken();
@@ -652,11 +728,13 @@ app.get('/api/admin/telegram/config', requireAdmin, async (req: AuthenticatedReq
     } catch {}
   }
 
+  const resolvedBotUsername = await resolveEffectiveBotUsername();
+
   res.json({
     isConfigured: !!(effectiveToken && (botConfig.webhookUrl || webhookInfo?.url)),
     hasToken: !!effectiveToken,
     maskedToken: effectiveToken ? maskToken(effectiveToken) : undefined,
-    botUsername: botConfig.botUsername || process.env.TELEGRAM_BOT_USERNAME || 'FoxCoinOfficialBot',
+    botUsername: resolvedBotUsername,
     botFirstName: botConfig.botFirstName,
     webhookUrl: botConfig.webhookUrl || webhookInfo?.url || '',
     hasWebhookSecret: !!db.getEffectiveWebhookSecret(),

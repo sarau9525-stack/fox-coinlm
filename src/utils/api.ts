@@ -334,16 +334,15 @@ class ApiService {
       const cfg = await this.request<GameConfig>('/api/game/config');
       if (cfg.upgrades) cfg.upgrades = cfg.upgrades.map(sanitizeUpgrade);
       if (cfg.wheelPrizes) cfg.wheelPrizes = cfg.wheelPrizes.map(sanitizeWheelPrize);
+
+      const resolvedBot = await this.resolveBotUsername(cfg.telegramBotUsername);
+      if (resolvedBot) {
+        cfg.telegramBotUsername = resolvedBot;
+      }
       return cfg;
     } catch (err) {
       if (this.isStaticFallbackError(err)) {
-        const savedBot = typeof window !== 'undefined' ? localStorage.getItem(LOCAL_BOT_KEY) : null;
-        let botUsername = 'FOXCOINBot';
-        if (savedBot) {
-          try {
-            botUsername = JSON.parse(savedBot).botUsername || 'FOXCOINBot';
-          } catch {}
-        }
+        const botUsername = (await this.resolveBotUsername('FOXCOINBot')) || 'FOXCOINBot';
         return {
           upgrades: this.getLocalUpgrades(),
           wheelPrizes: this.getLocalWheelPrizes(),
@@ -608,6 +607,124 @@ class ApiService {
     return undefined;
   }
 
+  public getSavedBotUsername(): string | undefined {
+    if (typeof window !== 'undefined') {
+      try {
+        const raw = localStorage.getItem(LOCAL_BOT_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          const u = String(parsed?.botUsername || '').replace(/^@/, '').trim();
+          if (u && u !== 'FoxCoinOfficialBot' && u !== 'FOXCOINBot') {
+            return u;
+          }
+        }
+      } catch {}
+    }
+    return undefined;
+  }
+
+  public async resolveBotUsername(serverBotUsername?: string): Promise<string> {
+    const cleanServer = (serverBotUsername || '').replace(/^@/, '').trim();
+    const localUsername = this.getSavedBotUsername();
+    const localToken = this.getSavedBotToken();
+
+    // If a local Bot Token is saved but we haven't resolved its @username yet, query Telegram getMe directly
+    if (localToken && !localUsername) {
+      try {
+        const meRes = await fetch(`https://api.telegram.org/bot${localToken}/getMe`);
+        const meData = await meRes.json();
+        if (meRes.ok && meData?.ok && meData.result?.username) {
+          const fetched = String(meData.result.username).trim();
+          this.saveLocalBotMetadata({
+            botUsername: fetched,
+            botFirstName: meData.result.first_name || 'FOXCOIN',
+          });
+          this.request('/api/game/bot-username', {
+            method: 'POST',
+            body: JSON.stringify({ botUsername: fetched, botToken: localToken }),
+          }).catch(() => {});
+          return fetched;
+        }
+      } catch {}
+    }
+
+    if (localUsername) {
+      if (!cleanServer || cleanServer === 'FoxCoinOfficialBot' || cleanServer === 'FOXCOINBot') {
+        this.request('/api/game/bot-username', {
+          method: 'POST',
+          body: JSON.stringify({ botUsername: localUsername, botToken: localToken }),
+        }).catch(() => {});
+      }
+      return localUsername;
+    }
+
+    if (cleanServer && cleanServer !== 'FoxCoinOfficialBot') {
+      return cleanServer;
+    }
+
+    return cleanServer || 'FOXCOINBot';
+  }
+
+  private saveLocalBotMetadata(fields: Record<string, any>): void {
+    if (typeof window === 'undefined') return;
+    try {
+      const existingRaw = localStorage.getItem(LOCAL_BOT_KEY);
+      const existing = existingRaw ? JSON.parse(existingRaw) : {};
+      localStorage.setItem(
+        LOCAL_BOT_KEY,
+        JSON.stringify({
+          ...existing,
+          ...fields,
+        })
+      );
+    } catch {}
+  }
+
+  public async saveBotUsername(input: string): Promise<string> {
+    const raw = (input || '').trim();
+    if (!raw) throw new Error('Bot username or token is required');
+
+    // If user pasted a full BotFather token (123456:ABC...), resolve the exact bot username via getMe
+    if (raw.includes(':')) {
+      this.saveClientBotToken(raw);
+      try {
+        const meRes = await fetch(`https://api.telegram.org/bot${raw}/getMe`);
+        const meData = await meRes.json();
+        if (meRes.ok && meData?.ok && meData.result?.username) {
+          const fetched = String(meData.result.username).trim();
+          this.saveLocalBotMetadata({
+            botUsername: fetched,
+            botFirstName: meData.result.first_name || 'FOXCOIN',
+          });
+          await this.request('/api/game/bot-username', {
+            method: 'POST',
+            body: JSON.stringify({ botUsername: fetched, botToken: raw }),
+          }).catch(() => {});
+          return fetched;
+        }
+      } catch {}
+    }
+
+    const cleanUsername = raw
+      .replace(/^https?:\/\/t\.me\//i, '')
+      .replace(/^@/, '')
+      .split('?')[0]
+      .split('/')[0]
+      .trim();
+
+    if (!cleanUsername) {
+      throw new Error('Invalid Telegram Bot username');
+    }
+
+    this.saveLocalBotMetadata({ botUsername: cleanUsername });
+    await this.request('/api/game/bot-username', {
+      method: 'POST',
+      body: JSON.stringify({ botUsername: cleanUsername }),
+    }).catch(() => {});
+
+    return cleanUsername;
+  }
+
   public saveClientBotToken(botToken: string): void {
     const clean = (botToken || '').trim();
     if (!clean.includes(':') || typeof window === 'undefined') return;
@@ -624,6 +741,7 @@ class ApiService {
           isConfigured: true,
         })
       );
+      this.resolveBotUsername().catch(() => {});
     } catch {}
   }
 

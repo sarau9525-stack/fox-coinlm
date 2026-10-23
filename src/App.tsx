@@ -586,6 +586,13 @@ export default function App() {
               user={user}
               botUsername={config?.telegramBotUsername || 'FOXCOINBot'}
               onTradeTab={handleOpenTrade}
+              onBotUsernameUpdated={(nextBotUsername) => {
+                setConfig((prev) =>
+                  prev && prev.telegramBotUsername !== nextBotUsername
+                    ? { ...prev, telegramBotUsername: nextBotUsername }
+                    : prev
+                );
+              }}
             />
           )}
 
