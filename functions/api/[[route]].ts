@@ -253,12 +253,20 @@ async function persistUserToD1(db: any, user: UserGameState) {
           level = excluded.level,
           level_name = excluded.level_name,
           energy = excluded.energy,
+          max_energy = excluded.max_energy,
+          energy_regen_rate = excluded.energy_regen_rate,
+          tap_power = excluded.tap_power,
           profit_per_hour = excluded.profit_per_hour,
+          unclaimed_passive = excluded.unclaimed_passive,
+          last_passive_claim_timestamp = excluded.last_passive_claim_timestamp,
           upgrades_json = excluded.upgrades_json,
+          daily_streak = excluded.daily_streak,
+          last_daily_claim_date = excluded.last_daily_claim_date,
           tasks_json = excluded.tasks_json,
           referral_count = excluded.referral_count,
           referral_earnings = excluded.referral_earnings,
           claimed_milestones = excluded.claimed_milestones,
+          boosters_json = excluded.boosters_json,
           updated_at = excluded.updated_at
       `)
       .bind(
@@ -611,20 +619,26 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
       (user as any).lastEnergyTimestamp = now;
     }
 
+    const existingUnclaimed = Math.max(0, Math.floor(user.unclaimedPassive || 0));
     const passiveElapsedSec = Math.max(0, (now - (user.lastPassiveClaimTimestamp || now)) / 1000);
-    const cappedPassiveSec = Math.min(passiveElapsedSec, (user.maxOfflineHours || 3) * 3600);
+    const maxOfflineSec = (user.maxOfflineHours || 3) * 3600;
+    const cappedPassiveSec = Math.min(passiveElapsedSec, maxOfflineSec);
+    const maxBankableOffline = Math.ceil((user.profitPerHour / 3600) * maxOfflineSec);
+
     if (user.profitPerHour > 0 && cappedPassiveSec > 0) {
-      if (passiveElapsedSec < 120) {
+      if (passiveElapsedSec < 60) {
         const activeEarned = (user.profitPerHour / 3600) * cappedPassiveSec;
         user.balance += activeEarned;
         user.totalEarned += activeEarned;
         user.lastPassiveClaimTimestamp = now;
-        user.unclaimedPassive = 0;
+        user.unclaimedPassive = existingUnclaimed;
       } else {
-        user.unclaimedPassive = Math.floor((user.profitPerHour / 3600) * cappedPassiveSec);
+        const newlyEarnedOffline = Math.floor((user.profitPerHour / 3600) * cappedPassiveSec);
+        user.unclaimedPassive = Math.min(maxBankableOffline, existingUnclaimed + newlyEarnedOffline);
+        user.lastPassiveClaimTimestamp = now;
       }
     } else {
-      user.unclaimedPassive = 0;
+      user.unclaimedPassive = existingUnclaimed;
       user.lastPassiveClaimTimestamp = now;
     }
 
@@ -692,6 +706,9 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
       }
       if ((syncedClient.totalTaps || 0) > (user.totalTaps || 0)) {
         user.totalTaps = syncedClient.totalTaps;
+      }
+      if ((syncedClient.unclaimedPassive || 0) > (user.unclaimedPassive || 0)) {
+        user.unclaimedPassive = syncedClient.unclaimedPassive;
       }
     }
 
@@ -766,6 +783,26 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
 
     const userId = `tg_${tgUser.id}`;
     let user = edgeUsers.get(userId);
+    const syncedClient = parseClientSyncUser();
+
+    if (!user && syncedClient && (syncedClient.id === userId || syncedClient.telegramId === tgUser.id)) {
+      user = {
+        ...syncedClient,
+        id: userId,
+        telegramId: tgUser.id,
+        isTelegram: true,
+        upgrades: syncedClient.upgrades || {},
+        tasks: syncedClient.tasks || {},
+        boosters: syncedClient.boosters || {
+          fullEnergyRemaining: 6,
+          nextFullEnergyAt: 0,
+          turboActiveUntil: 0,
+          nextTurboAt: 0,
+        },
+      };
+      edgeUsers.set(userId, user);
+    }
+
     if (!user) {
       user = createNewUserRecord(
         userId,
@@ -1127,10 +1164,29 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
   if (pathname === '/api/game/claim-passive' && method === 'POST') {
     const user = getAuthUser();
     if (!user) return jsonResponse({ error: 'Unauthorized' }, 401);
+    let body: any = {};
+    try {
+      body = await request.json();
+    } catch {}
+    const requestedAmount = body?.amount !== undefined ? Number(body.amount) : undefined;
+
     const now = Date.now();
+    recalculateEdgePlayerStats(user);
+    const maxOfflineSec = (user.maxOfflineHours || 3) * 3600;
     const elapsedSec = Math.max(0, (now - (user.lastPassiveClaimTimestamp || now)) / 1000);
-    const cappedSec = Math.min(elapsedSec, (user.maxOfflineHours || 3) * 3600);
-    const amount = Math.max(user.unclaimedPassive || 0, Math.floor((user.profitPerHour / 3600) * cappedSec));
+    const cappedSec = Math.min(elapsedSec, maxOfflineSec);
+    const timeBasedEarned = Math.floor((user.profitPerHour / 3600) * cappedSec);
+
+    const maxAllowedOffline = Math.max(
+      Math.floor(user.unclaimedPassive || 0),
+      Math.ceil((Math.max(user.profitPerHour, 1000) / 3600) * maxOfflineSec)
+    );
+    const safeRequested =
+      typeof requestedAmount === 'number' && Number.isFinite(requestedAmount) && requestedAmount > 0
+        ? Math.min(Math.floor(requestedAmount), maxAllowedOffline)
+        : 0;
+
+    const amount = Math.max(Math.floor(user.unclaimedPassive || 0), timeBasedEarned, safeRequested);
 
     if (amount > 0) {
       user.balance += amount;

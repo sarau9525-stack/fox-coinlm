@@ -22,6 +22,8 @@ interface TapScreenProps {
   onOpenWheel?: () => void;
   equippedGiftId?: string | null;
   onOpenGifts?: () => void;
+  offlineEarnings?: number;
+  onOpenOfflineModal?: () => void;
 }
 
 export const TapScreen: React.FC<TapScreenProps> = React.memo(({
@@ -31,6 +33,8 @@ export const TapScreen: React.FC<TapScreenProps> = React.memo(({
   onOpenWheel,
   equippedGiftId,
   onOpenGifts,
+  offlineEarnings = 0,
+  onOpenOfflineModal,
 }) => {
   const [floatingNumbers, setFloatingNumbers] = useState<FloatingNumber[]>([]);
   const [isPressing, setIsPressing] = useState<boolean>(false);
@@ -235,6 +239,26 @@ export const TapScreen: React.FC<TapScreenProps> = React.memo(({
           )}
         </div>
       </div>
+
+      {/* Unclaimed Offline Earnings Quick-Collect Pill */}
+      {Math.max(Math.floor(offlineEarnings || 0), Math.floor(user.unclaimedPassive || 0)) > 0 && onOpenOfflineModal && (
+        <button
+          onClick={onOpenOfflineModal}
+          className="w-full mb-2 py-2 px-3 rounded-xl bg-gradient-to-r from-amber-500/25 via-orange-500/20 to-emerald-500/25 border border-amber-400/60 flex items-center justify-between shadow-md shadow-amber-500/15 cursor-pointer hover:border-amber-300 transition active:scale-98"
+        >
+          <span className="flex items-center gap-2 text-xs font-extrabold text-amber-200">
+            <img src={foxGoldCoinImg} alt="FOX" className="w-4 h-4 animate-bounce" />
+            <span>
+              Offline Earnings: +
+              {Math.max(Math.floor(offlineEarnings || 0), Math.floor(user.unclaimedPassive || 0)).toLocaleString('en-US')}{' '}
+              FOX
+            </span>
+          </span>
+          <span className="px-2.5 py-0.5 rounded-lg bg-amber-400 text-slate-950 font-black text-[11px]">
+            Collect
+          </span>
+        </button>
+      )}
 
       {/* Level-Up Celebration Banner */}
       {levelUpBanner && (
@@ -630,6 +654,8 @@ export const TapScreen: React.FC<TapScreenProps> = React.memo(({
     prevLevelPercent === nextLevelPercent &&
     pu.tapPower === nu.tapPower &&
     pu.profitPerHour === nu.profitPerHour &&
+    pu.unclaimedPassive === nu.unclaimedPassive &&
+    prev.offlineEarnings === next.offlineEarnings &&
     pu.energyRegenRate === nu.energyRegenRate &&
     pu.boosters.turboActiveUntil === nu.boosters.turboActiveUntil &&
     pu.boosters.lastWheelSpinTimestamp === nu.boosters.lastWheelSpinTimestamp &&
@@ -638,6 +664,7 @@ export const TapScreen: React.FC<TapScreenProps> = React.memo(({
     prev.onTap === next.onTap &&
     prev.onOpenBoost === next.onOpenBoost &&
     prev.onOpenWheel === next.onOpenWheel &&
-    prev.onOpenGifts === next.onOpenGifts
+    prev.onOpenGifts === next.onOpenGifts &&
+    prev.onOpenOfflineModal === next.onOpenOfflineModal
   );
 });

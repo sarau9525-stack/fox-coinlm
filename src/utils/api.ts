@@ -176,17 +176,48 @@ class ApiService {
     const todayStr = new Date(now).toISOString().split('T')[0];
     user.canClaimDaily = user.lastDailyClaimDate !== todayStr;
 
+    const existingUnclaimed = Math.max(0, Math.floor(user.unclaimedPassive || 0));
     if (user.profitPerHour > 0 && user.lastPassiveClaimTimestamp > 0) {
-      const elapsedHours = Math.min(
-        user.maxOfflineHours || 3,
-        Math.max(0, (now - user.lastPassiveClaimTimestamp) / (1000 * 3600))
-      );
-      user.unclaimedPassive = Math.floor(elapsedHours * user.profitPerHour);
+      const elapsedSec = Math.max(0, (now - user.lastPassiveClaimTimestamp) / 1000);
+      const maxOfflineSec = (user.maxOfflineHours || 3) * 3600;
+      const maxBankableOffline = Math.ceil((user.profitPerHour / 3600) * maxOfflineSec);
+
+      if (elapsedSec >= 60) {
+        const cappedSec = Math.min(elapsedSec, maxOfflineSec);
+        const newlyEarned = Math.floor((user.profitPerHour / 3600) * cappedSec);
+        user.unclaimedPassive = Math.min(maxBankableOffline, existingUnclaimed + newlyEarned);
+        user.lastPassiveClaimTimestamp = now;
+      } else {
+        user.unclaimedPassive = existingUnclaimed;
+      }
+    } else {
+      user.unclaimedPassive = existingUnclaimed;
     }
 
     reconcileUserLevel(user, this.getLocalUpgrades());
 
     return user;
+  }
+
+  private reconcileWithLocalOffline(serverUser: UserGameState): UserGameState {
+    if (typeof window === 'undefined' || !serverUser) return serverUser;
+    try {
+      const raw = localStorage.getItem(LOCAL_USER_KEY);
+      if (raw) {
+        const localParsed = JSON.parse(raw) as UserGameState;
+        if (
+          localParsed &&
+          (localParsed.id === serverUser.id ||
+            (localParsed.telegramId && String(localParsed.telegramId) === String(serverUser.telegramId)))
+        ) {
+          const syncedLocal = this.syncLocalUserProgress({ ...localParsed });
+          if ((syncedLocal.unclaimedPassive || 0) > (serverUser.unclaimedPassive || 0)) {
+            serverUser.unclaimedPassive = syncedLocal.unclaimedPassive;
+          }
+        }
+      }
+    } catch {}
+    return serverUser;
   }
 
   private saveLocalUser(user: UserGameState) {
@@ -334,8 +365,9 @@ class ApiService {
         body: JSON.stringify({ initData, refCode }),
       });
       this.setToken(res.token);
-      this.saveLocalUser(res.user);
-      return res;
+      const mergedUser = this.reconcileWithLocalOffline(res.user);
+      this.saveLocalUser(mergedUser);
+      return { token: res.token, user: mergedUser };
     } catch (err) {
       if (this.isStaticFallbackError(err)) {
         let username = 'TelegramFox';
@@ -424,8 +456,9 @@ class ApiService {
   public async getMe(): Promise<{ user: UserGameState }> {
     try {
       const res = await this.request<{ user: UserGameState }>('/api/auth/me');
-      this.saveLocalUser(res.user);
-      return res;
+      const mergedUser = this.reconcileWithLocalOffline(res.user);
+      this.saveLocalUser(mergedUser);
+      return { user: mergedUser };
     } catch (err) {
       if (this.isStaticFallbackError(err)) {
         return { user: this.getLocalUser() };
@@ -838,31 +871,49 @@ class ApiService {
     }
   }
 
-  public async claimPassive(): Promise<{ user: UserGameState; claimedAmount: number }> {
+  public async claimPassive(expectedAmount?: number): Promise<{ user: UserGameState; claimedAmount: number }> {
+    if (this.pendingTapCount > 0) {
+      await this.flushTaps();
+    }
+
+    const localBefore = this.getLocalUser();
+    const fallbackAmount = Math.max(
+      0,
+      Math.floor(expectedAmount || 0),
+      Math.floor(localBefore.unclaimedPassive || 0)
+    );
+
     try {
       const res = await this.request<{ user: UserGameState; claimedAmount: number }>('/api/game/claim-passive', {
         method: 'POST',
+        body: JSON.stringify({ amount: fallbackAmount }),
       });
+
+      const effectiveClaimed = Math.max(res.claimedAmount || 0, fallbackAmount);
+      if ((res.claimedAmount || 0) === 0 && fallbackAmount > 0) {
+        res.user.balance += fallbackAmount;
+        res.user.totalEarned += fallbackAmount;
+      }
+      res.user.unclaimedPassive = 0;
+      res.user.lastPassiveClaimTimestamp = Date.now();
+      reconcileUserLevel(res.user, this.getLocalUpgrades());
 
       this.saveLocalUser(res.user);
       if (this.onStateUpdated && res.user) {
-        this.onStateUpdated(res.user);
+        this.onStateUpdated({ ...res.user });
       }
-      return res;
-    } catch (err) {
-      if (this.isStaticFallbackError(err)) {
-        const user = this.getLocalUser();
-        const claimedAmount = user.unclaimedPassive || 0;
-        user.balance += claimedAmount;
-        user.totalEarned += claimedAmount;
-        user.unclaimedPassive = 0;
-        user.lastPassiveClaimTimestamp = Date.now();
-        this.syncLocalUserProgress(user);
-        this.saveLocalUser(user);
-        if (this.onStateUpdated) this.onStateUpdated(user);
-        return { user, claimedAmount };
-      }
-      throw err;
+      return { user: { ...res.user }, claimedAmount: effectiveClaimed };
+    } catch {
+      const user = this.getLocalUser();
+      const claimedAmount = Math.max(fallbackAmount, Math.floor(user.unclaimedPassive || 0));
+      user.balance += claimedAmount;
+      user.totalEarned += claimedAmount;
+      user.unclaimedPassive = 0;
+      user.lastPassiveClaimTimestamp = Date.now();
+      reconcileUserLevel(user, this.getLocalUpgrades());
+      this.saveLocalUser(user);
+      if (this.onStateUpdated) this.onStateUpdated({ ...user });
+      return { user: { ...user }, claimedAmount };
     }
   }
 

@@ -274,23 +274,29 @@ class DatabaseStore {
       (user as any).lastEnergyTimestamp = now;
     }
 
-    // 2. Credit continuous passive income (profitPerHour) right on time
+    // 2. Credit continuous passive income (profitPerHour) right on time without wiping banked offline coins
+    const existingUnclaimed = Math.max(0, Math.floor(user.unclaimedPassive || 0));
     const passiveElapsedSec = Math.max(0, (now - (user.lastPassiveClaimTimestamp || now)) / 1000);
-    const cappedPassiveSec = Math.min(passiveElapsedSec, user.maxOfflineHours * 3600);
+    const maxOfflineSec = (user.maxOfflineHours || 3) * 3600;
+    const cappedPassiveSec = Math.min(passiveElapsedSec, maxOfflineSec);
+    const maxBankableOffline = Math.ceil((user.profitPerHour / 3600) * maxOfflineSec);
+
     if (user.profitPerHour > 0 && cappedPassiveSec > 0) {
-      if (passiveElapsedSec < 120) {
-        // Active session: continuously add profitPerHour directly to balance on time
+      if (passiveElapsedSec < 60) {
+        // Active session: continuously add profitPerHour directly to balance on time, preserving any unclaimed offline chest
         const activeEarned = (user.profitPerHour / 3600) * cappedPassiveSec;
         user.balance += activeEarned;
         user.totalEarned += activeEarned;
         user.lastPassiveClaimTimestamp = now;
-        user.unclaimedPassive = 0;
+        user.unclaimedPassive = existingUnclaimed;
       } else {
-        // Offline session (>= 2 mins away): show in offline modal OR auto-claim
-        user.unclaimedPassive = Math.floor((user.profitPerHour / 3600) * cappedPassiveSec);
+        // Offline session (>= 1 min away): bank into unclaimedPassive so it can be collected in OfflineEarningsModal
+        const newlyEarnedOffline = Math.floor((user.profitPerHour / 3600) * cappedPassiveSec);
+        user.unclaimedPassive = Math.min(maxBankableOffline, existingUnclaimed + newlyEarnedOffline);
+        user.lastPassiveClaimTimestamp = now;
       }
     } else {
-      user.unclaimedPassive = 0;
+      user.unclaimedPassive = existingUnclaimed;
       user.lastPassiveClaimTimestamp = now;
     }
 
@@ -819,14 +825,31 @@ class DatabaseStore {
   }
 
   // Claim passive offline income
-  public claimPassive(userId: string): { success: boolean; state?: UserGameState; claimedAmount?: number; error?: string } {
+  public claimPassive(
+    userId: string,
+    requestedAmount?: number
+  ): { success: boolean; state?: UserGameState; claimedAmount?: number; error?: string } {
     const user = this.data.users[userId];
     if (!user) return { success: false, error: 'User not found' };
 
     const now = Date.now();
+    this.recalculatePlayerStats(user);
+
+    const maxOfflineSec = (user.maxOfflineHours || 3) * 3600;
     const elapsedSec = Math.max(0, (now - (user.lastPassiveClaimTimestamp || now)) / 1000);
-    const cappedSec = Math.min(elapsedSec, user.maxOfflineHours * 3600);
-    const amount = Math.max(user.unclaimedPassive || 0, Math.floor((user.profitPerHour / 3600) * cappedSec));
+    const cappedSec = Math.min(elapsedSec, maxOfflineSec);
+    const timeBasedEarned = Math.floor((user.profitPerHour / 3600) * cappedSec);
+
+    const maxAllowedOffline = Math.max(
+      Math.floor(user.unclaimedPassive || 0),
+      Math.ceil((Math.max(user.profitPerHour, 1000) / 3600) * maxOfflineSec)
+    );
+    const safeRequested =
+      typeof requestedAmount === 'number' && Number.isFinite(requestedAmount) && requestedAmount > 0
+        ? Math.min(Math.floor(requestedAmount), maxAllowedOffline)
+        : 0;
+
+    const amount = Math.max(Math.floor(user.unclaimedPassive || 0), timeBasedEarned, safeRequested);
 
     if (amount > 0) {
       user.balance += amount;

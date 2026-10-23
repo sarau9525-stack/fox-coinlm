@@ -421,7 +421,8 @@ app.get('/api/game/gifts/check-invoice', requireAuth, async (req: AuthenticatedR
 
 // Claim Passive / Offline Income
 app.post('/api/game/claim-passive', requireAuth, (req: AuthenticatedRequest, res) => {
-  const result = db.claimPassive(req.userId!);
+  const requestedAmount = req.body?.amount !== undefined ? Number(req.body.amount) : undefined;
+  const result = db.claimPassive(req.userId!, requestedAmount);
   if (!result.success) {
     return res.status(400).json({ error: result.error });
   }

@@ -22,17 +22,21 @@ export const OfflineEarningsModal: React.FC<OfflineEarningsModalProps> = ({
 
   const handleClaim = async () => {
     if (isClaiming) return;
+    setIsClaiming(true);
     try {
-      setIsClaiming(true);
+      await onClaim();
       sound.playLevelUp();
       TelegramService.triggerNotificationHaptic('success');
-      confetti({
-        particleCount: 70,
-        spread: 70,
-        origin: { y: 0.6 },
-        colors: ['#F59E0B', '#F97316', '#FBBF24'],
-      });
-      await onClaim();
+      try {
+        confetti({
+          particleCount: 70,
+          spread: 70,
+          origin: { y: 0.6 },
+          colors: ['#F59E0B', '#F97316', '#FBBF24'],
+        });
+      } catch {}
+    } catch (err) {
+      console.error('Offline claim error:', err);
     } finally {
       setIsClaiming(false);
       onClose();

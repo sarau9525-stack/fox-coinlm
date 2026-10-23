@@ -24,15 +24,34 @@ interface UpgradesScreenProps {
   user: UserGameState;
   upgrades: UpgradeDefinition[];
   onPurchase: (upgradeId: string) => Promise<void>;
+  offlineEarnings?: number;
+  onClaimOffline?: () => Promise<void>;
 }
 
 export const UpgradesScreen: React.FC<UpgradesScreenProps> = ({
   user,
   upgrades,
   onPurchase,
+  offlineEarnings = 0,
+  onClaimOffline,
 }) => {
   const [activeCategory, setActiveCategory] = useState<'all' | 'tap' | 'passive' | 'special'>('passive');
   const [purchasingId, setPurchasingId] = useState<string | null>(null);
+  const [isClaimingOffline, setIsClaimingOffline] = useState<boolean>(false);
+
+  const availableOffline = Math.max(Math.floor(offlineEarnings || 0), Math.floor(user.unclaimedPassive || 0));
+
+  const handleClaimOfflineClick = async () => {
+    if (!onClaimOffline || isClaimingOffline || availableOffline <= 0) return;
+    setIsClaimingOffline(true);
+    try {
+      sound.playLevelUp();
+      TelegramService.triggerNotificationHaptic('success');
+      await onClaimOffline();
+    } finally {
+      setIsClaimingOffline(false);
+    }
+  };
 
   // Icon mapping (supports both Lucide icons and emojis/custom icons)
   const renderIcon = (iconName: string) => {
@@ -114,6 +133,30 @@ export const UpgradesScreen: React.FC<UpgradesScreenProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Unclaimed Offline Passive Coins Banner */}
+      {availableOffline > 0 && onClaimOffline && (
+        <div className="w-full mb-4 p-3.5 rounded-2xl bg-gradient-to-r from-amber-500/20 via-orange-500/15 to-emerald-500/20 border border-amber-400/50 shadow-lg flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5">
+            <img src={foxGoldCoinImg} alt="FOX" className="w-8 h-8 animate-bounce shrink-0" />
+            <div>
+              <span className="text-[10px] uppercase font-extrabold text-amber-300 tracking-wider block">
+                Offline Mining Vault Ready
+              </span>
+              <span className="text-base font-black text-white">
+                +{availableOffline.toLocaleString('en-US')} FOX
+              </span>
+            </div>
+          </div>
+          <button
+            onClick={handleClaimOfflineClick}
+            disabled={isClaimingOffline}
+            className="px-4 py-2 rounded-xl bg-gradient-to-r from-amber-400 to-orange-500 hover:from-amber-300 hover:to-orange-400 text-slate-950 font-black text-xs shadow-md shadow-amber-500/25 transition active:scale-95 cursor-pointer shrink-0"
+          >
+            {isClaimingOffline ? 'Collecting...' : 'Collect FOX'}
+          </button>
+        </div>
+      )}
 
       {/* Category Tabs */}
       <div className="grid grid-cols-3 gap-1 bg-slate-900/90 p-1 rounded-xl border border-slate-800 mb-4 text-xs font-bold">

@@ -113,6 +113,7 @@ export default function App() {
   const handleOpenBoost = useCallback(() => setShowBoostModal(true), []);
   const handleOpenDaily = useCallback(() => setShowDailyModal(true), []);
   const handleOpenWheel = useCallback(() => setShowWheelModal(true), []);
+  const handleOpenOfflineModal = useCallback(() => setShowOfflineModal(true), []);
   const handleOpenGifts = useCallback(() => setActiveTab('gifts'), []);
   const handleOpenFriends = useCallback(() => setActiveTab('friends'), []);
   const handleOpenTrade = useCallback(() => setActiveTab('trade'), []);
@@ -201,13 +202,18 @@ export default function App() {
     });
   }, [updateGameState]);
 
-  // Offline passive income check on first load
+  // Offline passive income check on load and whenever unclaimedPassive updates
   useEffect(() => {
-    if (user && !offlineCheckedRef.current) {
-      offlineCheckedRef.current = true;
-      if (user.unclaimedPassive >= 10) {
-        setOfflineEarningsAmount(Math.floor(user.unclaimedPassive));
-        setShowOfflineModal(true);
+    if (user) {
+      const unclaimed = Math.floor(user.unclaimedPassive || 0);
+      if (unclaimed >= 1) {
+        setOfflineEarningsAmount((prev) => Math.max(prev, unclaimed));
+        if (!offlineCheckedRef.current) {
+          offlineCheckedRef.current = true;
+          setShowOfflineModal(true);
+        }
+      } else if (!offlineCheckedRef.current) {
+        offlineCheckedRef.current = true;
       }
     }
   }, [user]);
@@ -217,9 +223,46 @@ export default function App() {
   useEffect(() => {
     lastTickRef.current = Date.now();
     const interval = setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) {
+        return;
+      }
+
       const now = Date.now();
-      const elapsedSec = Math.min(10, Math.max(0.5, (now - lastTickRef.current) / 1000));
+      const rawElapsedSec = Math.max(0.5, (now - lastTickRef.current) / 1000);
       lastTickRef.current = now;
+
+      // If the user returned from background/lock screen after >= 60 seconds, bank offline coins and show modal
+      if (rawElapsedSec >= 60) {
+        updateGameState((prev) => {
+          if (!prev) return null;
+          const maxOfflineSec = (prev.maxOfflineHours || 3) * 3600;
+          const cappedOfflineSec = Math.min(rawElapsedSec, maxOfflineSec);
+          const nextEnergy = Math.min(
+            prev.maxEnergy,
+            Math.floor(prev.energy + prev.energyRegenRate * rawElapsedSec)
+          );
+          const newlyEarnedOffline =
+            prev.profitPerHour > 0 ? Math.floor((prev.profitPerHour / 3600) * cappedOfflineSec) : 0;
+          const totalUnclaimed = Math.floor(prev.unclaimedPassive || 0) + newlyEarnedOffline;
+
+          if (totalUnclaimed >= 1) {
+            setOfflineEarningsAmount(totalUnclaimed);
+            setShowOfflineModal(true);
+          }
+
+          const nextState: UserGameState = reconcileUserLevel({
+            ...prev,
+            energy: nextEnergy,
+            unclaimedPassive: totalUnclaimed,
+            lastPassiveClaimTimestamp: now,
+          });
+          api.syncClientState(nextState);
+          return nextState;
+        });
+        return;
+      }
+
+      const elapsedSec = Math.min(10, rawElapsedSec);
 
       updateGameState((prev) => {
         if (!prev) return null;
@@ -237,6 +280,7 @@ export default function App() {
           energy: Math.floor(nextEnergy),
           balance: prev.balance + profitGain,
           totalEarned: prev.totalEarned + profitGain,
+          unclaimedPassive: prev.unclaimedPassive,
           lastPassiveClaimTimestamp: now,
         });
         api.syncClientState(nextState);
@@ -311,9 +355,18 @@ export default function App() {
 
   // Claim Passive income
   const handleClaimPassive = useCallback(async () => {
-    const res = await api.claimPassive();
-    updateGameState(res.user);
-  }, [updateGameState]);
+    const expectedAmount = Math.max(
+      Math.floor(offlineEarningsAmount || 0),
+      Math.floor(user?.unclaimedPassive || 0)
+    );
+    const res = await api.claimPassive(expectedAmount);
+    setOfflineEarningsAmount(0);
+    setShowOfflineModal(false);
+    updateGameState({
+      ...res.user,
+      unclaimedPassive: 0,
+    });
+  }, [offlineEarningsAmount, user?.unclaimedPassive, updateGameState]);
 
   // Claim Daily reward
   const handleClaimDaily = useCallback(async () => {
@@ -485,6 +538,8 @@ export default function App() {
               onOpenWheel={handleOpenWheel}
               equippedGiftId={equippedGiftId}
               onOpenGifts={handleOpenGifts}
+              offlineEarnings={offlineEarningsAmount}
+              onOpenOfflineModal={handleOpenOfflineModal}
             />
           )}
 
@@ -493,6 +548,8 @@ export default function App() {
               user={user}
               upgrades={config.upgrades}
               onPurchase={handlePurchaseUpgrade}
+              offlineEarnings={offlineEarningsAmount}
+              onClaimOffline={handleClaimPassive}
             />
           )}
 
@@ -543,7 +600,7 @@ export default function App() {
             activeTab={activeTab}
             onChangeTab={setActiveTab}
             hasDailyReward={user.canClaimDaily}
-            hasUnclaimedPassive={user.unclaimedPassive > 0}
+            hasUnclaimedPassive={Math.max(user.unclaimedPassive || 0, offlineEarningsAmount) > 0}
           />
         )}
 
@@ -577,7 +634,7 @@ export default function App() {
 
         {showOfflineModal && user && (
           <OfflineEarningsModal
-            amount={offlineEarningsAmount}
+            amount={Math.max(offlineEarningsAmount, Math.floor(user.unclaimedPassive || 0))}
             profitPerHour={user.profitPerHour}
             onClaim={handleClaimPassive}
             onClose={() => setShowOfflineModal(false)}
