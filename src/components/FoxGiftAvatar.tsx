@@ -83,7 +83,7 @@ export const FOX_GIFT_METADATA: Record<string, FoxGiftMetadata> = {
   gift_samurai_fox: {
     id: 'gift_samurai_fox',
     rarity: 'Epic',
-    starsEquivalent: 1000,
+    starsEquivalent: 750,
     totalSupply: '2,000',
     backdropName: 'Crimson Shogunate',
     gradientClass: 'from-red-500/35 via-rose-950/50 to-slate-950',
@@ -96,7 +96,7 @@ export const FOX_GIFT_METADATA: Record<string, FoxGiftMetadata> = {
   gift_pharaoh_fox: {
     id: 'gift_pharaoh_fox',
     rarity: 'Epic',
-    starsEquivalent: 1500,
+    starsEquivalent: 1000,
     totalSupply: '1,500',
     backdropName: 'Luxor Dynasty',
     gradientClass: 'from-yellow-500/35 via-amber-950/50 to-slate-950',
@@ -109,7 +109,7 @@ export const FOX_GIFT_METADATA: Record<string, FoxGiftMetadata> = {
   gift_astronaut_fox: {
     id: 'gift_astronaut_fox',
     rarity: 'Legendary',
-    starsEquivalent: 2500,
+    starsEquivalent: 1500,
     totalSupply: '1,000',
     backdropName: 'Deep Nebula',
     gradientClass: 'from-purple-500/35 via-violet-950/50 to-slate-950',
@@ -122,7 +122,7 @@ export const FOX_GIFT_METADATA: Record<string, FoxGiftMetadata> = {
   gift_royal_fox: {
     id: 'gift_royal_fox',
     rarity: 'Legendary',
-    starsEquivalent: 5000,
+    starsEquivalent: 2500,
     totalSupply: '750',
     backdropName: 'Imperial Velvet',
     gradientClass: 'from-amber-400/40 via-emerald-950/50 to-slate-950',
@@ -135,7 +135,7 @@ export const FOX_GIFT_METADATA: Record<string, FoxGiftMetadata> = {
   gift_diamond_fox: {
     id: 'gift_diamond_fox',
     rarity: 'Mythic',
-    starsEquivalent: 10000,
+    starsEquivalent: 5000,
     totalSupply: '500',
     backdropName: 'Pure Diamond Genesis',
     gradientClass: 'from-teal-400/40 via-cyan-900/50 to-slate-950',
@@ -148,7 +148,7 @@ export const FOX_GIFT_METADATA: Record<string, FoxGiftMetadata> = {
   gift_inferno_fox: {
     id: 'gift_inferno_fox',
     rarity: 'Legendary',
-    starsEquivalent: 25000,
+    starsEquivalent: 7500,
     totalSupply: '350',
     backdropName: 'Volcanic Magma Core',
     gradientClass: 'from-orange-500/45 via-red-950/60 to-slate-950',
@@ -161,7 +161,7 @@ export const FOX_GIFT_METADATA: Record<string, FoxGiftMetadata> = {
   gift_emerald_fox: {
     id: 'gift_emerald_fox',
     rarity: 'Legendary',
-    starsEquivalent: 50000,
+    starsEquivalent: 10000,
     totalSupply: '250',
     backdropName: 'Imperial Jade Palace',
     gradientClass: 'from-emerald-400/40 via-green-950/55 to-slate-950',
@@ -174,7 +174,7 @@ export const FOX_GIFT_METADATA: Record<string, FoxGiftMetadata> = {
   gift_nebula_fox: {
     id: 'gift_nebula_fox',
     rarity: 'Mythic',
-    starsEquivalent: 100000,
+    starsEquivalent: 15000,
     totalSupply: '150',
     backdropName: 'Andromeda Singularity',
     gradientClass: 'from-fuchsia-500/45 via-indigo-950/60 to-slate-950',
@@ -187,7 +187,7 @@ export const FOX_GIFT_METADATA: Record<string, FoxGiftMetadata> = {
   gift_celestial_fox: {
     id: 'gift_celestial_fox',
     rarity: 'Mythic',
-    starsEquivalent: 250000,
+    starsEquivalent: 25000,
     totalSupply: '77',
     backdropName: 'Solaris Pantheon',
     gradientClass: 'from-yellow-300/45 via-amber-900/60 to-slate-950',
@@ -201,24 +201,27 @@ export const FOX_GIFT_METADATA: Record<string, FoxGiftMetadata> = {
 
 export function getFoxGiftMetadata(giftId: string, basePrice?: number): FoxGiftMetadata {
   if (FOX_GIFT_METADATA[giftId]) {
+    if (basePrice && basePrice > 0) {
+      return { ...FOX_GIFT_METADATA[giftId], starsEquivalent: basePrice };
+    }
     return FOX_GIFT_METADATA[giftId];
   }
-  const price = basePrice || 10000;
+  const price = basePrice || 250;
   const rarity: FoxGiftMetadata['rarity'] =
-    price >= 50_000_000
+    price >= 15_000
       ? 'Mythic'
-      : price >= 500_000
+      : price >= 1_500
       ? 'Legendary'
-      : price >= 40_000
+      : price >= 500
       ? 'Epic'
-      : price >= 2_500
+      : price >= 100
       ? 'Rare'
       : 'Common';
 
   return {
     id: giftId,
     rarity,
-    starsEquivalent: Math.max(50, Math.floor(price / 50)),
+    starsEquivalent: Math.max(50, price),
     totalSupply: '1,000',
     backdropName: 'Custom Fox Edition',
     gradientClass: 'from-amber-500/35 via-orange-950/50 to-slate-950',

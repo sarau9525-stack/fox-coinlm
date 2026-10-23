@@ -19,6 +19,8 @@ import {
   pickLuckyWheelPrize,
   reconcileUserLevel,
   getUpgradeXpBonus,
+  sanitizeWheelPrize,
+  sanitizeUpgrade,
 } from './gameConfig.js';
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
@@ -518,12 +520,12 @@ class DatabaseStore {
       }
     }
 
-    return merged;
+    return merged.map(sanitizeUpgrade);
   }
 
   public getWheelPrizes(): LuckyWheelPrize[] {
     if (this.data.wheelPrizes && this.data.wheelPrizes.length > 0) {
-      return this.data.wheelPrizes;
+      return this.data.wheelPrizes.map(sanitizeWheelPrize);
     }
     return LUCKY_WHEEL_PRIZES;
   }
@@ -543,14 +545,19 @@ class DatabaseStore {
 
     const currentLvl = user.upgrades[upgradeId] || 0;
     const price = this.getUpgradePrice(upgrade, currentLvl);
+    const isGift = upgrade.category === 'gift';
 
-    if (user.balance < price) {
+    if (!isGift && user.balance < price) {
       return { success: false, error: 'Insufficient FOX balance' };
     }
 
-    // Atomic balance deduction + Upgrade XP progression toward next Fox Level
-    user.balance -= price;
-    user.totalEarned = Math.max(user.totalEarned || 0, user.balance + price) + getUpgradeXpBonus(price);
+    // Atomic balance deduction (for FOX upgrades) or Telegram Stars checkout (for Gifts) + Upgrade XP progression
+    if (!isGift) {
+      user.balance -= price;
+      user.totalEarned = Math.max(user.totalEarned || 0, user.balance + price) + getUpgradeXpBonus(price);
+    } else {
+      user.totalEarned = (user.totalEarned || 0) + getUpgradeXpBonus(upgrade.baseBenefit * 2);
+    }
     user.upgrades[upgradeId] = currentLvl + 1;
 
     if (upgrade.benefitType === 'max_energy') {
@@ -560,7 +567,15 @@ class DatabaseStore {
     // Recalculate derived benefits
     this.recalculatePlayerStats(user);
 
-    this.addAuditLog(user.id, 'upgrade', -price, user.balance, `Purchased ${upgrade.name} to level ${currentLvl + 1}`);
+    this.addAuditLog(
+      user.id,
+      'upgrade',
+      isGift ? 0 : -price,
+      user.balance,
+      isGift
+        ? `Purchased ${upgrade.name} (#${currentLvl + 1}) with ${price} Telegram Stars`
+        : `Purchased ${upgrade.name} to level ${currentLvl + 1}`
+    );
 
     // Check progression tasks
     const totalUpgradeCount = Object.values(user.upgrades).reduce((acc, lvl) => acc + lvl, 0);
@@ -876,7 +891,7 @@ class DatabaseStore {
     if (foxAmount > availableReferral) {
       return {
         success: false,
-        error: `Insufficient referral reward balance. Only FOX earned from friend invitations can be traded for USD (Available: ${availableReferral.toLocaleString()} FOX).`,
+        error: `Insufficient referral reward balance. Only FOX earned from friend invitations can be traded for USD (Available: ${availableReferral.toLocaleString('en-US')} FOX).`,
       };
     }
 

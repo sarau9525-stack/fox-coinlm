@@ -176,7 +176,7 @@ export const FriendsScreen: React.FC<FriendsScreenProps> = ({
       TelegramService.triggerHaptic('heavy');
       await api.claimMilestone();
       setClaimSuccess(
-        `Congratulations! Claimed ${(unclaimedMilestones * 10000).toLocaleString()} FOXCOIN ($${unclaimedMilestones * 10} USD)!`
+        `Congratulations! Claimed ${(unclaimedMilestones * 10000).toLocaleString('en-US')} FOXCOIN ($${unclaimedMilestones * 10} USD)!`
       );
       setTimeout(() => setClaimSuccess(null), 4000);
     } catch (err: any) {
@@ -208,7 +208,7 @@ export const FriendsScreen: React.FC<FriendsScreenProps> = ({
           <div className="text-right shrink-0">
             <div className="flex items-center justify-end gap-1 text-sm font-black text-emerald-400 tabular-nums">
               <img src={foxGoldCoinImg} alt="FOX" className="w-4 h-4" />
-              <span>+{activeTier.foxReward.toLocaleString()} FOX</span>
+              <span>+{activeTier.foxReward.toLocaleString('en-US')} FOX</span>
             </div>
             <div className="text-[11px] font-bold text-slate-400 tabular-nums">
               Worth ${activeTier.usdValue}.00 USD
@@ -339,7 +339,7 @@ export const FriendsScreen: React.FC<FriendsScreenProps> = ({
               <span>
                 {isClaiming
                   ? 'Claiming Bounty...'
-                  : `Claim ${(unclaimedMilestones * 10000).toLocaleString()} FOXCOIN ($${unclaimedMilestones * 10} USD)`}
+                  : `Claim ${(unclaimedMilestones * 10000).toLocaleString('en-US')} FOXCOIN ($${unclaimedMilestones * 10} USD)`}
               </span>
             </button>
           </div>
@@ -390,7 +390,7 @@ export const FriendsScreen: React.FC<FriendsScreenProps> = ({
             </span>
             <div className="text-lg font-black text-emerald-400 mt-0.5 flex items-center justify-center gap-1 tabular-nums">
               <img src={foxGoldCoinImg} alt="FOX" className="w-3.5 h-3.5" />
-              <span>{(user.referralEarnings || 0).toLocaleString()}</span>
+              <span>{(user.referralEarnings || 0).toLocaleString('en-US')}</span>
             </div>
           </div>
         </div>
@@ -468,7 +468,7 @@ export const FriendsScreen: React.FC<FriendsScreenProps> = ({
                     }`}
                   >
                     <img src={foxGoldCoinImg} alt="FOX" className="w-4 h-4" />
-                    <span>+{tier.foxReward.toLocaleString()}</span>
+                    <span>+{tier.foxReward.toLocaleString('en-US')}</span>
                   </div>
                   <span className="text-[10px] font-bold text-emerald-300/90 tabular-nums block">
                     ${tier.usdValue}.00 USD Value

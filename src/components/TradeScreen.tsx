@@ -120,7 +120,7 @@ export const TradeScreen: React.FC<TradeScreenProps> = ({
 
     if (parsedFox > availableReferralBalance) {
       alert(
-        `Insufficient referral reward balance! You can only trade FOX earned from friend invitations (Available: ${availableReferralBalance.toLocaleString()} FOX).`
+        `Insufficient referral reward balance! You can only trade FOX earned from friend invitations (Available: ${availableReferralBalance.toLocaleString('en-US')} FOX).`
       );
       return;
     }
@@ -249,7 +249,7 @@ export const TradeScreen: React.FC<TradeScreenProps> = ({
         <div className="flex items-baseline gap-2 mt-1">
           <div className="text-3xl font-black text-amber-300 tracking-tight flex items-center gap-2">
             <img src={foxGoldCoinImg} alt="FOX" className="w-7 h-7" />
-            <span>{availableReferralBalance.toLocaleString()}</span>
+            <span>{availableReferralBalance.toLocaleString('en-US')}</span>
           </div>
           <span className="text-xs font-bold text-slate-400">FOX</span>
         </div>
@@ -263,13 +263,13 @@ export const TradeScreen: React.FC<TradeScreenProps> = ({
           <div className="bg-slate-950/70 p-2 rounded-xl border border-slate-800">
             <span className="text-slate-400 text-[10px] block">Total Invite Earnings:</span>
             <span className="font-extrabold text-slate-200 mt-0.5 block">
-              {totalReferralEarnings.toLocaleString()} FOX
+              {totalReferralEarnings.toLocaleString('en-US')} FOX
             </span>
           </div>
           <div className="bg-slate-950/70 p-2 rounded-xl border border-slate-800">
             <span className="text-slate-400 text-[10px] block">Committed to Trades:</span>
             <span className="font-extrabold text-amber-400 mt-0.5 block">
-              {committedReferralFox.toLocaleString()} FOX
+              {committedReferralFox.toLocaleString('en-US')} FOX
             </span>
           </div>
         </div>
@@ -311,7 +311,7 @@ export const TradeScreen: React.FC<TradeScreenProps> = ({
             <span>You Convert (Referral FOX):</span>
             <div className="flex items-center gap-1">
               <span>Available:</span>
-              <strong className="text-amber-300 font-extrabold">{availableReferralBalance.toLocaleString()}</strong>
+              <strong className="text-amber-300 font-extrabold">{availableReferralBalance.toLocaleString('en-US')}</strong>
               <span>FOX</span>
             </div>
           </div>
@@ -441,7 +441,7 @@ export const TradeScreen: React.FC<TradeScreenProps> = ({
                           ${tr.usdAmount.toFixed(2)} USDT
                         </span>
                         <span className="text-[10px] text-slate-400">
-                          ({tr.foxAmount.toLocaleString()} FOX)
+                          ({tr.foxAmount.toLocaleString('en-US')} FOX)
                         </span>
                       </div>
                       <div className="text-[11px] text-slate-400 mt-0.5 flex items-center gap-1">
@@ -551,7 +551,7 @@ export const TradeScreen: React.FC<TradeScreenProps> = ({
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3 mb-3 text-xs">
               <div className="flex items-center justify-between mb-1 text-slate-400">
                 <span>Referral FOX Deducted:</span>
-                <span className="text-amber-300 font-black">{parsedFox.toLocaleString()} FOX</span>
+                <span className="text-amber-300 font-black">{parsedFox.toLocaleString('en-US')} FOX</span>
               </div>
               <div className="flex items-center justify-between text-slate-400">
                 <span>USDT Cash Settlement:</span>

@@ -100,7 +100,7 @@ export const MandatoryChannelGate: React.FC<MandatoryChannelGateProps> = ({
           colors: ['#F59E0B', '#10B981', '#F97316'],
         });
 
-        const bonusText = res.bonus ? ` +${res.bonus.toLocaleString()} FOX Bonus awarded!` : '';
+        const bonusText = res.bonus ? ` +${res.bonus.toLocaleString('en-US')} FOX Bonus awarded!` : '';
         setSuccessMsg(`All channels verified!${bonusText} Welcome to FOXCOIN!`);
 
         // Save local verification flag for the 2-channel mandatory gate

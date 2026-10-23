@@ -113,7 +113,7 @@ export const TasksScreen: React.FC<TasksScreenProps> = ({ user, tasks, onClaimTa
             <div>
               <div className="flex items-center gap-1.5">
                 <h4 className="font-black text-sm text-amber-200">
-                  Fox Lucky Wheel • گردونه شانس
+                  Fox Lucky Wheel
                 </h4>
                 {canSpinWheel && (
                   <span className="px-1.5 py-0.5 rounded bg-emerald-500 text-slate-950 font-black text-[9px] uppercase">
@@ -205,7 +205,7 @@ export const TasksScreen: React.FC<TasksScreenProps> = ({ user, tasks, onClaimTa
                     <div className="flex items-center gap-1.5 mt-1.5">
                       <img src={foxGoldCoinImg} alt="FOX" className="w-3.5 h-3.5" />
                       <span className="text-xs font-black text-amber-300">
-                        +{t.reward.toLocaleString()} FOX
+                        +{t.reward.toLocaleString('en-US')} FOX
                       </span>
                     </div>
                   </div>

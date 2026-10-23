@@ -1,5 +1,5 @@
 import { UserGameState, LeaderboardEntry, UpgradeDefinition, TaskDefinition, DailyRewardDay, TradeOrder, LuckyWheelPrize } from '../types/game.js';
-import { UPGRADES, PLAYER_LEVELS, TASKS, DAILY_REWARDS, GAME_CONSTANTS, LUCKY_WHEEL_PRIZES, pickLuckyWheelPrize, reconcileUserLevel, getUpgradeXpBonus } from '../../server/gameConfig.js';
+import { UPGRADES, PLAYER_LEVELS, TASKS, DAILY_REWARDS, GAME_CONSTANTS, LUCKY_WHEEL_PRIZES, pickLuckyWheelPrize, reconcileUserLevel, getUpgradeXpBonus, sanitizeWheelPrize, sanitizeUpgrade } from '../../server/gameConfig.js';
 
 function calculateUpgradePrice(upg: UpgradeDefinition, currentLevel: number): number {
   return Math.floor(upg.basePrice * Math.pow(upg.priceMultiplier, currentLevel));
@@ -22,8 +22,8 @@ const TOKEN_KEY = 'foxcoin_auth_token';
 const LOCAL_USER_KEY = 'foxcoin_local_user_v1';
 const LOCAL_TRADES_KEY = 'foxcoin_local_trades_v1';
 const LOCAL_BOT_KEY = 'foxcoin_local_bot_v1';
-const LOCAL_UPGRADES_KEY = 'foxcoin_local_upgrades_v2';
-const LOCAL_WHEEL_KEY = 'foxcoin_local_wheel_v2';
+const LOCAL_UPGRADES_KEY = 'foxcoin_local_upgrades_v4';
+const LOCAL_WHEEL_KEY = 'foxcoin_local_wheel_v4';
 
 export interface GameConfig {
   upgrades: UpgradeDefinition[];
@@ -257,13 +257,13 @@ class ApiService {
           const parsed = JSON.parse(raw) as UpgradeDefinition[];
           if (Array.isArray(parsed) && parsed.length > 0) {
             // Merge any newly added default UPGRADES not yet in parsed
-            const map = new Map(parsed.map((u) => [u.id, u]));
+            const map = new Map(parsed.map((u) => [u.id, sanitizeUpgrade(u)]));
             for (const def of UPGRADES) {
               if (!map.has(def.id)) {
-                parsed.push(def);
+                map.set(def.id, def);
               }
             }
-            return parsed;
+            return Array.from(map.values());
           }
         } catch {}
       }
@@ -277,7 +277,7 @@ class ApiService {
       if (raw) {
         try {
           const parsed = JSON.parse(raw) as LuckyWheelPrize[];
-          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+          if (Array.isArray(parsed) && parsed.length > 0) return parsed.map(sanitizeWheelPrize);
         } catch {}
       }
     }
@@ -286,7 +286,10 @@ class ApiService {
 
   public async getConfig(): Promise<GameConfig> {
     try {
-      return await this.request<GameConfig>('/api/game/config');
+      const cfg = await this.request<GameConfig>('/api/game/config');
+      if (cfg.upgrades) cfg.upgrades = cfg.upgrades.map(sanitizeUpgrade);
+      if (cfg.wheelPrizes) cfg.wheelPrizes = cfg.wheelPrizes.map(sanitizeWheelPrize);
+      return cfg;
     } catch (err) {
       if (this.isStaticFallbackError(err)) {
         const savedBot = typeof window !== 'undefined' ? localStorage.getItem(LOCAL_BOT_KEY) : null;
@@ -513,10 +516,15 @@ class ApiService {
         if (!upg) throw new Error('Upgrade not found');
         const currentLvl = user.upgrades[upgradeId] || 0;
         const price = calculateUpgradePrice(upg, currentLvl);
-        if (user.balance < price) throw new Error('Insufficient FOX balance');
+        const isGift = upg.category === 'gift';
+        if (!isGift && user.balance < price) throw new Error('Insufficient FOX balance');
 
-        user.balance -= price;
-        user.totalEarned = Math.max(user.totalEarned || 0, user.balance + price) + getUpgradeXpBonus(price);
+        if (!isGift) {
+          user.balance -= price;
+          user.totalEarned = Math.max(user.totalEarned || 0, user.balance + price) + getUpgradeXpBonus(price);
+        } else {
+          user.totalEarned = (user.totalEarned || 0) + getUpgradeXpBonus(upg.baseBenefit * 2);
+        }
         user.upgrades[upgradeId] = currentLvl + 1;
         if (upg.benefitType === 'tap_power') user.tapPower += upg.baseBenefit;
         if (upg.benefitType === 'max_energy') {
@@ -819,7 +827,7 @@ class ApiService {
         }
         if (params.foxAmount > availableReferralFox) {
           throw new Error(
-            `Only FOX earned from referrals can be traded. Available referral balance: ${availableReferralFox.toLocaleString()} FOX`
+            `Only FOX earned from referrals can be traded. Available referral balance: ${availableReferralFox.toLocaleString('en-US')} FOX`
           );
         }
 

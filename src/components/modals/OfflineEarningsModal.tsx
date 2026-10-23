@@ -70,11 +70,11 @@ export const OfflineEarningsModal: React.FC<OfflineEarningsModalProps> = ({
           <div className="flex items-center justify-center gap-2 mt-1">
             <img src={foxGoldCoinImg} alt="FOX" className="w-6 h-6 animate-bounce" />
             <span className="text-3xl font-black text-amber-300 tracking-tight">
-              +{amount.toLocaleString()}
+              +{amount.toLocaleString('en-US')}
             </span>
           </div>
           <span className="text-[11px] text-slate-400 mt-1 block">
-            Current Rate: +{profitPerHour.toLocaleString()} FOX/hr
+            Current Rate: +{profitPerHour.toLocaleString('en-US')} FOX/hr
           </span>
         </div>
 

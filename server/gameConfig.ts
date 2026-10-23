@@ -416,14 +416,14 @@ export const UPGRADES: UpgradeDefinition[] = [
     levelRequirement: 10,
   },
 
-  // Collectible Telegram Fox Gifts
+  // Collectible Telegram Fox Gifts (Priced in Telegram Stars ★)
   {
     id: 'gift_star_fox',
     name: 'Golden Star Fox',
     description: 'Classic Telegram Star Fox holding a glowing golden star gift box',
     category: 'gift',
-    basePrice: 500,
-    priceMultiplier: 1.35,
+    basePrice: 50,
+    priceMultiplier: 1.15,
     baseBenefit: 300,
     benefitType: 'profit_per_hour',
     icon: 'StarFox',
@@ -434,8 +434,8 @@ export const UPGRADES: UpgradeDefinition[] = [
     name: 'Sakura Kitsune Fox',
     description: 'Mystic cherry-blossom nine-tailed Kitsune fox wrapped in silk ribbons',
     category: 'gift',
-    basePrice: 2_500,
-    priceMultiplier: 1.38,
+    basePrice: 100,
+    priceMultiplier: 1.15,
     baseBenefit: 1_400,
     benefitType: 'profit_per_hour',
     icon: 'SakuraFox',
@@ -446,8 +446,8 @@ export const UPGRADES: UpgradeDefinition[] = [
     name: 'Cyberpunk Neon Fox',
     description: 'Holographic neon-visor cyber fox pulsing with TON synthwave energy',
     category: 'gift',
-    basePrice: 8_000,
-    priceMultiplier: 1.4,
+    basePrice: 250,
+    priceMultiplier: 1.15,
     baseBenefit: 4_200,
     benefitType: 'profit_per_hour',
     icon: 'CyberFox',
@@ -458,8 +458,8 @@ export const UPGRADES: UpgradeDefinition[] = [
     name: 'Captain Treasure Fox',
     description: 'Swashbuckling pirate captain fox guarding an overflowing chest of gold',
     category: 'gift',
-    basePrice: 18_000,
-    priceMultiplier: 1.42,
+    basePrice: 350,
+    priceMultiplier: 1.15,
     baseBenefit: 9_000,
     benefitType: 'profit_per_hour',
     icon: 'PirateFox',
@@ -470,8 +470,8 @@ export const UPGRADES: UpgradeDefinition[] = [
     name: 'Arctic Frost Crystal Fox',
     description: 'Glacial aurora fox sculpted from enchanted blue ice and frost crystals',
     category: 'gift',
-    basePrice: 40_000,
-    priceMultiplier: 1.45,
+    basePrice: 500,
+    priceMultiplier: 1.15,
     baseBenefit: 19_500,
     benefitType: 'profit_per_hour',
     icon: 'ArcticFox',
@@ -482,8 +482,8 @@ export const UPGRADES: UpgradeDefinition[] = [
     name: 'Shogun Katana Fox',
     description: 'Feudal crimson-and-gold armored samurai fox wielding twin flame katanas',
     category: 'gift',
-    basePrice: 95_000,
-    priceMultiplier: 1.45,
+    basePrice: 750,
+    priceMultiplier: 1.15,
     baseBenefit: 45_000,
     benefitType: 'profit_per_hour',
     icon: 'SamuraiFox',
@@ -494,8 +494,8 @@ export const UPGRADES: UpgradeDefinition[] = [
     name: 'Pharaoh Anubis Fox',
     description: 'Ancient royal golden pharaoh fox adorned with lapis lazuli and sun crown',
     category: 'gift',
-    basePrice: 220_000,
-    priceMultiplier: 1.48,
+    basePrice: 1_000,
+    priceMultiplier: 1.15,
     baseBenefit: 98_000,
     benefitType: 'profit_per_hour',
     icon: 'PharaohFox',
@@ -506,8 +506,8 @@ export const UPGRADES: UpgradeDefinition[] = [
     name: 'Cosmic Astronaut Fox',
     description: 'Zero-gravity lunar explorer fox in a gold-plated visor spacesuit',
     category: 'gift',
-    basePrice: 500_000,
-    priceMultiplier: 1.5,
+    basePrice: 1_500,
+    priceMultiplier: 1.15,
     baseBenefit: 210_000,
     benefitType: 'profit_per_hour',
     icon: 'AstronautFox',
@@ -518,8 +518,8 @@ export const UPGRADES: UpgradeDefinition[] = [
     name: 'Sovereign King Fox',
     description: 'Supreme monarch fox wearing a diamond-encrusted crown and royal mantle',
     category: 'gift',
-    basePrice: 1_200_000,
-    priceMultiplier: 1.52,
+    basePrice: 2_500,
+    priceMultiplier: 1.15,
     baseBenefit: 480_000,
     benefitType: 'profit_per_hour',
     icon: 'RoyalFox',
@@ -530,8 +530,8 @@ export const UPGRADES: UpgradeDefinition[] = [
     name: 'Mythic Diamond Whale Fox',
     description: 'Ultra-rare translucent blue diamond fox radiating pure blockchain luxury',
     category: 'gift',
-    basePrice: 3_000_000,
-    priceMultiplier: 1.55,
+    basePrice: 5_000,
+    priceMultiplier: 1.15,
     baseBenefit: 1_250_000,
     benefitType: 'profit_per_hour',
     icon: 'DiamondFox',
@@ -542,8 +542,8 @@ export const UPGRADES: UpgradeDefinition[] = [
     name: 'Volcanic Inferno Kitsune',
     description: 'Blazing magma nine-tailed spirit fox forged in volcanic fire',
     category: 'gift',
-    basePrice: 8_500_000,
-    priceMultiplier: 1.55,
+    basePrice: 7_500,
+    priceMultiplier: 1.15,
     baseBenefit: 3_400_000,
     benefitType: 'profit_per_hour',
     icon: 'InfernoFox',
@@ -554,8 +554,8 @@ export const UPGRADES: UpgradeDefinition[] = [
     name: 'Emerald Emperor Fox',
     description: 'Imperial jade and emerald guardian fox blessing vaults with eternal yield',
     category: 'gift',
-    basePrice: 25_000_000,
-    priceMultiplier: 1.56,
+    basePrice: 10_000,
+    priceMultiplier: 1.15,
     baseBenefit: 9_500_000,
     benefitType: 'profit_per_hour',
     icon: 'EmeraldFox',
@@ -566,8 +566,8 @@ export const UPGRADES: UpgradeDefinition[] = [
     name: 'Galactic Nebula Fox',
     description: 'Interdimensional cosmic fox woven from stardust and dark-matter rings',
     category: 'gift',
-    basePrice: 75_000_000,
-    priceMultiplier: 1.58,
+    basePrice: 15_000,
+    priceMultiplier: 1.15,
     baseBenefit: 28_000_000,
     benefitType: 'profit_per_hour',
     icon: 'NebulaFox',
@@ -578,8 +578,8 @@ export const UPGRADES: UpgradeDefinition[] = [
     name: 'Celestial Sun-God Fox',
     description: 'Supreme Level 10 radiant divine fox crowned with a golden solar halo',
     category: 'gift',
-    basePrice: 250_000_000,
-    priceMultiplier: 1.6,
+    basePrice: 25_000,
+    priceMultiplier: 1.15,
     baseBenefit: 95_000_000,
     benefitType: 'profit_per_hour',
     icon: 'CelestialFox',
@@ -704,7 +704,7 @@ export const LUCKY_WHEEL_PRIZES: LuckyWheelPrize[] = [
     id: 'wheel_1k',
     label: '+1,000 FOX Coins',
     shortLabel: '1,000',
-    persianLabel: '۱,۰۰۰ سکه روباه',
+    persianLabel: '1,000 FOX Coins',
     type: 'coins',
     amount: 1_000,
     weight: 28,
@@ -716,7 +716,7 @@ export const LUCKY_WHEEL_PRIZES: LuckyWheelPrize[] = [
     id: 'wheel_energy',
     label: 'Full Energy +1 Refill',
     shortLabel: 'ENERGY ⚡',
-    persianLabel: 'شارژ کامل انرژی +۱',
+    persianLabel: 'Full Energy +1',
     type: 'full_energy',
     amount: 1,
     weight: 16,
@@ -728,7 +728,7 @@ export const LUCKY_WHEEL_PRIZES: LuckyWheelPrize[] = [
     id: 'wheel_2500',
     label: '+2,500 FOX Coins',
     shortLabel: '2,500',
-    persianLabel: '۲,۵۰۰ سکه روباه',
+    persianLabel: '2,500 FOX Coins',
     type: 'coins',
     amount: 2_500,
     weight: 20,
@@ -740,7 +740,7 @@ export const LUCKY_WHEEL_PRIZES: LuckyWheelPrize[] = [
     id: 'wheel_turbo',
     label: '3x Turbo Frenzy (45s)',
     shortLabel: '3X TURBO 🔥',
-    persianLabel: 'توربو ۳ برابر (۴۵ ثانیه)',
+    persianLabel: '3x Turbo (45s)',
     type: 'turbo',
     amount: 45,
     weight: 12,
@@ -752,7 +752,7 @@ export const LUCKY_WHEEL_PRIZES: LuckyWheelPrize[] = [
     id: 'wheel_5k',
     label: '+5,000 FOX Coins',
     shortLabel: '5,000',
-    persianLabel: '۵,۰۰۰ سکه روباه',
+    persianLabel: '5,000 FOX Coins',
     type: 'coins',
     amount: 5_000,
     weight: 13,
@@ -764,7 +764,7 @@ export const LUCKY_WHEEL_PRIZES: LuckyWheelPrize[] = [
     id: 'wheel_15k',
     label: '+15,000 FOX Coins',
     shortLabel: '15,000',
-    persianLabel: '۱۵,۰۰۰ سکه روباه',
+    persianLabel: '15,000 FOX Coins',
     type: 'coins',
     amount: 15_000,
     weight: 6,
@@ -776,7 +776,7 @@ export const LUCKY_WHEEL_PRIZES: LuckyWheelPrize[] = [
     id: 'wheel_50k',
     label: '+50,000 FOX Coins',
     shortLabel: '50K 💎',
-    persianLabel: '۵۰,۰۰۰ سکه الماسی',
+    persianLabel: '50,000 Diamond FOX',
     type: 'coins',
     amount: 50_000,
     weight: 3.5,
@@ -788,7 +788,7 @@ export const LUCKY_WHEEL_PRIZES: LuckyWheelPrize[] = [
     id: 'wheel_100k',
     label: '+100,000 FOX JACKPOT',
     shortLabel: '100K 👑',
-    persianLabel: 'جک‌پات ۱۰۰,۰۰۰ سکه!',
+    persianLabel: '100,000 Jackpot!',
     type: 'coins',
     amount: 100_000,
     weight: 1.5,
@@ -836,7 +836,8 @@ export function reconcileUserLevel<
       const count = Math.max(0, Math.floor(Number(lvl) || 0));
       if (count <= 0) continue;
       const def = catalog.find((u) => u.id === upId) || UPGRADES.find((u) => u.id === upId);
-      const basePrice = def ? def.basePrice : 1_000;
+      const isGift = def?.category === 'gift';
+      const basePrice = def ? (isGift ? def.baseBenefit * 2 : def.basePrice) : 1_000;
       const mult = def ? Math.max(1.05, def.priceMultiplier) : 1.4;
       for (let i = 0; i < Math.min(count, 200); i++) {
         const stepPrice = Math.floor(basePrice * Math.pow(mult, i));
@@ -870,5 +871,82 @@ export function reconcileUserLevel<
 
   return user;
 }
+
+const PERSIAN_ARABIC_DIGIT_RE = /[۰-۹٠-٩]/g;
+const NON_LATIN_SCRIPT_RE = /[\u0600-\u06FF]/;
+
+export function toEnglishDigits(input: string | number | undefined | null): string {
+  if (input === undefined || input === null) return '';
+  return String(input)
+    .replace(PERSIAN_ARABIC_DIGIT_RE, (ch) => {
+      const code = ch.charCodeAt(0);
+      if (code >= 0x06f0 && code <= 0x06f9) return String(code - 0x06f0);
+      if (code >= 0x0660 && code <= 0x0669) return String(code - 0x0660);
+      return ch;
+    })
+    .replace(/٬/g, ',');
+}
+
+export function sanitizeWheelPrize(prize: LuckyWheelPrize): LuckyWheelPrize {
+  const defaultMatch = LUCKY_WHEEL_PRIZES.find((d) => d.id === prize.id);
+  const amt = Number(prize.amount) || defaultMatch?.amount || 1000;
+
+  let shortLabel = toEnglishDigits(prize.shortLabel);
+  let label = toEnglishDigits(prize.label);
+  let persianLabel = toEnglishDigits(prize.persianLabel);
+
+  if (NON_LATIN_SCRIPT_RE.test(shortLabel)) {
+    if (defaultMatch && defaultMatch.amount === amt) {
+      shortLabel = defaultMatch.shortLabel;
+    } else if (prize.type === 'coins') {
+      shortLabel = amt >= 50000 ? `${Math.round(amt / 1000)}K` : amt.toLocaleString('en-US');
+    } else if (prize.type === 'full_energy') {
+      shortLabel = 'ENERGY ⚡';
+    } else {
+      shortLabel = '3X TURBO 🔥';
+    }
+  }
+
+  if (NON_LATIN_SCRIPT_RE.test(label)) {
+    if (defaultMatch && defaultMatch.amount === amt) {
+      label = defaultMatch.label;
+    } else if (prize.type === 'coins') {
+      label = `+${amt.toLocaleString('en-US')} FOX Coins`;
+    } else if (prize.type === 'full_energy') {
+      label = `Full Energy +${amt} Refill`;
+    } else {
+      label = `3x Turbo Frenzy (${amt}s)`;
+    }
+  }
+
+  if (NON_LATIN_SCRIPT_RE.test(persianLabel)) {
+    persianLabel = defaultMatch ? defaultMatch.persianLabel : label;
+  }
+
+  return {
+    ...prize,
+    shortLabel,
+    label,
+    persianLabel,
+  };
+}
+
+export function sanitizeUpgrade(upg: UpgradeDefinition): UpgradeDefinition {
+  const defaultMatch = UPGRADES.find((d) => d.id === upg.id);
+  let name = toEnglishDigits(upg.name);
+  let description = toEnglishDigits(upg.description);
+
+  if (defaultMatch) {
+    if (NON_LATIN_SCRIPT_RE.test(name)) name = defaultMatch.name;
+    if (NON_LATIN_SCRIPT_RE.test(description)) description = defaultMatch.description;
+  }
+
+  return {
+    ...upg,
+    name,
+    description,
+  };
+}
+
 
 

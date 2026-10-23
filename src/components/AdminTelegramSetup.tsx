@@ -216,10 +216,10 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
       }
       const actionLabel =
         operation === 'add'
-          ? `Added +${amt.toLocaleString()} FOX to`
+          ? `Added +${amt.toLocaleString('en-US')} FOX to`
           : operation === 'deduct'
-            ? `Deducted -${amt.toLocaleString()} FOX from`
-            : `Set balance to ${amt.toLocaleString()} FOX for`;
+            ? `Deducted -${amt.toLocaleString('en-US')} FOX from`
+            : `Set balance to ${amt.toLocaleString('en-US')} FOX for`;
       const typeLabel = (customType || adjustBalanceType) === 'referral' ? '(Referral Balance)' : '(Main Balance)';
 
       setUserFeedback({
@@ -476,7 +476,7 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
   const handleSaveCardForm = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newCardName.trim()) {
-      setAdminFeedback({ type: 'error', message: 'لطفاً نام کارت را وارد کنید (Card name required)' });
+      setAdminFeedback({ type: 'error', message: 'Please enter a card name' });
       return;
     }
 
@@ -490,7 +490,7 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
     const cardObj: UpgradeDefinition = {
       id: cardId,
       name: newCardName.trim(),
-      description: newCardDesc.trim() || `افزایش سود ساعتی +${Number(newCardBenefit || 1000).toLocaleString()}`,
+      description: newCardDesc.trim() || `Boosts hourly profit by +${Number(newCardBenefit || 1000).toLocaleString('en-US')} FOX/hr`,
       category: newCardCategory,
       basePrice: Math.max(1, Math.floor(Number(newCardBasePrice) || 1000)),
       priceMultiplier: Math.max(1.05, Number(newCardMultiplier) || 1.4),
@@ -511,8 +511,8 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
       setAdminFeedback({
         type: 'success',
         message: editingCardId
-          ? `✅ کارت «${cardObj.name}» با موفقیت ویرایش شد!`
-          : `✅ کارت جدید «${cardObj.name}» با موفقیت به بازی اضافه شد!`,
+          ? `✅ Card "${cardObj.name}" updated successfully!`
+          : `✅ New card "${cardObj.name}" added to the game!`,
       });
       setEditingCardId(null);
       setNewCardName('');
@@ -523,7 +523,7 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
         if (me.user && onUserUpdated) onUserUpdated(me.user);
       } catch {}
     } catch (err: any) {
-      setAdminFeedback({ type: 'error', message: err.message || 'خطا در ذخیره کارت' });
+      setAdminFeedback({ type: 'error', message: err.message || 'Failed to save card' });
     } finally {
       setIsSavingAdminData(false);
     }
@@ -552,10 +552,10 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
       notifyConfigUpdate(res.upgrades, adminWheelPrizes);
       setAdminFeedback({
         type: 'success',
-        message: `🗑️ کارت «${card.name}» حذف شد.`,
+        message: `🗑️ Card "${card.name}" deleted.`,
       });
     } catch (err: any) {
-      setAdminFeedback({ type: 'error', message: err.message || 'خطا در حذف کارت' });
+      setAdminFeedback({ type: 'error', message: err.message || 'Failed to delete card' });
     } finally {
       setIsSavingAdminData(false);
     }
@@ -572,14 +572,14 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
       notifyConfigUpdate(res.upgrades, adminWheelPrizes);
       setAdminFeedback({
         type: 'success',
-        message: `🦊 قیمت و پرافیت گیفت «${gift.name}» ذخیره شد! (${gift.basePrice.toLocaleString()} FOX | +${gift.baseBenefit.toLocaleString()}/hr)`,
+        message: `⭐ Gift "${gift.name}" saved! (★ ${gift.basePrice.toLocaleString('en-US')} Stars | +${gift.baseBenefit.toLocaleString('en-US')}/hr)`,
       });
       try {
         const me = await api.getMe();
         if (me.user && onUserUpdated) onUserUpdated(me.user);
       } catch {}
     } catch (err: any) {
-      setAdminFeedback({ type: 'error', message: err.message || 'خطا در ذخیره قیمت گیفت' });
+      setAdminFeedback({ type: 'error', message: err.message || 'Failed to save gift price' });
     } finally {
       setIsSavingAdminData(false);
     }
@@ -602,10 +602,10 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
       notifyConfigUpdate(adminUpgrades, res.wheelPrizes);
       setAdminFeedback({
         type: 'success',
-        message: '🎰 مقادیر و جوایز گردونه شانس با موفقیت ذخیره و بروزرسانی شد!',
+        message: '🎰 Lucky Wheel prizes and odds saved and updated!',
       });
     } catch (err: any) {
-      setAdminFeedback({ type: 'error', message: err.message || 'خطا در ذخیره مقادیر گردونه' });
+      setAdminFeedback({ type: 'error', message: err.message || 'Failed to save Lucky Wheel prizes' });
     } finally {
       setIsSavingAdminData(false);
     }
@@ -618,10 +618,10 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
       notifyConfigUpdate(adminUpgrades, res.wheelPrizes);
       setAdminFeedback({
         type: 'success',
-        message: '🔄 مقادیر گردونه به حالت پیش‌فرض بازنشانی شد.',
+        message: '🔄 Lucky Wheel prizes reset to defaults.',
       });
     } catch (err: any) {
-      setAdminFeedback({ type: 'error', message: err.message || 'خطا در بازنشانی گردونه' });
+      setAdminFeedback({ type: 'error', message: err.message || 'Failed to reset Lucky Wheel' });
     } finally {
       setIsSavingAdminData(false);
     }
@@ -635,7 +635,7 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
         if (field === 'amount' || field === 'type') {
           const amt = Number(updated.amount) || 1;
           if (updated.type === 'coins') {
-            updated.label = `+${amt.toLocaleString()} FOX Coins`;
+            updated.label = `+${amt.toLocaleString('en-US')} FOX Coins`;
           } else if (updated.type === 'full_energy') {
             updated.label = `Full Energy +${amt} Refill`;
           } else if (updated.type === 'turbo') {
@@ -749,7 +749,7 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                 }`}
               >
                 <Users className="w-3.5 h-3.5" />
-                <span>کاربران ({allUsers.length})</span>
+                <span>Users ({allUsers.length})</span>
               </button>
               <button
                 type="button"
@@ -764,7 +764,7 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                 }`}
               >
                 <Layers className="w-3.5 h-3.5" />
-                <span>کارت‌ها ({adminUpgrades.filter((u) => u.category !== 'gift').length})</span>
+                <span>Cards ({adminUpgrades.filter((u) => u.category !== 'gift').length})</span>
               </button>
               <button
                 type="button"
@@ -779,7 +779,7 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                 }`}
               >
                 <Gift className="w-3.5 h-3.5" />
-                <span>قیمت گیفت‌ها</span>
+                <span>Gift Stars</span>
               </button>
               <button
                 type="button"
@@ -794,7 +794,7 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                 }`}
               >
                 <Compass className="w-3.5 h-3.5" />
-                <span>گردونه شانس</span>
+                <span>Lucky Wheel</span>
               </button>
               <button
                 type="button"
@@ -809,7 +809,7 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                 }`}
               >
                 <Bot className="w-3.5 h-3.5" />
-                <span>نصب بات</span>
+                <span>Bot Setup</span>
               </button>
               <button
                 type="button"
@@ -824,7 +824,7 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                 }`}
               >
                 <Github className="w-3.5 h-3.5" />
-                <span>گیت‌هاب</span>
+                <span>GitHub</span>
               </button>
             </div>
 
@@ -858,7 +858,7 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                   <div className="p-2.5 rounded-2xl bg-slate-900/90 border border-slate-800 text-center">
                     <span className="text-[10px] text-slate-400 block">Total FOX Supply</span>
                     <span className="text-xs font-black text-amber-400">
-                      {Math.floor(allUsers.reduce((acc, u) => acc + (u.balance || 0), 0)).toLocaleString()}
+                      {Math.floor(allUsers.reduce((acc, u) => acc + (u.balance || 0), 0)).toLocaleString('en-US')}
                     </span>
                   </div>
                   <button
@@ -910,10 +910,10 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                         </div>
                         <div className="text-right">
                           <div className="text-xs font-black text-amber-300">
-                            {Math.floor(targetUser.balance).toLocaleString()} FOX
+                            {Math.floor(targetUser.balance).toLocaleString('en-US')} FOX
                           </div>
                           <div className="text-[10px] text-emerald-400 font-bold">
-                            Ref: {Math.floor(targetUser.referralEarnings || 0).toLocaleString()} FOX
+                            Ref: {Math.floor(targetUser.referralEarnings || 0).toLocaleString('en-US')} FOX
                           </div>
                         </div>
                       </div>
@@ -1109,10 +1109,10 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
 
                           <div className="text-right shrink-0">
                             <div className="text-xs font-black text-amber-400">
-                              {Math.floor(u.balance).toLocaleString()} FOX
+                              {Math.floor(u.balance).toLocaleString('en-US')} FOX
                             </div>
                             <div className="text-[10px] text-emerald-400 font-semibold">
-                              Ref: {Math.floor(u.referralEarnings || 0).toLocaleString()}
+                              Ref: {Math.floor(u.referralEarnings || 0).toLocaleString('en-US')}
                             </div>
                           </div>
                         </div>
@@ -1133,10 +1133,10 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                   <div className="flex items-center justify-between border-b border-slate-800 pb-2">
                     <div>
                       <span className="text-[10px] uppercase tracking-wider text-amber-400 font-black block">
-                        {editingCardId ? '✏️ ویرایش کارت • Edit Upgrade Card' : '➕ افزودن کارت پرافیت جدید • Add New Card'}
+                        {editingCardId ? '✏️ Edit Upgrade Card' : '➕ Add New Profit Card'}
                       </span>
                       <h4 className="font-black text-xs text-white mt-0.5">
-                        {editingCardId ? `Editing: ${newCardName}` : 'کارت جدید برای بالا بردن پرافیت ساعتی یا تپ اضافه کنید'}
+                        {editingCardId ? `Editing: ${newCardName}` : 'Create a new card to boost hourly profit or tap power'}
                       </h4>
                     </div>
                     {editingCardId && (
@@ -1149,7 +1149,7 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                         }}
                         className="px-2 py-1 rounded-lg bg-slate-800 text-slate-300 text-[10px] font-bold hover:text-white cursor-pointer"
                       >
-                        لغو ویرایش
+                        Cancel Edit
                       </button>
                     )}
                   </div>
@@ -1157,12 +1157,12 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                   <div className="grid grid-cols-3 gap-2">
                     <div className="col-span-2">
                       <label className="text-[10px] text-slate-400 font-bold block mb-1">
-                        نام کارت (Card Name)
+                        Card Name
                       </label>
                       <input
                         type="text"
                         required
-                        placeholder="مثلاً: Fox Quantum Mine"
+                        placeholder="e.g. Fox Quantum Mine"
                         value={newCardName}
                         onChange={(e) => setNewCardName(e.target.value)}
                         className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-400"
@@ -1170,7 +1170,7 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                     </div>
                     <div>
                       <label className="text-[10px] text-slate-400 font-bold block mb-1">
-                        آیکون / ایموجی
+                        Icon / Emoji
                       </label>
                       <input
                         type="text"
@@ -1184,7 +1184,7 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
 
                   {/* Quick Emoji Picker */}
                   <div className="flex items-center gap-1 flex-wrap">
-                    <span className="text-[9px] text-slate-400 mr-1">آیکون سریع:</span>
+                    <span className="text-[9px] text-slate-400 mr-1">Quick Icons:</span>
                     {['🚀', '💎', '👑', '⚡', '🔥', '🏦', '🏛️', '🪐', '🌌', '🤖', '💻', '🌋', '🐳', '🎮'].map((emo) => (
                       <button
                         key={emo}
@@ -1203,11 +1203,11 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
 
                   <div>
                     <label className="text-[10px] text-slate-400 font-bold block mb-1">
-                      توضیحات کارت (Description)
+                      Description
                     </label>
                     <input
                       type="text"
-                      placeholder="توضیح کوتاه درباره کارت..."
+                      placeholder="Short description of the card..."
                       value={newCardDesc}
                       onChange={(e) => setNewCardDesc(e.target.value)}
                       className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-400"
@@ -1217,31 +1217,31 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                   <div className="grid grid-cols-2 gap-2">
                     <div>
                       <label className="text-[10px] text-slate-400 font-bold block mb-1">
-                        دسته‌بندی (Category)
+                        Category
                       </label>
                       <select
                         value={newCardCategory}
                         onChange={(e) => setNewCardCategory(e.target.value as any)}
                         className="w-full bg-slate-950 border border-slate-700 rounded-xl px-2.5 py-2 text-xs text-white focus:outline-none focus:border-amber-400"
                       >
-                        <option value="passive">Enterprises (پرافیت ساعتی)</option>
-                        <option value="special">Clan & VIP (کارت‌های ویژه)</option>
-                        <option value="tap">Tapping (قدرت تپ و انرژی)</option>
+                        <option value="passive">Enterprises (Hourly Profit)</option>
+                        <option value="special">Clan & VIP (Special Cards)</option>
+                        <option value="tap">Tapping (Tap Power & Energy)</option>
                       </select>
                     </div>
                     <div>
                       <label className="text-[10px] text-slate-400 font-bold block mb-1">
-                        نوع سود (Benefit Type)
+                        Benefit Type
                       </label>
                       <select
                         value={newCardBenefitType}
                         onChange={(e) => setNewCardBenefitType(e.target.value as any)}
                         className="w-full bg-slate-950 border border-slate-700 rounded-xl px-2.5 py-2 text-xs text-white focus:outline-none focus:border-amber-400"
                       >
-                        <option value="profit_per_hour">پرافیت ساعتی (FOX/hr)</option>
-                        <option value="tap_power">قدرت هر تپ (+Tap)</option>
-                        <option value="max_energy">ظرفیت انرژی (+Max Energy)</option>
-                        <option value="energy_regen">سرعت شارژ انرژی (+Regen/s)</option>
+                        <option value="profit_per_hour">Hourly Profit (FOX/hr)</option>
+                        <option value="tap_power">Tap Power (+Tap)</option>
+                        <option value="max_energy">Max Energy (+Max Energy)</option>
+                        <option value="energy_regen">Energy Regen (+Regen/s)</option>
                       </select>
                     </div>
                   </div>
@@ -1249,7 +1249,7 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                   <div className="grid grid-cols-2 gap-2">
                     <div>
                       <label className="text-[10px] text-amber-300 font-bold block mb-1">
-                        قیمت پایه خرید (Base Price FOX)
+                        Base Price (FOX)
                       </label>
                       <input
                         type="number"
@@ -1262,7 +1262,7 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                     </div>
                     <div>
                       <label className="text-[10px] text-emerald-300 font-bold block mb-1">
-                        مقدار پرافیت / سود (Benefit)
+                        Benefit Amount
                       </label>
                       <input
                         type="number"
@@ -1278,7 +1278,7 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                   <div className="grid grid-cols-2 gap-2">
                     <div>
                       <label className="text-[10px] text-slate-400 font-bold block mb-1">
-                        لول مورد نیاز بازیکن (Level 1 - 10)
+                        Required Player Level (1 - 10)
                       </label>
                       <input
                         type="number"
@@ -1292,7 +1292,7 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                     </div>
                     <div>
                       <label className="text-[10px] text-slate-400 font-bold block mb-1">
-                        ضریب افزایش قیمت هر لول (مثلاً 1.45)
+                        Price Multiplier per Level (e.g. 1.45)
                       </label>
                       <input
                         type="number"
@@ -1315,10 +1315,10 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                     <Save className="w-4 h-4" />
                     <span>
                       {isSavingAdminData
-                        ? 'در حال ذخیره...'
+                        ? 'Saving...'
                         : editingCardId
-                        ? 'ذخیره تغییرات کارت (Update Card)'
-                        : 'افزودن کارت به بازی (Add Card)'}
+                        ? 'Update Card'
+                        : 'Add Card to Game'}
                     </span>
                   </button>
                 </form>
@@ -1337,7 +1337,7 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                       }`}
                     >
                       {cat === 'all'
-                        ? 'همه کارت‌ها'
+                        ? 'All Cards'
                         : cat === 'passive'
                         ? 'Enterprises'
                         : cat === 'special'
@@ -1370,10 +1370,10 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                           </div>
                           <div className="flex items-center gap-3 mt-1 text-[10px]">
                             <span className="text-amber-400 font-bold">
-                              قیمت: {card.basePrice.toLocaleString()} FOX
+                              Price: {card.basePrice.toLocaleString('en-US')} FOX
                             </span>
                             <span className="text-emerald-400 font-bold">
-                              سود: +{card.baseBenefit.toLocaleString()}{' '}
+                              Yield: +{card.baseBenefit.toLocaleString('en-US')}{' '}
                               {card.benefitType === 'profit_per_hour' ? 'FOX/hr' : card.benefitType}
                             </span>
                           </div>
@@ -1384,7 +1384,7 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                             type="button"
                             onClick={() => handleEditCardClick(card)}
                             className="p-2 rounded-xl bg-amber-500/15 hover:bg-amber-500/30 border border-amber-500/30 text-amber-300 transition cursor-pointer"
-                            title="ویرایش کارت"
+                            title="Edit Card"
                           >
                             <Edit3 className="w-3.5 h-3.5" />
                           </button>
@@ -1392,7 +1392,7 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                             type="button"
                             onClick={() => handleDeleteCardClick(card)}
                             className="p-2 rounded-xl bg-rose-500/15 hover:bg-rose-500/30 border border-rose-500/30 text-rose-300 transition cursor-pointer"
-                            title="حذف کارت"
+                            title="Delete Card"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
@@ -1409,10 +1409,10 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                 <div className="p-3.5 rounded-2xl bg-gradient-to-r from-amber-500/15 via-purple-500/10 to-slate-900 border border-amber-500/30">
                   <h4 className="font-black text-xs text-amber-300 flex items-center gap-1.5">
                     <Gift className="w-4 h-4" />
-                    <span>مدیریت قیمت و پرافیت گیفت‌های تلگرامی روباه</span>
+                    <span>Telegram Fox Gifts Pricing (Telegram Stars ★) & Yield</span>
                   </h4>
                   <p className="text-[11px] text-slate-300 mt-1 leading-relaxed">
-                    در این بخش می‌توانید قیمت پایه خرید (FOX)، سود ساعتی (FOX/hr) و لول مورد نیاز هر یک از گیفت‌های روباه را تغییر داده و ذخیره کنید.
+                    Customize the Telegram Stars cost (★ Stars), hourly mining yield (FOX/hr), and required player level for each collectible Fox Gift.
                   </p>
                 </div>
 
@@ -1440,14 +1440,14 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                             className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-black text-[11px] flex items-center gap-1 shadow transition active:scale-95 cursor-pointer shrink-0"
                           >
                             <Save className="w-3.5 h-3.5" />
-                            <span>ذخیره</span>
+                            <span>Save</span>
                           </button>
                         </div>
 
                         <div className="grid grid-cols-3 gap-2">
                           <div>
-                            <label className="text-[9px] text-amber-300 font-bold block mb-1">
-                              قیمت گیفت (FOX)
+                            <label className="text-[9px] text-yellow-300 font-bold block mb-1">
+                              Cost (★ Telegram Stars)
                             </label>
                             <input
                               type="number"
@@ -1456,12 +1456,12 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                               onChange={(e) =>
                                 updateLocalGiftField(gift.id, 'basePrice', Math.max(1, Number(e.target.value) || 0))
                               }
-                              className="w-full bg-slate-950 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-amber-300 font-mono font-bold focus:outline-none focus:border-amber-400"
+                              className="w-full bg-slate-950 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-yellow-300 font-mono font-bold focus:outline-none focus:border-amber-400"
                             />
                           </div>
                           <div>
                             <label className="text-[9px] text-emerald-300 font-bold block mb-1">
-                              پرافیت ساعتی (FOX/hr)
+                              Hourly Yield (FOX/hr)
                             </label>
                             <input
                               type="number"
@@ -1475,7 +1475,7 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                           </div>
                           <div>
                             <label className="text-[9px] text-slate-400 font-bold block mb-1">
-                              لول مورد نیاز (1-10)
+                              Req. Level (1-10)
                             </label>
                             <input
                               type="number"
@@ -1506,10 +1506,10 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                   <div>
                     <h4 className="font-black text-xs text-amber-300 flex items-center gap-1.5">
                       <Compass className="w-4 h-4" />
-                      <span>تغییر مقادیر و جوایز گردونه شانس (Lucky Wheel)</span>
+                      <span>Lucky Wheel Prizes & Odds Configuration</span>
                     </h4>
                     <p className="text-[10px] text-slate-300 mt-0.5">
-                      مقدار سکه، نوع جایزه، متن روی گردونه و ضریب شانس هر یک از ۸ خانه گردونه را ویرایش کنید.
+                      Customize the reward amount, prize type, wheel slice labels, and drop probability weight for all 8 slices.
                     </p>
                   </div>
                   <button
@@ -1517,7 +1517,7 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                     onClick={handleResetWheelDefault}
                     className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-bold shrink-0 cursor-pointer"
                   >
-                    پیش‌فرض
+                    Reset Defaults
                   </button>
                 </div>
 
@@ -1541,31 +1541,31 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                                   #{idx + 1}
                                 </span>
                                 <span className="font-black text-xs text-white">{slice.shortLabel}</span>
-                                <span className="text-[10px] text-amber-300 font-bold">({slice.persianLabel})</span>
+                                <span className="text-[10px] text-amber-300 font-bold">({slice.label})</span>
                               </div>
                               <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
-                                شانس: {chancePct}%
+                                Chance: {chancePct}%
                               </span>
                             </div>
 
                             <div className="grid grid-cols-3 gap-2">
                               <div>
                                 <label className="text-[9px] text-slate-400 font-bold block mb-1">
-                                  نوع جایزه (Type)
+                                  Reward Type
                                 </label>
                                 <select
                                   value={slice.type}
                                   onChange={(e) => updateWheelPrizeField(idx, 'type', e.target.value)}
                                   className="w-full bg-slate-950 border border-slate-700 rounded-xl px-2 py-1.5 text-[11px] text-white focus:outline-none focus:border-amber-400"
                                 >
-                                  <option value="coins">🪙 سکه (Coins)</option>
-                                  <option value="full_energy">⚡ شارژ انرژی</option>
-                                  <option value="turbo">🔥 توربو (ثانیه)</option>
+                                  <option value="coins">🪙 FOX Coins</option>
+                                  <option value="full_energy">⚡ Full Energy</option>
+                                  <option value="turbo">🔥 Turbo (Sec)</option>
                                 </select>
                               </div>
                               <div>
                                 <label className="text-[9px] text-amber-300 font-bold block mb-1">
-                                  مقدار جایزه (Amount)
+                                  Amount
                                 </label>
                                 <input
                                   type="number"
@@ -1579,7 +1579,7 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                               </div>
                               <div>
                                 <label className="text-[9px] text-emerald-300 font-bold block mb-1">
-                                  ضریب شانس (Weight)
+                                  Drop Weight
                                 </label>
                                 <input
                                   type="number"
@@ -1597,7 +1597,7 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                             <div className="grid grid-cols-2 gap-2">
                               <div>
                                 <label className="text-[9px] text-slate-400 font-bold block mb-1">
-                                  متن روی گردونه (Short Label)
+                                  Wheel Slice Text (Short Label)
                                 </label>
                                 <input
                                   type="text"
@@ -1608,12 +1608,15 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                               </div>
                               <div>
                                 <label className="text-[9px] text-slate-400 font-bold block mb-1">
-                                  عنوان فارسی (Persian Label)
+                                  Full Reward Title
                                 </label>
                                 <input
                                   type="text"
-                                  value={slice.persianLabel}
-                                  onChange={(e) => updateWheelPrizeField(idx, 'persianLabel', e.target.value)}
+                                  value={slice.label}
+                                  onChange={(e) => {
+                                    updateWheelPrizeField(idx, 'label', e.target.value);
+                                    updateWheelPrizeField(idx, 'persianLabel', e.target.value);
+                                  }}
                                   className="w-full bg-slate-950 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-amber-400"
                                 />
                               </div>
@@ -1632,7 +1635,7 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                   className="w-full py-3 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-black text-xs rounded-xl shadow-lg shadow-amber-500/20 flex items-center justify-center gap-2 transition active:scale-95 cursor-pointer"
                 >
                   <Save className="w-4 h-4" />
-                  <span>{isSavingAdminData ? 'در حال ذخیره...' : 'ذخیره مقادیر گردونه شانس (Save Wheel Prizes)'}</span>
+                  <span>{isSavingAdminData ? 'Saving...' : 'Save Lucky Wheel Prizes'}</span>
                 </button>
               </div>
             )}

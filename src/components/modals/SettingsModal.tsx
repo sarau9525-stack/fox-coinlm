@@ -201,7 +201,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </div>
                 <div className="flex justify-between py-1">
                   <span className="text-slate-400">Total Coins Mined</span>
-                  <span className="text-slate-200 font-bold">{Math.floor(user.totalEarned).toLocaleString()} FOX</span>
+                  <span className="text-slate-200 font-bold">{Math.floor(user.totalEarned).toLocaleString('en-US')} FOX</span>
                 </div>
               </div>
 

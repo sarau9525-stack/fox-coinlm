@@ -47,12 +47,79 @@ export default function App() {
     return typeof window !== 'undefined' ? localStorage.getItem('fox_equipped_gift') : null;
   });
 
-  const handleEquipGift = (giftId: string) => {
+  // Memoized Game State Updater:
+  // Avoids creating new state references when game values haven't meaningfully changed
+  // and preserves nested object references (upgrades, boosters, completedTasks) when unchanged.
+  const updateGameState = useCallback(
+    (updater: UserGameState | null | ((prev: UserGameState | null) => UserGameState | null)) => {
+      setUser((prev) => {
+        const rawNext = typeof updater === 'function' ? updater(prev) : updater;
+        if (!rawNext) return null;
+
+        const reconciled = reconcileUserLevel(rawNext);
+        if (!prev) return reconciled;
+
+        // Preserve nested object references if identical in content
+        if (
+          prev.boosters !== reconciled.boosters &&
+          prev.boosters.fullEnergyRemaining === reconciled.boosters.fullEnergyRemaining &&
+          prev.boosters.nextFullEnergyAt === reconciled.boosters.nextFullEnergyAt &&
+          prev.boosters.turboActiveUntil === reconciled.boosters.turboActiveUntil &&
+          prev.boosters.nextTurboAt === reconciled.boosters.nextTurboAt &&
+          prev.boosters.lastWheelSpinTimestamp === reconciled.boosters.lastWheelSpinTimestamp
+        ) {
+          reconciled.boosters = prev.boosters;
+        }
+
+        // Bail out of re-render if no meaningful state fields changed
+        if (
+          prev.id === reconciled.id &&
+          prev.balance === reconciled.balance &&
+          prev.totalEarned === reconciled.totalEarned &&
+          prev.totalTaps === reconciled.totalTaps &&
+          prev.energy === reconciled.energy &&
+          prev.maxEnergy === reconciled.maxEnergy &&
+          prev.level === reconciled.level &&
+          prev.levelName === reconciled.levelName &&
+          prev.tapPower === reconciled.tapPower &&
+          prev.profitPerHour === reconciled.profitPerHour &&
+          prev.energyRegenRate === reconciled.energyRegenRate &&
+          prev.canClaimDaily === reconciled.canClaimDaily &&
+          prev.unclaimedPassive === reconciled.unclaimedPassive &&
+          prev.isAdmin === reconciled.isAdmin &&
+          prev.isGuest === reconciled.isGuest &&
+          prev.boosters === reconciled.boosters &&
+          prev.upgrades === reconciled.upgrades &&
+          prev.tasks === reconciled.tasks
+        ) {
+          return prev;
+        }
+
+        return reconciled;
+      });
+    },
+    []
+  );
+
+  const handleEquipGift = useCallback((giftId: string) => {
     setEquippedGiftId(giftId);
     if (typeof window !== 'undefined') {
       localStorage.setItem('fox_equipped_gift', giftId);
     }
-  };
+  }, []);
+
+  // Stable callbacks for Header, TapScreen & Navigation to prevent child re-renders
+  const handleOpenSettings = useCallback(() => setShowSettingsModal(true), []);
+  const handleOpenBoost = useCallback(() => setShowBoostModal(true), []);
+  const handleOpenDaily = useCallback(() => setShowDailyModal(true), []);
+  const handleOpenWheel = useCallback(() => setShowWheelModal(true), []);
+  const handleOpenGifts = useCallback(() => setActiveTab('gifts'), []);
+  const handleOpenFriends = useCallback(() => setActiveTab('friends'), []);
+  const handleOpenTrade = useCallback(() => setActiveTab('trade'), []);
+  const handleOpenAdminSetup = useCallback((tab: AdminTabType = 'users') => {
+    setAdminInitialTab(tab);
+    setShowAdminModal(true);
+  }, []);
 
   // Telegram simulator shell toggle for desktop/web testing
   const [isTelegramSimMode, setIsTelegramSimMode] = useState<boolean>(false);
@@ -90,7 +157,7 @@ export default function App() {
         if (TelegramService.isAvailable()) {
           const initData = TelegramService.getInitData();
           const authRes = await api.authTelegram(initData, effectiveRef);
-          setUser(authRes.user);
+          updateGameState(authRes.user);
           return;
         }
 
@@ -98,7 +165,7 @@ export default function App() {
         if (api.getToken()) {
           try {
             const meRes = await api.getMe();
-            setUser(meRes.user);
+            updateGameState(meRes.user);
             return;
           } catch {
             api.setToken(null);
@@ -119,21 +186,20 @@ export default function App() {
 
     // Register real-time sync listener from api client with anti-rollback reconciliation
     api.registerStateListener((updatedUser) => {
-      setUser((prev) => {
+      updateGameState((prev) => {
         if (!prev || prev.id !== updatedUser.id) {
-          return reconcileUserLevel({ ...updatedUser });
+          return { ...updatedUser };
         }
-        const merged: UserGameState = {
+        return {
           ...updatedUser,
           balance: api.hasPendingTaps() ? Math.max(updatedUser.balance, prev.balance) : updatedUser.balance,
           totalEarned: Math.max(updatedUser.totalEarned || 0, prev.totalEarned || 0),
           totalTaps: Math.max(updatedUser.totalTaps || 0, prev.totalTaps || 0),
           energy: api.hasPendingTaps() ? Math.min(updatedUser.energy, prev.energy) : updatedUser.energy,
         };
-        return reconcileUserLevel(merged);
       });
     });
-  }, []);
+  }, [updateGameState]);
 
   // Offline passive income check on first load
   useEffect(() => {
@@ -155,7 +221,7 @@ export default function App() {
       const elapsedSec = Math.min(10, Math.max(0.5, (now - lastTickRef.current) / 1000));
       lastTickRef.current = now;
 
-      setUser((prev) => {
+      updateGameState((prev) => {
         if (!prev) return null;
         const needsEnergy = prev.energy < prev.maxEnergy;
         const hasProfit = prev.profitPerHour > 0;
@@ -179,96 +245,132 @@ export default function App() {
     }, 1000);
 
     return () => clearInterval(interval);
+  }, [updateGameState]);
+
+  // High-frequency RAF-coalesced tapping handler:
+  // Batches rapid multi-touch / fast clicks within the same animation frame into a single React state update
+  const pendingTapCountRef = useRef<number>(0);
+  const tapRafIdRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (tapRafIdRef.current !== null) {
+        cancelAnimationFrame(tapRafIdRef.current);
+      }
+    };
   }, []);
 
-  // Tapping handler (stable reference for zero re-render lag)
-  const handleTap = useCallback((count: number) => {
-    setUser((prev) => {
-      if (!prev) return null;
-      const isTurbo = prev.boosters.turboActiveUntil > Date.now();
-      if (!isTurbo && prev.energy <= 0) return prev;
+  const handleTap = useCallback(
+    (count: number) => {
+      pendingTapCountRef.current += count;
+      api.queueTap(count);
 
-      const tapMultiplier = isTurbo ? 3 : 1;
-      const effectiveCount = isTurbo ? count : Math.min(count, Math.floor(prev.energy));
-      if (effectiveCount <= 0) return prev;
+      if (tapRafIdRef.current === null) {
+        tapRafIdRef.current = requestAnimationFrame(() => {
+          tapRafIdRef.current = null;
+          const totalCount = pendingTapCountRef.current;
+          pendingTapCountRef.current = 0;
+          if (totalCount <= 0) return;
 
-      const earned = prev.tapPower * tapMultiplier * effectiveCount;
-      const nextEnergy = isTurbo ? prev.energy : Math.max(0, prev.energy - effectiveCount);
+          updateGameState((prev) => {
+            if (!prev) return null;
+            const isTurbo = prev.boosters.turboActiveUntil > Date.now();
+            if (!isTurbo && prev.energy <= 0) return prev;
 
-      const nextState: UserGameState = reconcileUserLevel({
-        ...prev,
-        balance: prev.balance + earned,
-        totalEarned: prev.totalEarned + earned,
-        totalTaps: prev.totalTaps + effectiveCount,
-        energy: nextEnergy,
-      });
-      api.syncClientState(nextState);
-      return nextState;
-    });
+            const tapMultiplier = isTurbo ? 3 : 1;
+            const effectiveCount = isTurbo ? totalCount : Math.min(totalCount, Math.floor(prev.energy));
+            if (effectiveCount <= 0) return prev;
 
-    // Send to batched queue for server authorization
-    api.queueTap(count);
-  }, []);
+            const earned = prev.tapPower * tapMultiplier * effectiveCount;
+            const nextEnergy = isTurbo ? prev.energy : Math.max(0, prev.energy - effectiveCount);
+
+            const nextState: UserGameState = reconcileUserLevel({
+              ...prev,
+              balance: prev.balance + earned,
+              totalEarned: prev.totalEarned + earned,
+              totalTaps: prev.totalTaps + effectiveCount,
+              energy: nextEnergy,
+            });
+            api.syncClientState(nextState);
+            return nextState;
+          });
+        });
+      }
+    },
+    [updateGameState]
+  );
 
   // Upgrade handler
-  const handlePurchaseUpgrade = async (upgradeId: string) => {
-    const updated = await api.purchaseUpgrade(upgradeId);
-    setUser(reconcileUserLevel({ ...updated }));
-  };
+  const handlePurchaseUpgrade = useCallback(
+    async (upgradeId: string) => {
+      const updated = await api.purchaseUpgrade(upgradeId);
+      updateGameState({ ...updated });
+    },
+    [updateGameState]
+  );
 
   // Claim Passive income
-  const handleClaimPassive = async () => {
+  const handleClaimPassive = useCallback(async () => {
     const res = await api.claimPassive();
-    setUser(res.user);
-  };
+    updateGameState(res.user);
+  }, [updateGameState]);
 
   // Claim Daily reward
-  const handleClaimDaily = async () => {
+  const handleClaimDaily = useCallback(async () => {
     const res = await api.claimDaily();
-    setUser(res.user);
-  };
+    updateGameState(res.user);
+  }, [updateGameState]);
 
   // Claim Task
-  const handleClaimTask = async (taskId: string) => {
-    const res = await api.claimTask(taskId);
-    setUser(res.user);
-  };
+  const handleClaimTask = useCallback(
+    async (taskId: string) => {
+      const res = await api.claimTask(taskId);
+      updateGameState(res.user);
+    },
+    [updateGameState]
+  );
 
   // Use Booster
-  const handleUseBoost = async (type: 'full_energy' | 'turbo') => {
-    const updated = await api.useBooster(type);
-    setUser(updated);
-  };
+  const handleUseBoost = useCallback(
+    async (type: 'full_energy' | 'turbo') => {
+      const updated = await api.useBooster(type);
+      updateGameState(updated);
+    },
+    [updateGameState]
+  );
 
   // Spin Lucky Wheel (24h cooldown)
-  const handleSpinWheel = async () => {
+  const handleSpinWheel = useCallback(async () => {
     const res = await api.spinLuckyWheel();
-    setUser(res.user);
+    updateGameState(res.user);
     return res;
-  };
+  }, [updateGameState]);
 
   // Link account
-  const handleLinkAccount = async (email: string, pass: string) => {
-    const res = await api.linkAccount(email, pass);
-    setUser(res.user);
-  };
+  const handleLinkAccount = useCallback(
+    async (email: string, pass: string) => {
+      const res = await api.linkAccount(email, pass);
+      updateGameState(res.user);
+    },
+    [updateGameState]
+  );
 
   // Logout
-  const handleLogout = () => {
+  const handleLogout = useCallback(() => {
     api.setToken(null);
-    setUser(null);
+    updateGameState(null);
     setShowSettingsModal(false);
     setShowAuthModal(true);
-  };
+  }, [updateGameState]);
 
   // Toggle sound
-  const handleToggleSound = () => {
+  const handleToggleSound = useCallback(() => {
     const muted = sound.toggleMute();
     setIsMuted(muted);
-  };
+  }, []);
 
   // Telegram simulation toggle for testing
-  const handleToggleSimMode = async () => {
+  const handleToggleSimMode = useCallback(async () => {
     const nextMode = !isTelegramSimMode;
     setIsTelegramSimMode(nextMode);
 
@@ -285,12 +387,12 @@ export default function App() {
       )}&auth_date=${Math.floor(Date.now() / 1000)}&hash=simulated_hash`;
       try {
         const res = await api.authTelegram(mockInitData);
-        setUser(res.user);
+        updateGameState(res.user);
       } catch (err) {
         console.error('Sim auth error:', err);
       }
     }
-  };
+  }, [isTelegramSimMode, user?.isTelegram, updateGameState]);
 
   // Channel membership gate status (requires both @FOX_COINEX and @FOX-COINl verification)
   const isChannelVerified = user
@@ -363,14 +465,11 @@ export default function App() {
           <Header
             user={user}
             isAdmin={isEffectiveAdmin}
-            onOpenSettings={() => setShowSettingsModal(true)}
-            onOpenBoost={() => setShowBoostModal(true)}
-            onOpenDaily={() => setShowDailyModal(true)}
-            onOpenWheel={() => setShowWheelModal(true)}
-            onOpenAdminSetup={(tab = 'users') => {
-              setAdminInitialTab(tab);
-              setShowAdminModal(true);
-            }}
+            onOpenSettings={handleOpenSettings}
+            onOpenBoost={handleOpenBoost}
+            onOpenDaily={handleOpenDaily}
+            onOpenWheel={handleOpenWheel}
+            onOpenAdminSetup={handleOpenAdminSetup}
             isMuted={isMuted}
             onToggleSound={handleToggleSound}
           />
@@ -382,10 +481,10 @@ export default function App() {
             <TapScreen
               user={user}
               onTap={handleTap}
-              onOpenBoost={() => setShowBoostModal(true)}
-              onOpenWheel={() => setShowWheelModal(true)}
+              onOpenBoost={handleOpenBoost}
+              onOpenWheel={handleOpenWheel}
               equippedGiftId={equippedGiftId}
-              onOpenGifts={() => setActiveTab('gifts')}
+              onOpenGifts={handleOpenGifts}
             />
           )}
 
@@ -411,8 +510,8 @@ export default function App() {
           {user && activeTab === 'trade' && (
             <TradeScreen
               user={user}
-              onTradeComplete={(updated) => setUser(updated)}
-              onFriendsTab={() => setActiveTab('friends')}
+              onTradeComplete={updateGameState}
+              onFriendsTab={handleOpenFriends}
             />
           )}
 
@@ -421,7 +520,7 @@ export default function App() {
               user={user}
               tasks={config.tasks}
               onClaimTask={handleClaimTask}
-              onOpenWheel={() => setShowWheelModal(true)}
+              onOpenWheel={handleOpenWheel}
             />
           )}
 
@@ -429,7 +528,7 @@ export default function App() {
             <FriendsScreen
               user={user}
               botUsername={config?.telegramBotUsername || 'FOXCOINBot'}
-              onTradeTab={() => setActiveTab('trade')}
+              onTradeTab={handleOpenTrade}
             />
           )}
 
@@ -452,7 +551,7 @@ export default function App() {
         {showAuthModal && (
           <AuthModal
             onSuccess={(authenticatedUser) => {
-              setUser(authenticatedUser);
+              updateGameState(authenticatedUser);
               setShowAuthModal(false);
             }}
             initialRefCode={new URLSearchParams(window.location.search).get('ref') || undefined}
@@ -503,10 +602,7 @@ export default function App() {
             onLinkAccount={handleLinkAccount}
             onLogout={handleLogout}
             botUsername={config?.telegramBotUsername || 'FOXCOINBot'}
-            onOpenAdminSetup={(tab: 'users' | 'webhook' | 'github' = 'users') => {
-              setAdminInitialTab(tab);
-              setShowAdminModal(true);
-            }}
+            onOpenAdminSetup={handleOpenAdminSetup}
           />
         )}
 
@@ -517,7 +613,7 @@ export default function App() {
             channelHandle="@FOX_COINEX"
             youtubeUrl="https://www.youtube.com/@FOX-COINl"
             onVerified={(updatedUser) => {
-              setUser(updatedUser);
+              updateGameState(updatedUser);
             }}
           />
         )}
@@ -530,7 +626,7 @@ export default function App() {
             onClose={() => setShowAdminModal(false)}
             initialTab={adminInitialTab}
             onAdminStatusChange={(unlocked) => setIsAdminUnlocked(unlocked)}
-            onUserUpdated={(updatedUser) => setUser(updatedUser)}
+            onUserUpdated={(updatedUser) => updateGameState(updatedUser)}
             onConfigUpdated={(nextCfg) => setConfig(nextCfg)}
           />
         )}

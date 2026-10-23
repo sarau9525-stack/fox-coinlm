@@ -226,11 +226,11 @@ export const TapScreen: React.FC<TapScreenProps> = React.memo(({
             <TrendingUp className="w-3 h-3 text-emerald-400" /> Per Hour
           </span>
           <span className="text-sm font-extrabold text-emerald-400 mt-0.5 tabular-nums">
-            +{user.profitPerHour.toLocaleString()}
+            +{user.profitPerHour.toLocaleString('en-US')}
           </span>
           {perSecondProfit > 0 && (
             <span className="text-[9px] font-bold text-emerald-400/80 tabular-nums leading-none mt-0.5">
-              +{perSecondProfit >= 10 ? Math.floor(perSecondProfit).toLocaleString() : perSecondProfit.toFixed(2)}/sec
+              +{perSecondProfit >= 10 ? Math.floor(perSecondProfit).toLocaleString('en-US') : perSecondProfit.toFixed(2)}/sec
             </span>
           )}
         </div>
@@ -241,7 +241,7 @@ export const TapScreen: React.FC<TapScreenProps> = React.memo(({
         <div className="w-full mb-2 bg-gradient-to-r from-amber-500 via-orange-500 to-yellow-500 text-slate-950 font-black text-xs py-2 px-3 rounded-xl flex items-center justify-between shadow-lg shadow-amber-500/30 animate-bounce">
           <span className="flex items-center gap-1.5">
             <Sparkles className="w-4 h-4 fill-slate-950" />
-            <span>تبریک! ارتقا به لول {levelUpBanner.level} — لباس جدید: {levelUpBanner.titleFa}</span>
+            <span>Level Up! Reached Level {levelUpBanner.level} — Unlocked: {levelUpBanner.titleFa}</span>
           </span>
           <button onClick={() => setLevelUpBanner(null)} className="text-slate-900/80 hover:text-slate-950">
             <X className="w-3.5 h-3.5" />
@@ -256,7 +256,7 @@ export const TapScreen: React.FC<TapScreenProps> = React.memo(({
             <img src={foxGoldCoinImg} alt="FOX" className="w-full h-full object-cover animate-spin-slow" />
           </div>
           <span className="text-4xl sm:text-5xl font-black text-transparent bg-clip-text bg-gradient-to-b from-amber-200 via-amber-400 to-orange-500 tracking-tight drop-shadow-md tabular-nums">
-            {Math.floor(user.balance).toLocaleString()}
+            {Math.floor(user.balance).toLocaleString('en-US')}
           </span>
         </div>
         <span className="text-xs font-semibold text-slate-400 mt-1 uppercase tracking-widest">
@@ -336,16 +336,16 @@ export const TapScreen: React.FC<TapScreenProps> = React.memo(({
               setPreviewOutfitLevel(activeOutfitLevel);
               setShowWardrobeModal(true);
             }}
-            title="مشاهده لباس‌های هر لول"
+            title="View Level Outfits"
             className="absolute -top-2 -left-2 z-20 px-2.5 py-1 rounded-2xl bg-slate-950/95 border border-amber-400/50 shadow-xl flex items-center gap-1.5 cursor-pointer hover:scale-105 transition"
           >
             <Shirt className="w-3.5 h-3.5 text-amber-400" />
-            <div className="text-right">
+            <div className="text-left">
               <span className="text-[9px] font-bold text-slate-400 block leading-none">
-                لباس لول {activeOutfitLevel}
+                Lvl {activeOutfitLevel} Outfit
               </span>
               <span className="text-[10px] font-black text-amber-300 leading-tight block">
-                {activeOutfitMeta.outfitTitleFa}
+                {activeOutfitMeta.outfitTitle}
               </span>
             </div>
           </button>
@@ -445,9 +445,9 @@ export const TapScreen: React.FC<TapScreenProps> = React.memo(({
               <div className="flex items-center gap-2">
                 <Shirt className="w-5 h-5 text-amber-400" />
                 <div>
-                  <h3 className="text-sm font-black text-white">کمد لباس‌های سلطنتی و کلکسیونی روباه</h3>
+                  <h3 className="text-sm font-black text-white">Royal Fox Outfit Wardrobe</h3>
                   <p className="text-[11px] text-slate-400">
-                    روی هر لول بزنید تا پیش‌نمایش بزرگ لباس را روی کاراکتر ببینید
+                    Tap any level to preview its exclusive 3D outfit on your Fox
                   </p>
                 </div>
               </div>
@@ -478,13 +478,13 @@ export const TapScreen: React.FC<TapScreenProps> = React.memo(({
                 </span>
               </div>
 
-              <div className="flex-1 min-w-0 text-right" dir="rtl">
+              <div className="flex-1 min-w-0 text-left">
                 <div className="text-xs font-black text-amber-400 flex items-center gap-1">
                   <span>{previewMeta.badgeEmoji}</span>
                   <span>{previewMeta.levelName}</span>
                 </div>
                 <h4 className="text-sm font-black text-white mt-0.5">
-                  {previewMeta.outfitTitleFa}
+                  {previewMeta.outfitTitle}
                 </h4>
                 <p className="text-[11px] text-slate-300 mt-1 leading-relaxed">
                   {previewMeta.descriptionFa}
@@ -506,16 +506,16 @@ export const TapScreen: React.FC<TapScreenProps> = React.memo(({
                       {activeOutfitLevel === previewOutfitLevel ? (
                         <>
                           <Check className="w-3.5 h-3.5" />
-                          <span>در حال حاضر بر تن روباه است</span>
+                          <span>Currently Equipped</span>
                         </>
                       ) : (
-                        <span>پوشیدن این لباس روی روباه</span>
+                        <span>Equip Outfit</span>
                       )}
                     </button>
                   ) : (
                     <div className="w-full py-1.5 px-2.5 rounded-xl bg-slate-950/90 border border-slate-800 text-amber-300/90 text-[11px] font-bold flex items-center justify-center gap-1.5">
                       <Lock className="w-3.5 h-3.5 text-amber-400" />
-                      <span>قفل است — با رسیدن به لول {previewOutfitLevel} باز می‌شود</span>
+                      <span>Locked — Unlocks at Level {previewOutfitLevel}</span>
                     </div>
                   )}
                 </div>
@@ -558,13 +558,13 @@ export const TapScreen: React.FC<TapScreenProps> = React.memo(({
                       </div>
                     </div>
 
-                    <div className="flex-1 min-w-0 text-right" dir="rtl">
+                    <div className="flex-1 min-w-0 text-left">
                       <div className="flex items-center gap-1.5">
                         <span className="text-xs font-black text-amber-400">
-                          {outfit.badgeEmoji} لول {outfit.level}:
+                          {outfit.badgeEmoji} Level {outfit.level}:
                         </span>
                         <span className="text-xs font-extrabold text-white truncate">
-                          {outfit.outfitTitleFa}
+                          {outfit.outfitTitle}
                         </span>
                       </div>
                       <p className="text-[11px] text-slate-400 mt-0.5 leading-snug line-clamp-1">
@@ -590,16 +590,16 @@ export const TapScreen: React.FC<TapScreenProps> = React.memo(({
                           {isWearing ? (
                             <>
                               <Check className="w-3.5 h-3.5" />
-                              <span>پوشیده</span>
+                              <span>Equipped</span>
                             </>
                           ) : (
-                            <span>انتخاب</span>
+                            <span>Equip</span>
                           )}
                         </button>
                       ) : (
                         <div className="px-2.5 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 text-[11px] font-bold flex items-center gap-1">
                           <Lock className="w-3 h-3 text-amber-400/80" />
-                          <span>پیش‌نمایش</span>
+                          <span>Preview</span>
                         </div>
                       )}
                     </div>
@@ -611,5 +611,33 @@ export const TapScreen: React.FC<TapScreenProps> = React.memo(({
         </div>
       )}
     </div>
+  );
+}, (prev, next) => {
+  const pu = prev.user;
+  const nu = next.user;
+  const prevLevelRange = Math.max(1, pu.nextLevelMinCoins - pu.currentLevelMinCoins);
+  const nextLevelRange = Math.max(1, nu.nextLevelMinCoins - nu.currentLevelMinCoins);
+  const prevLevelPercent = Math.min(100, Math.floor((Math.max(0, pu.totalEarned - pu.currentLevelMinCoins) / prevLevelRange) * 100));
+  const nextLevelPercent = Math.min(100, Math.floor((Math.max(0, nu.totalEarned - nu.currentLevelMinCoins) / nextLevelRange) * 100));
+  const eqId = next.equippedGiftId;
+
+  return (
+    Math.floor(pu.balance) === Math.floor(nu.balance) &&
+    pu.energy === nu.energy &&
+    pu.maxEnergy === nu.maxEnergy &&
+    pu.level === nu.level &&
+    pu.levelName === nu.levelName &&
+    prevLevelPercent === nextLevelPercent &&
+    pu.tapPower === nu.tapPower &&
+    pu.profitPerHour === nu.profitPerHour &&
+    pu.energyRegenRate === nu.energyRegenRate &&
+    pu.boosters.turboActiveUntil === nu.boosters.turboActiveUntil &&
+    pu.boosters.lastWheelSpinTimestamp === nu.boosters.lastWheelSpinTimestamp &&
+    prev.equippedGiftId === next.equippedGiftId &&
+    (eqId ? (pu.upgrades[eqId] || 0) === (nu.upgrades[eqId] || 0) : true) &&
+    prev.onTap === next.onTap &&
+    prev.onOpenBoost === next.onOpenBoost &&
+    prev.onOpenWheel === next.onOpenWheel &&
+    prev.onOpenGifts === next.onOpenGifts
   );
 });

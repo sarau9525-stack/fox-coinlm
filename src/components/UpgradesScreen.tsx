@@ -96,7 +96,7 @@ export const UpgradesScreen: React.FC<UpgradesScreenProps> = ({
           <div className="flex items-center gap-1.5 mt-0.5">
             <TrendingUp className="w-4 h-4 text-emerald-400" />
             <span className="text-xl font-black text-emerald-400">
-              +{user.profitPerHour.toLocaleString()}
+              +{user.profitPerHour.toLocaleString('en-US')}
             </span>
             <span className="text-xs text-slate-400 font-medium">FOX/hr</span>
           </div>
@@ -109,7 +109,7 @@ export const UpgradesScreen: React.FC<UpgradesScreenProps> = ({
           <div className="flex items-center gap-1.5 mt-0.5 justify-end">
             <img src={foxGoldCoinImg} alt="FOX" className="w-4 h-4" />
             <span className="text-lg font-black text-amber-300">
-              {Math.floor(user.balance).toLocaleString()}
+              {Math.floor(user.balance).toLocaleString('en-US')}
             </span>
           </div>
         </div>
@@ -194,12 +194,12 @@ export const UpgradesScreen: React.FC<UpgradesScreenProps> = ({
                     <div className="flex items-center gap-2 mt-2">
                       <span className="text-[11px] font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-md border border-emerald-500/20">
                         {up.benefitType === 'profit_per_hour'
-                          ? `+${up.baseBenefit.toLocaleString()} FOX/hr`
+                          ? `+${up.baseBenefit.toLocaleString('en-US')} FOX/hr`
                           : up.benefitType === 'tap_power'
-                          ? `+${up.baseBenefit.toLocaleString()} per tap`
+                          ? `+${up.baseBenefit.toLocaleString('en-US')} per tap`
                           : up.benefitType === 'max_energy'
-                          ? `+${up.baseBenefit.toLocaleString()} max stamina`
-                          : `+${up.baseBenefit.toLocaleString()}/sec regen`}
+                          ? `+${up.baseBenefit.toLocaleString('en-US')} max stamina`
+                          : `+${up.baseBenefit.toLocaleString('en-US')}/sec regen`}
                       </span>
                     </div>
                   </div>
@@ -225,7 +225,7 @@ export const UpgradesScreen: React.FC<UpgradesScreenProps> = ({
                       <span className="text-[10px] uppercase font-bold opacity-80">Upgrade</span>
                       <div className="flex items-center gap-1 mt-0.5">
                         <img src={foxGoldCoinImg} alt="FOX" className="w-3.5 h-3.5" />
-                        <span>{price.toLocaleString()}</span>
+                        <span>{price.toLocaleString('en-US')}</span>
                       </div>
                     </button>
                   )}

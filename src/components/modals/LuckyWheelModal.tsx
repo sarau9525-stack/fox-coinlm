@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { X, Sparkles, Zap, Flame, Clock, Trophy, Gift, CheckCircle2 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { UserGameState, LuckyWheelPrize } from '../../types/game.js';
-import { LUCKY_WHEEL_PRIZES, GAME_CONSTANTS } from '../../../server/gameConfig.js';
+import { LUCKY_WHEEL_PRIZES, GAME_CONSTANTS, sanitizeWheelPrize } from '../../../server/gameConfig.js';
 import { sound } from '../../utils/audio.js';
 import { TelegramService } from '../../utils/telegram.js';
 import { foxGoldCoinImg } from '../../assets/assets.js';
@@ -26,7 +26,7 @@ export const LuckyWheelModal: React.FC<LuckyWheelModalProps> = ({
   onClose,
   onSpin,
 }) => {
-  const wheelPrizes = prizes && prizes.length > 0 ? prizes : LUCKY_WHEEL_PRIZES;
+  const wheelPrizes = (prizes && prizes.length > 0 ? prizes : LUCKY_WHEEL_PRIZES).map(sanitizeWheelPrize);
   const [rotation, setRotation] = useState<number>(0);
   const [isSpinning, setIsSpinning] = useState<boolean>(false);
   const [pointerKick, setPointerKick] = useState<boolean>(false);
@@ -202,7 +202,7 @@ export const LuckyWheelModal: React.FC<LuckyWheelModalProps> = ({
         <div className="text-center mb-3 relative z-10">
           <div className="inline-flex items-center gap-1.5 px-3 py-0.5 rounded-md bg-amber-500/15 border border-amber-500/30 text-amber-300 text-[10px] font-black uppercase tracking-widest mb-1">
             <Sparkles className="w-3 h-3 text-amber-400" />
-            <span>گردونه شانس روزانه • Daily Lucky Spin</span>
+            <span>Daily Lucky Spin</span>
           </div>
           <h2 className="text-2xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-amber-200 via-yellow-400 to-orange-400">
             Fox Fortune Wheel
@@ -447,14 +447,14 @@ export const LuckyWheelModal: React.FC<LuckyWheelModalProps> = ({
               <div>
                 <div className="flex items-center gap-1.5">
                   <span className="text-[10px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-400 text-slate-950">
-                    YOU WON! • برنده شدید
+                    YOU WON!
                   </span>
                 </div>
                 <div className="text-base font-black text-white mt-0.5">
                   {wonPrize.label}
                 </div>
-                <div className="text-xs font-bold text-amber-300">
-                  {wonPrize.persianLabel}
+                <div className="text-xs font-bold text-amber-300 uppercase tracking-wide">
+                  {wonPrize.rarity} Reward Claimed!
                 </div>
               </div>
             </div>
@@ -477,11 +477,11 @@ export const LuckyWheelModal: React.FC<LuckyWheelModalProps> = ({
             className="w-full py-3.5 rounded-2xl font-black text-sm uppercase tracking-wider bg-gradient-to-r from-amber-400 via-yellow-400 to-orange-500 hover:from-amber-300 hover:to-orange-400 text-slate-950 shadow-xl shadow-orange-500/30 transition active:scale-98 flex items-center justify-center gap-2 cursor-pointer"
           >
             <Sparkles className="w-5 h-5 fill-slate-950" />
-            <span>{isSpinning ? 'در حال چرخش... • Spinning...' : 'چرخش گردونه شانس • SPIN NOW (FREE)'}</span>
+            <span>{isSpinning ? 'Spinning...' : 'SPIN LUCKY WHEEL (FREE)'}</span>
           </button>
         ) : isSpinning ? (
           <div className="w-full py-3.5 rounded-2xl font-black text-sm text-center bg-amber-500/20 border border-amber-500/40 text-amber-300 animate-pulse">
-            🎰 در حال چرخش گردونه... Good Luck!
+            🎰 Spinning the Wheel... Good Luck!
           </div>
         ) : (
           <div className="w-full p-3 rounded-2xl bg-slate-900/90 border border-slate-800 flex items-center justify-between">
@@ -491,7 +491,7 @@ export const LuckyWheelModal: React.FC<LuckyWheelModalProps> = ({
               </div>
               <div>
                 <span className="text-[11px] font-bold text-slate-300 block">
-                  چرخش رایگان بعدی • Next Free Spin
+                  Next Free Spin
                 </span>
                 <span className="text-[10px] text-slate-500 block">
                   Refreshes every 24 hours
@@ -508,7 +508,7 @@ export const LuckyWheelModal: React.FC<LuckyWheelModalProps> = ({
         <div className="mt-4 pt-3 border-t border-slate-800/80">
           <div className="flex items-center justify-between text-[11px] font-bold text-slate-400 mb-2">
             <span className="flex items-center gap-1">
-              <Trophy className="w-3.5 h-3.5 text-amber-400" /> جوایز گردونه • Wheel Rewards
+              <Trophy className="w-3.5 h-3.5 text-amber-400" /> Wheel Rewards
             </span>
             <span className="text-[10px] text-slate-500">100% Guaranteed Win</span>
           </div>
@@ -529,7 +529,7 @@ export const LuckyWheelModal: React.FC<LuckyWheelModalProps> = ({
                   {p.shortLabel}
                 </div>
                 <div className="text-[9px] text-slate-400 truncate mt-0.5">
-                  {p.persianLabel}
+                  {p.label}
                 </div>
               </div>
             ))}

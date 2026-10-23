@@ -68,7 +68,7 @@ export const LeaderboardScreen: React.FC<LeaderboardScreenProps> = ({ user }) =>
               {top3[1].displayName}
             </span>
             <span className="text-[10px] text-amber-300 font-extrabold mt-0.5">
-              {Math.floor(top3[1].balance).toLocaleString()}
+              {Math.floor(top3[1].balance).toLocaleString('en-US')}
             </span>
             <span className="text-[9px] text-slate-400">{top3[1].levelName}</span>
           </div>
@@ -88,7 +88,7 @@ export const LeaderboardScreen: React.FC<LeaderboardScreenProps> = ({ user }) =>
               {top3[0].displayName}
             </span>
             <span className="text-[11px] text-amber-300 font-black mt-0.5">
-              {Math.floor(top3[0].balance).toLocaleString()}
+              {Math.floor(top3[0].balance).toLocaleString('en-US')}
             </span>
             <span className="text-[9px] text-amber-400/80 font-bold">{top3[0].levelName}</span>
           </div>
@@ -105,7 +105,7 @@ export const LeaderboardScreen: React.FC<LeaderboardScreenProps> = ({ user }) =>
               {top3[2].displayName}
             </span>
             <span className="text-[10px] text-amber-300 font-extrabold mt-0.5">
-              {Math.floor(top3[2].balance).toLocaleString()}
+              {Math.floor(top3[2].balance).toLocaleString('en-US')}
             </span>
             <span className="text-[9px] text-slate-400">{top3[2].levelName}</span>
           </div>
@@ -151,10 +151,10 @@ export const LeaderboardScreen: React.FC<LeaderboardScreenProps> = ({ user }) =>
               <div className="text-right">
                 <div className="flex items-center gap-1 justify-end font-black text-xs text-amber-300">
                   <img src={foxGoldCoinImg} alt="FOX" className="w-3 h-3" />
-                  <span>{Math.floor(entry.balance).toLocaleString()}</span>
+                  <span>{Math.floor(entry.balance).toLocaleString('en-US')}</span>
                 </div>
                 <div className="text-[10px] text-emerald-400 font-medium">
-                  +{entry.profitPerHour.toLocaleString()}/hr
+                  +{entry.profitPerHour.toLocaleString('en-US')}/hr
                 </div>
               </div>
             </div>
@@ -178,10 +178,10 @@ export const LeaderboardScreen: React.FC<LeaderboardScreenProps> = ({ user }) =>
 
             <div className="text-right">
               <span className="font-black text-xs block">
-                {Math.floor(playerEntry.balance).toLocaleString()} FOX
+                {Math.floor(playerEntry.balance).toLocaleString('en-US')} FOX
               </span>
               <span className="text-[10px] text-amber-200">
-                +{playerEntry.profitPerHour.toLocaleString()}/hr
+                +{playerEntry.profitPerHour.toLocaleString('en-US')}/hr
               </span>
             </div>
           </div>

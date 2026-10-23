@@ -784,10 +784,15 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
 
     const currentLevel = user.upgrades[upgrade.id] || 0;
     const price = Math.floor(upgrade.basePrice * Math.pow(upgrade.priceMultiplier, currentLevel));
-    if (user.balance < price) return jsonResponse({ error: 'Insufficient FOX balance' }, 400);
+    const isGift = upgrade.category === 'gift';
+    if (!isGift && user.balance < price) return jsonResponse({ error: 'Insufficient FOX balance' }, 400);
 
-    user.balance -= price;
-    user.totalEarned = Math.max(user.totalEarned || 0, user.balance + price) + getUpgradeXpBonus(price);
+    if (!isGift) {
+      user.balance -= price;
+      user.totalEarned = Math.max(user.totalEarned || 0, user.balance + price) + getUpgradeXpBonus(price);
+    } else {
+      user.totalEarned = (user.totalEarned || 0) + getUpgradeXpBonus(upgrade.baseBenefit * 2);
+    }
     user.upgrades[upgrade.id] = currentLevel + 1;
 
     if (upgrade.benefitType === 'max_energy') {
@@ -1002,7 +1007,7 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
 
     if (foxNum > availableReferral) {
       return jsonResponse({
-        error: `Insufficient referral reward balance. Only FOX earned from friend invitations can be traded for USD (Available: ${availableReferral.toLocaleString()} FOX).`,
+        error: `Insufficient referral reward balance. Only FOX earned from friend invitations can be traded for USD (Available: ${availableReferral.toLocaleString('en-US')} FOX).`,
       }, 400);
     }
 

@@ -395,10 +395,10 @@ export async function processTelegramWebhookUpdate(
     if (user) {
       balanceText =
         `💰 <b>Your Fox Coin Balance:</b>\n\n` +
-        `• <b>FOX Balance:</b> ${Math.floor(user.balance).toLocaleString()} FOX\n` +
-        `• <b>Passive Yield:</b> +${user.profitPerHour.toLocaleString()} FOX/hr\n` +
+        `• <b>FOX Balance:</b> ${Math.floor(user.balance).toLocaleString('en-US')} FOX\n` +
+        `• <b>Passive Yield:</b> +${user.profitPerHour.toLocaleString('en-US')} FOX/hr\n` +
         `• <b>Rank:</b> ${user.levelName} (Lvl ${user.level})\n` +
-        `• <b>Total Taps:</b> ${user.totalTaps.toLocaleString()}`;
+        `• <b>Total Taps:</b> ${user.totalTaps.toLocaleString('en-US')}`;
     } else {
       balanceText =
         `🦊 You don't have an active mining den yet!\n` +
