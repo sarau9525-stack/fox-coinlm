@@ -103,6 +103,13 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
   const [adjustBalanceType, setAdjustBalanceType] = useState<'main' | 'referral'>('main');
   const [isAdjustingBalance, setIsAdjustingBalance] = useState<boolean>(false);
   const [userFeedback, setUserFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [storageStatus, setStorageStatus] = useState<{
+    engine: string;
+    d1Bound: boolean;
+    kvBound: boolean;
+    realUsersCount: number;
+  } | null>(null);
+  const [showD1Guide, setShowD1Guide] = useState<boolean>(false);
 
   // Telegram Form states
   const [botToken, setBotToken] = useState<string>('');
@@ -152,6 +159,9 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
       setIsLoadingUsers(true);
       const res = await api.getAdminUsers(secret || adminSecret || '123456');
       setAllUsers(res.users || []);
+      if (res.storage) {
+        setStorageStatus(res.storage);
+      }
       if (!selectedUserId && res.users?.length > 0) {
         setSelectedUserId(user?.id || res.users[0].id);
       }
@@ -870,8 +880,11 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                 {/* Summary Stats Bar */}
                 <div className="grid grid-cols-3 gap-2">
                   <div className="p-2.5 rounded-2xl bg-slate-900/90 border border-slate-800 text-center">
-                    <span className="text-[10px] text-slate-400 block">Total Users</span>
-                    <span className="text-sm font-black text-white">{allUsers.length}</span>
+                    <span className="text-[10px] text-slate-400 block">Registered Users</span>
+                    <span className="text-sm font-black text-white">
+                      {allUsers.filter((u) => !u.id.startsWith('bot_')).length}{' '}
+                      <span className="text-[10px] text-slate-500 font-normal">({allUsers.length} total)</span>
+                    </span>
                   </div>
                   <div className="p-2.5 rounded-2xl bg-slate-900/90 border border-slate-800 text-center">
                     <span className="text-[10px] text-slate-400 block">Total FOX Supply</span>
@@ -888,6 +901,75 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                     <RefreshCw className={`w-3.5 h-3.5 ${isLoadingUsers ? 'animate-spin' : ''}`} />
                     <span className="text-[10px] font-bold">Refresh List</span>
                   </button>
+                </div>
+
+                {/* Cloudflare D1 Database Status & Setup Guide */}
+                <div
+                  className={`p-3 rounded-2xl border ${
+                    storageStatus?.d1Bound || storageStatus?.kvBound
+                      ? 'bg-emerald-500/10 border-emerald-500/30'
+                      : 'bg-sky-500/10 border-sky-500/30'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <Cloud
+                        className={`w-4 h-4 shrink-0 ${
+                          storageStatus?.d1Bound || storageStatus?.kvBound ? 'text-emerald-400' : 'text-sky-400'
+                        }`}
+                      />
+                      <div>
+                        <span className="text-xs font-black text-white block">
+                          {storageStatus?.d1Bound
+                            ? '✅ دیتابیس Cloudflare D1 متصل و فعال است (DB)'
+                            : storageStatus?.kvBound
+                            ? '✅ حافظه Cloudflare KV متصل و فعال است (FOX_KV)'
+                            : '☁️ دیتابیس کاربران کلادفلر (Cloudflare D1 Database)'}
+                        </span>
+                        <span className="text-[10px] text-slate-300 block">
+                          {storageStatus?.d1Bound || storageStatus?.kvBound
+                            ? 'تمام کاربران ربات و مینی‌اپ به صورت دائمی در کلادفلر ذخیره می‌شوند.'
+                            : 'جداول SQL به صورت خودکار ساخته می‌شوند؛ کافیست D1 را با نام DB متصل کنید.'}
+                        </span>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowD1Guide(!showD1Guide)}
+                      className="px-2.5 py-1.5 rounded-xl bg-slate-900/90 hover:bg-slate-800 border border-slate-700 text-[10px] font-black text-amber-300 shrink-0 cursor-pointer"
+                    >
+                      {showD1Guide ? 'بستن راهنما' : 'راهنمای اتصال D1'}
+                    </button>
+                  </div>
+
+                  {showD1Guide && (
+                    <div className="mt-3 pt-2.5 border-t border-slate-800/80 text-[11px] text-slate-200 space-y-1.5 leading-relaxed" dir="rtl">
+                      <p className="font-bold text-amber-300">مراحل ساخت و اتصال دیتابیس دائمی کاربران در Cloudflare (رایگان):</p>
+                      <ol className="list-decimal list-inside space-y-1 text-slate-300">
+                        <li>
+                          <b>گام اول (رفع ارور Static Assets):</b> ابتدا از تب <b>GitHub</b> در همین پنل ادمین، نسخه جدید پروژه را روی گیت‌هاب آپلود کنید تا فایل جدید{' '}
+                          <code className="text-emerald-300 bg-slate-950 px-1 rounded">wrangler.toml</code> (شامل اسکریپت سرور <code className="text-sky-300 bg-slate-950 px-1 rounded">main = &quot;functions/api/[[route]].ts&quot;</code>) روی کلادفلر بیلد شود.
+                        </li>
+                        <li>
+                          وارد پنل <b>Cloudflare Dashboard</b> شوید و از منوی سمت چپ به بخش{' '}
+                          <code className="text-sky-300 bg-slate-950 px-1 rounded">Workers &amp; Pages</code> &larr;{' '}
+                          <code className="text-sky-300 bg-slate-950 px-1 rounded">D1 SQL Database</code> بروید و یک دیتابیس به نام{' '}
+                          <code className="text-emerald-300 bg-slate-950 px-1 rounded">foxcoin-db</code> بسازید.
+                        </li>
+                        <li>
+                          بعد از اینکه دیپلوی جدید در کلادفلر کامل شد، وارد پروژه خود در <b>Workers &amp; Pages</b> شوید و به تب{' '}
+                          <code className="text-sky-300 bg-slate-950 px-1 rounded">Settings</code> &larr;{' '}
+                          <code className="text-sky-300 bg-slate-950 px-1 rounded">Bindings</code> بروید.
+                        </li>
+                        <li>
+                          روی <b>Add</b> &larr; <b>D1 database</b> بزنید:
+                          <br />• در کادر <b>Variable name</b> دقیقاً عبارت{' '}
+                          <code className="text-amber-300 font-black bg-slate-950 px-1.5 py-0.5 rounded">DB</code> را بنویسید.
+                          <br />• در کادر <b>D1 database</b> دیتابیس <code className="text-emerald-300 bg-slate-950 px-1 rounded">foxcoin-db</code> را انتخاب و <b>Save</b> کنید.
+                        </li>
+                      </ol>
+                    </div>
+                  )}
                 </div>
 
                 {/* Feedback Alert */}

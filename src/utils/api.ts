@@ -1566,11 +1566,29 @@ class ApiService {
     return `/api/admin/project/download-zip?secret=${encodeURIComponent(secret)}`;
   }
 
-  public async getAdminUsers(adminSecret?: string): Promise<{ users: UserGameState[] }> {
+  public async getAdminUsers(
+    adminSecret?: string
+  ): Promise<{
+    users: UserGameState[];
+    storage?: {
+      engine: string;
+      d1Bound: boolean;
+      kvBound: boolean;
+      realUsersCount: number;
+    };
+  }> {
     try {
       const headers: Record<string, string> = {};
       if (adminSecret) headers['x-admin-secret'] = adminSecret;
-      return await this.request<{ users: UserGameState[] }>('/api/admin/users', { headers });
+      return await this.request<{
+        users: UserGameState[];
+        storage?: {
+          engine: string;
+          d1Bound: boolean;
+          kvBound: boolean;
+          realUsersCount: number;
+        };
+      }>('/api/admin/users', { headers });
     } catch (err) {
       if (this.isStaticFallbackError(err)) {
         const currentUser = this.getLocalUser();
@@ -1590,7 +1608,15 @@ class ApiService {
         if (typeof window !== 'undefined') {
           localStorage.setItem('foxcoin_local_all_users_v1', JSON.stringify(list));
         }
-        return { users: list };
+        return {
+          users: list,
+          storage: {
+            engine: 'local_fallback',
+            d1Bound: false,
+            kvBound: false,
+            realUsersCount: list.filter((u) => !u.id.startsWith('bot_')).length,
+          },
+        };
       }
       throw err;
     }

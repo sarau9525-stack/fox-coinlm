@@ -221,11 +221,143 @@ function deriveEdgeWebhookSecret(botToken: string): string {
     .slice(0, 32);
 }
 
-// Persist user to Cloudflare D1
-async function persistUserToD1(db: any, user: UserGameState) {
-  if (!db) return;
+let currentEdgeEnv: CloudflareEnv | null = null;
+let lastUsersHydratedAt = 0;
+
+function mapD1RowToUser(r: any): UserGameState {
+  let upgrades: Record<string, number> = {};
+  let tasks: Record<string, any> = {};
+  let boosters: any = {
+    fullEnergyRemaining: 6,
+    nextFullEnergyAt: 0,
+    turboActiveUntil: 0,
+    nextTurboAt: 0,
+  };
   try {
-    await db
+    if (r.upgrades_json) upgrades = JSON.parse(r.upgrades_json);
+  } catch {}
+  try {
+    if (r.tasks_json) tasks = JSON.parse(r.tasks_json);
+  } catch {}
+  try {
+    if (r.boosters_json) boosters = { ...boosters, ...JSON.parse(r.boosters_json) };
+  } catch {}
+
+  const todayStr = new Date().toISOString().split('T')[0];
+  const lastDaily = r.last_daily_claim_date ? String(r.last_daily_claim_date) : null;
+
+  return {
+    id: String(r.id),
+    username: String(r.username || 'FoxPlayer'),
+    displayName: String(r.display_name || r.username || 'FoxPlayer'),
+    email: r.email ? String(r.email) : undefined,
+    telegramId: r.telegram_id ? (Number(r.telegram_id) || r.telegram_id) : undefined,
+    avatarUrl: r.avatar_url ? String(r.avatar_url) : undefined,
+    isGuest: Boolean(r.is_guest),
+    isTelegram: Boolean(r.is_telegram),
+    isAdmin: Boolean(r.is_admin),
+    balance: Number(r.balance || 0),
+    totalEarned: Number(r.total_earned || 0),
+    totalTaps: Number(r.total_taps || 0),
+    level: Number(r.level || 1),
+    levelName: String(r.level_name || 'Bronze Fox'),
+    nextLevelMinCoins: Number(r.next_level_min_coins || 5000),
+    currentLevelMinCoins: Number(r.current_level_min_coins || 0),
+    energy: Number(r.energy ?? 1000),
+    maxEnergy: Number(r.max_energy || 1000),
+    energyRegenRate: Number(r.energy_regen_rate || 1),
+    tapPower: Number(r.tap_power || 1),
+    profitPerHour: Number(r.profit_per_hour || 0),
+    unclaimedPassive: Number(r.unclaimed_passive || 0),
+    lastPassiveClaimTimestamp: Number(r.last_passive_claim_timestamp || r.updated_at || Date.now()),
+    maxOfflineHours: Number(r.max_offline_hours || 3),
+    upgrades,
+    dailyStreak: Number(r.daily_streak || 0),
+    lastDailyClaimDate: lastDaily,
+    canClaimDaily: lastDaily !== todayStr,
+    dailyRewardDays: DAILY_REWARDS,
+    tasks,
+    referralCode: String(r.referral_code || `FOX_${String(r.id).slice(-5).toUpperCase()}`),
+    referralCount: Number(r.referral_count || 0),
+    referralEarnings: Number(r.referral_earnings || 0),
+    claimedMilestones: Number(r.claimed_milestones || 0),
+    boosters,
+    createdAt: Number(r.created_at || Date.now()),
+  };
+}
+
+// Hydrate registered users from Cloudflare D1 and/or Cloudflare KV into edgeUsers
+async function hydrateEdgeUsers(env: CloudflareEnv, force = false) {
+  const now = Date.now();
+  if (!force && now - lastUsersHydratedAt < 4000) return;
+  lastUsersHydratedAt = now;
+
+  // 1. Hydrate from Cloudflare KV if bound
+  if (env.FOX_KV) {
+    try {
+      const rawKv = await env.FOX_KV.get('foxcoin_users_map');
+      if (rawKv) {
+        const parsedMap = JSON.parse(rawKv) as Record<string, UserGameState>;
+        for (const [uid, kvUser] of Object.entries(parsedMap)) {
+          if (!uid || !kvUser) continue;
+          const existing = edgeUsers.get(uid);
+          if (!existing || (kvUser.totalEarned || 0) >= (existing.totalEarned || 0)) {
+            edgeUsers.set(uid, {
+              ...kvUser,
+              dailyRewardDays: DAILY_REWARDS,
+            });
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('KV user hydrate notice:', err);
+    }
+  }
+
+  // 2. Hydrate from Cloudflare D1 SQLite database if bound (Primary source of truth)
+  if (env.DB) {
+    try {
+      const res = await env.DB.prepare('SELECT * FROM users ORDER BY updated_at DESC LIMIT 2000').all();
+      if (res && Array.isArray(res.results)) {
+        for (const row of res.results) {
+          const d1User = mapD1RowToUser(row);
+          const existing = edgeUsers.get(d1User.id);
+          if (
+            !existing ||
+            d1User.totalEarned >= (existing.totalEarned || 0) ||
+            d1User.balance !== existing.balance ||
+            d1User.referralCount >= (existing.referralCount || 0)
+          ) {
+            edgeUsers.set(d1User.id, d1User);
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('D1 user hydrate notice:', err);
+    }
+  }
+}
+
+// Persist user to Cloudflare D1 and/or KV
+async function persistUserToD1(db: any, user: UserGameState) {
+  const effectiveDb = db || currentEdgeEnv?.DB;
+
+  if (currentEdgeEnv?.FOX_KV) {
+    try {
+      const realUsersObj: Record<string, UserGameState> = {};
+      for (const [uid, u] of edgeUsers.entries()) {
+        if (!uid.startsWith('bot_')) {
+          realUsersObj[uid] = u;
+        }
+      }
+      realUsersObj[user.id] = user;
+      await currentEdgeEnv.FOX_KV.put('foxcoin_users_map', JSON.stringify(realUsersObj));
+    } catch {}
+  }
+
+  if (!effectiveDb) return;
+  try {
+    await effectiveDb
       .prepare(`
         INSERT INTO users (
           id, username, display_name, email, telegram_id, avatar_url,
@@ -247,11 +379,19 @@ async function persistUserToD1(db: any, user: UserGameState) {
           ?, ?, ?
         )
         ON CONFLICT(id) DO UPDATE SET
+          username = excluded.username,
+          display_name = excluded.display_name,
+          email = COALESCE(excluded.email, users.email),
+          telegram_id = COALESCE(excluded.telegram_id, users.telegram_id),
+          avatar_url = COALESCE(excluded.avatar_url, users.avatar_url),
+          is_admin = excluded.is_admin,
           balance = excluded.balance,
           total_earned = excluded.total_earned,
           total_taps = excluded.total_taps,
           level = excluded.level,
           level_name = excluded.level_name,
+          next_level_min_coins = excluded.next_level_min_coins,
+          current_level_min_coins = excluded.current_level_min_coins,
           energy = excluded.energy,
           max_energy = excluded.max_energy,
           energy_regen_rate = excluded.energy_regen_rate,
@@ -272,7 +412,7 @@ async function persistUserToD1(db: any, user: UserGameState) {
       .bind(
         user.id,
         user.username,
-        user.displayName,
+        user.displayName || user.username,
         user.email || null,
         user.telegramId ? String(user.telegramId) : null,
         user.avatarUrl || null,
@@ -294,16 +434,16 @@ async function persistUserToD1(db: any, user: UserGameState) {
         user.unclaimedPassive,
         user.lastPassiveClaimTimestamp,
         user.maxOfflineHours,
-        JSON.stringify(user.upgrades),
+        JSON.stringify(user.upgrades || {}),
         user.dailyStreak,
         user.lastDailyClaimDate,
-        JSON.stringify(user.tasks),
+        JSON.stringify(user.tasks || {}),
         user.referralCode,
-        user.referralCount,
-        user.referralEarnings,
+        user.referralCount || 0,
+        user.referralEarnings || 0,
         user.claimedMilestones || 0,
-        JSON.stringify(user.boosters),
-        user.createdAt,
+        JSON.stringify(user.boosters || {}),
+        user.createdAt || Date.now(),
         Date.now()
       )
       .run();
@@ -487,7 +627,9 @@ function createNewUserRecord(id: string, username: string, isTelegram: boolean, 
         existing.referralCount = (existing.referralCount || 0) + 1;
         existing.referralEarnings = (existing.referralEarnings || 0) + 5000;
         existing.balance += 5000;
+        existing.totalEarned = (existing.totalEarned || 0) + 5000;
         edgeUsers.set(uid, existing);
+        persistUserToD1(currentEdgeEnv?.DB, existing).catch(() => {});
         break;
       }
     }
@@ -539,15 +681,17 @@ function createNewUserRecord(id: string, username: string, isTelegram: boolean, 
 
 export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
   const { request, env } = context;
+  currentEdgeEnv = env;
   const url = new URL(request.url);
   const pathname = url.pathname;
   const method = request.method;
 
-  // Initialize D1 if binding is available
+  // Initialize D1 if binding is available and hydrate registered users
   if (env.DB) {
     await ensureD1Schema(env.DB);
   }
   await hydrateEdgeBotConfig(env);
+  await hydrateEdgeUsers(env, pathname.startsWith('/api/admin/') || pathname === '/api/telegram/webhook');
 
   // Response helper
   const jsonResponse = (data: any, status = 200) => {
@@ -832,7 +976,7 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
     const guestUser = createNewUserRecord(guestId, body.username || `Guest_${guestId.slice(-4)}`, false, true, body.refCode);
     const token = createToken(guestId, env.SESSION_SECRET);
 
-    if (env.DB) await persistUserToD1(env.DB, guestUser);
+    await persistUserToD1(env.DB, guestUser);
     return jsonResponse({ token, user: guestUser });
   }
 
@@ -889,7 +1033,7 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
 
     refreshEdgeUserState(user);
     const token = createToken(userId, env.SESSION_SECRET);
-    if (env.DB) await persistUserToD1(env.DB, user);
+    await persistUserToD1(env.DB, user);
     return jsonResponse({ token, user });
   }
 
@@ -912,7 +1056,7 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
     }
 
     const token = createToken(userId, env.SESSION_SECRET);
-    if (env.DB) await persistUserToD1(env.DB, user);
+    await persistUserToD1(env.DB, user);
     return jsonResponse({ token, user });
   }
 
@@ -934,7 +1078,7 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
     }
     refreshEdgeUserState(found);
     const token = createToken(found.id, env.SESSION_SECRET);
-    if (env.DB) await persistUserToD1(env.DB, found);
+    await persistUserToD1(env.DB, found);
     return jsonResponse({ token, user: found });
   }
 
@@ -970,7 +1114,7 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
 
     refreshEdgeUserState(user, now);
     edgeUsers.set(user.id, user);
-    if (env.DB) await persistUserToD1(env.DB, user);
+    await persistUserToD1(env.DB, user);
     return jsonResponse({ user });
   }
 
@@ -1003,7 +1147,7 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
 
     refreshEdgeUserState(user);
     edgeUsers.set(user.id, user);
-    if (env.DB) await persistUserToD1(env.DB, user);
+    await persistUserToD1(env.DB, user);
     return jsonResponse({ user });
   }
 
@@ -1191,7 +1335,7 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
 
     refreshEdgeUserState(user);
     edgeUsers.set(user.id, user);
-    if (env.DB) await persistUserToD1(env.DB, user);
+    await persistUserToD1(env.DB, user);
     return jsonResponse({ success: true, user, alreadyFulfilled: false });
   }
 
@@ -1229,7 +1373,7 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
 
     refreshEdgeUserState(user);
     edgeUsers.set(user.id, user);
-    if (env.DB) await persistUserToD1(env.DB, user);
+    await persistUserToD1(env.DB, user);
     return jsonResponse({ user, rewardAmount });
   }
 
@@ -1268,7 +1412,7 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
     user.lastPassiveClaimTimestamp = now;
     refreshEdgeUserState(user, now);
     edgeUsers.set(user.id, user);
-    if (env.DB) await persistUserToD1(env.DB, user);
+    await persistUserToD1(env.DB, user);
     return jsonResponse({ user, claimedAmount: amount });
   }
 
@@ -1296,7 +1440,7 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
     user.totalEarned += task.reward;
     refreshEdgeUserState(user);
     edgeUsers.set(user.id, user);
-    if (env.DB) await persistUserToD1(env.DB, user);
+    await persistUserToD1(env.DB, user);
     return jsonResponse({ user, reward: task.reward });
   }
 
@@ -1321,7 +1465,7 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
     }
     refreshEdgeUserState(user, now);
     edgeUsers.set(user.id, user);
-    if (env.DB) await persistUserToD1(env.DB, user);
+    await persistUserToD1(env.DB, user);
     return jsonResponse({ user });
   }
 
@@ -1358,7 +1502,7 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
 
     refreshEdgeUserState(user, now);
     edgeUsers.set(user.id, user);
-    if (env.DB) await persistUserToD1(env.DB, user);
+    await persistUserToD1(env.DB, user);
     return jsonResponse({ user, prize, prizeIndex });
   }
 
@@ -1383,7 +1527,7 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
 
     refreshEdgeUserState(user);
     edgeUsers.set(user.id, user);
-    if (env.DB) await persistUserToD1(env.DB, user);
+    await persistUserToD1(env.DB, user);
     return jsonResponse({ success: true, user, claimedCount: unclaimed, bonus });
   }
 
@@ -1402,7 +1546,7 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
 
     refreshEdgeUserState(user);
     edgeUsers.set(user.id, user);
-    if (env.DB) await persistUserToD1(env.DB, user);
+    await persistUserToD1(env.DB, user);
     return jsonResponse({ success: true, user, bonus });
   }
 
@@ -1598,7 +1742,7 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
           targetUser.totalEarned = (targetUser.totalEarned || 0) + getUpgradeXpBonus(giftDef.baseBenefit * 2);
           refreshEdgeUserState(targetUser);
           edgeUsers.set(targetUser.id, targetUser);
-          if (env.DB) await persistUserToD1(env.DB, targetUser);
+          await persistUserToD1(env.DB, targetUser);
 
           if (invoicePayload) {
             edgeStarsInvoices.set(invoicePayload, {
@@ -1670,7 +1814,14 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
               );
               tgEdgeUser.telegramId = from.id;
               tgEdgeUser.displayName = `${from.first_name || ''} ${from.last_name || ''}`.trim() || tgEdgeUser.username;
-              if (env.DB) await persistUserToD1(env.DB, tgEdgeUser);
+              edgeUsers.set(uid, tgEdgeUser);
+              await persistUserToD1(env.DB, tgEdgeUser);
+            } else {
+              tgEdgeUser.telegramId = from.id;
+              tgEdgeUser.username = from.username || tgEdgeUser.username;
+              tgEdgeUser.displayName = `${from.first_name || ''} ${from.last_name || ''}`.trim() || tgEdgeUser.displayName;
+              edgeUsers.set(uid, tgEdgeUser);
+              await persistUserToD1(env.DB, tgEdgeUser);
             }
           }
 
@@ -2002,13 +2153,22 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
 
   if (pathname === '/api/admin/users' && method === 'GET') {
     if (!isAdmin) return jsonResponse({ error: 'Forbidden' }, 403);
+    await hydrateEdgeUsers(env, true);
     const list = Array.from(edgeUsers.values()).sort((a, b) => {
       const aBot = a.id.startsWith('bot_');
       const bBot = b.id.startsWith('bot_');
       if (aBot !== bBot) return aBot ? 1 : -1;
       return b.balance - a.balance;
     });
-    return jsonResponse({ users: list });
+    return jsonResponse({
+      users: list,
+      storage: {
+        engine: env.DB ? 'cloudflare_d1' : env.FOX_KV ? 'cloudflare_kv' : 'memory_only',
+        d1Bound: !!env.DB,
+        kvBound: !!env.FOX_KV,
+        realUsersCount: list.filter((u) => !u.id.startsWith('bot_')).length,
+      },
+    });
   }
 
   if (pathname === '/api/admin/users/adjust-balance' && method === 'POST') {
@@ -2048,7 +2208,7 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
     refreshEdgeUserState(targetUser);
 
     edgeUsers.set(userId, targetUser);
-    if (env.DB) await persistUserToD1(env.DB, targetUser);
+    await persistUserToD1(env.DB, targetUser);
 
     const list = Array.from(edgeUsers.values()).sort((a, b) => {
       const aBot = a.id.startsWith('bot_');
