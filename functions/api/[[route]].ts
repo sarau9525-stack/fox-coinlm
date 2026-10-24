@@ -120,6 +120,19 @@ async function ensureD1Schema(db: any) {
   if (!db) return;
   if (d1Initialized) return;
   try {
+    // 1. Schema-proof JSON snapshot table (never fails due to column additions or UNIQUE constraints)
+    await db
+      .prepare(
+        `CREATE TABLE IF NOT EXISTS foxcoin_users_kv (
+          id TEXT PRIMARY KEY,
+          user_json TEXT NOT NULL,
+          balance REAL DEFAULT 0,
+          updated_at INTEGER NOT NULL
+        )`
+      )
+      .run();
+
+    // 2. Structured users table
     await db
       .prepare(
         `CREATE TABLE IF NOT EXISTS users (
@@ -162,6 +175,30 @@ async function ensureD1Schema(db: any) {
         )`
       )
       .run();
+
+    // 3. Auto-migrate any existing D1 users table that was created in earlier versions
+    const alterStatements = [
+      `ALTER TABLE users ADD COLUMN referred_by_code TEXT`,
+      `ALTER TABLE users ADD COLUMN claimed_milestones INTEGER DEFAULT 0`,
+      `ALTER TABLE users ADD COLUMN boosters_json TEXT DEFAULT '{}'`,
+      `ALTER TABLE users ADD COLUMN referral_code TEXT`,
+      `ALTER TABLE users ADD COLUMN referral_count INTEGER DEFAULT 0`,
+      `ALTER TABLE users ADD COLUMN referral_earnings REAL DEFAULT 0`,
+      `ALTER TABLE users ADD COLUMN tasks_json TEXT DEFAULT '{}'`,
+      `ALTER TABLE users ADD COLUMN upgrades_json TEXT DEFAULT '{}'`,
+      `ALTER TABLE users ADD COLUMN unclaimed_passive REAL DEFAULT 0`,
+      `ALTER TABLE users ADD COLUMN last_passive_claim_timestamp INTEGER DEFAULT 0`,
+      `ALTER TABLE users ADD COLUMN max_offline_hours REAL DEFAULT 3`,
+      `ALTER TABLE users ADD COLUMN telegram_id TEXT`,
+      `ALTER TABLE users ADD COLUMN avatar_url TEXT`,
+      `ALTER TABLE users ADD COLUMN email TEXT`,
+      `ALTER TABLE users ADD COLUMN is_guest INTEGER DEFAULT 0`,
+      `ALTER TABLE users ADD COLUMN is_telegram INTEGER DEFAULT 0`,
+      `ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0`,
+    ];
+    for (const stmt of alterStatements) {
+      await db.prepare(stmt).run().catch(() => {});
+    }
 
     await db
       .prepare(
@@ -206,6 +243,7 @@ async function ensureD1Schema(db: any) {
     await db.prepare(`CREATE INDEX IF NOT EXISTS idx_users_telegram_id ON users(telegram_id)`).run().catch(() => {});
     await db.prepare(`CREATE INDEX IF NOT EXISTS idx_users_referral_code ON users(referral_code)`).run().catch(() => {});
     await db.prepare(`CREATE INDEX IF NOT EXISTS idx_users_balance ON users(balance DESC)`).run().catch(() => {});
+    await db.prepare(`CREATE INDEX IF NOT EXISTS idx_foxcoin_kv_balance ON foxcoin_users_kv(balance DESC)`).run().catch(() => {});
 
     d1Initialized = true;
     lastD1Error = null;
@@ -528,7 +566,59 @@ function mergeUserProgress(base: UserGameState, incoming?: Partial<UserGameState
   return merged;
 }
 
-// Hydrate registered users from Cloudflare D1 and/or Cloudflare KV into edgeUsers
+const EDGE_CACHE_USERS_URL = 'https://foxcoin-edge-storage.internal/users-map-v3';
+
+function getGlobalEdgeCache(): any {
+  try {
+    if (typeof caches !== 'undefined' && (caches as any).default) {
+      return (caches as any).default;
+    }
+  } catch {}
+  return null;
+}
+
+async function hydrateFromEdgeCache(): Promise<void> {
+  const edgeCache = getGlobalEdgeCache();
+  if (!edgeCache) return;
+  try {
+    const cachedRes = await edgeCache.match(EDGE_CACHE_USERS_URL);
+    if (cachedRes && cachedRes.ok) {
+      const parsedMap = (await cachedRes.json()) as Record<string, UserGameState>;
+      if (parsedMap && typeof parsedMap === 'object') {
+        for (const [uid, cachedUser] of Object.entries(parsedMap)) {
+          if (!uid || !cachedUser || uid.startsWith('bot_') || uid.startsWith('seed_')) continue;
+          const existing = edgeUsers.get(uid);
+          edgeUsers.set(uid, existing ? mergeUserProgress(existing, cachedUser) : { ...cachedUser, dailyRewardDays: DAILY_REWARDS });
+        }
+      }
+    }
+  } catch {}
+}
+
+async function persistToEdgeCache(user?: UserGameState): Promise<void> {
+  const edgeCache = getGlobalEdgeCache();
+  if (!edgeCache) return;
+  try {
+    const realUsersObj: Record<string, UserGameState> = {};
+    for (const [uid, u] of edgeUsers.entries()) {
+      if (uid && u && !uid.startsWith('bot_') && !uid.startsWith('seed_')) {
+        realUsersObj[uid] = u;
+      }
+    }
+    if (user && user.id && !user.id.startsWith('bot_') && !user.id.startsWith('seed_')) {
+      realUsersObj[user.id] = user;
+    }
+    const snapshotResponse = new Response(JSON.stringify(realUsersObj), {
+      headers: {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'public, max-age=31536000, s-maxage=31536000',
+      },
+    });
+    await edgeCache.put(EDGE_CACHE_USERS_URL, snapshotResponse);
+  } catch {}
+}
+
+// Hydrate registered users from Cloudflare D1, Cloudflare KV, and Cloudflare Edge Cache into edgeUsers
 async function hydrateEdgeUsers(env: CloudflareEnv, force = false) {
   const now = Date.now();
   if (!force && now - lastUsersHydratedAt < 1500) return;
@@ -541,10 +631,13 @@ async function hydrateEdgeUsers(env: CloudflareEnv, force = false) {
     }
   }
 
+  // 1. Hydrate from Cloudflare Global Edge Cache (survives Worker isolate eviction even without bindings)
+  await hydrateFromEdgeCache();
+
   const kv = resolveKVBinding(env);
   const db = resolveD1Binding(env);
 
-  // 1. Hydrate from Cloudflare KV if bound
+  // 2. Hydrate from Cloudflare KV if bound
   if (kv) {
     try {
       const rawKv = await kv.get('foxcoin_users_map');
@@ -561,27 +654,49 @@ async function hydrateEdgeUsers(env: CloudflareEnv, force = false) {
     }
   }
 
-  // 2. Hydrate from Cloudflare D1 SQLite database if bound (Primary source of truth)
+  // 3. Hydrate from Cloudflare D1 SQLite database if bound (Both foxcoin_users_kv and users tables)
   if (db) {
     try {
       await ensureD1Schema(db);
-      const res = await db
-        .prepare("SELECT * FROM users WHERE id NOT LIKE 'bot_%' AND id NOT LIKE 'seed_%' ORDER BY balance DESC, updated_at DESC LIMIT 5000")
-        .all();
-      const d1UserIds = new Set<string>();
-      if (res && Array.isArray(res.results)) {
-        for (const row of res.results) {
-          const d1User = mapD1RowToUser(row);
-          if (d1User.id.startsWith('bot_') || d1User.id.startsWith('seed_')) continue;
-          d1UserIds.add(d1User.id);
-          const existing = edgeUsers.get(d1User.id);
-          edgeUsers.set(d1User.id, existing ? mergeUserProgress(d1User, existing) : d1User);
-        }
-      }
+      const d1KvIds = new Set<string>();
 
-      // Flush any in-memory users that were not yet stored in D1 into D1 immediately
+      // 3a. Load from schema-proof foxcoin_users_kv table
+      try {
+        const kvRes = await db
+          .prepare("SELECT id, user_json FROM foxcoin_users_kv WHERE id NOT LIKE 'bot_%' AND id NOT LIKE 'seed_%' ORDER BY balance DESC, updated_at DESC LIMIT 5000")
+          .all();
+        if (kvRes && Array.isArray(kvRes.results)) {
+          for (const row of kvRes.results) {
+            if (!row?.id || !row?.user_json) continue;
+            try {
+              const parsed = JSON.parse(String(row.user_json)) as UserGameState;
+              if (!parsed || !parsed.id || parsed.id.startsWith('bot_') || parsed.id.startsWith('seed_')) continue;
+              d1KvIds.add(parsed.id);
+              const existing = edgeUsers.get(parsed.id);
+              edgeUsers.set(parsed.id, existing ? mergeUserProgress(parsed, existing) : { ...parsed, dailyRewardDays: DAILY_REWARDS });
+            } catch {}
+          }
+        }
+      } catch {}
+
+      // 3b. Load from structured users table
+      try {
+        const res = await db
+          .prepare("SELECT * FROM users WHERE id NOT LIKE 'bot_%' AND id NOT LIKE 'seed_%' ORDER BY balance DESC, updated_at DESC LIMIT 5000")
+          .all();
+        if (res && Array.isArray(res.results)) {
+          for (const row of res.results) {
+            const d1User = mapD1RowToUser(row);
+            if (d1User.id.startsWith('bot_') || d1User.id.startsWith('seed_')) continue;
+            const existing = edgeUsers.get(d1User.id);
+            edgeUsers.set(d1User.id, existing ? mergeUserProgress(d1User, existing) : d1User);
+          }
+        }
+      } catch {}
+
+      // 3c. Flush any in-memory or Edge-Cached users that were not yet stored in D1 foxcoin_users_kv into D1 immediately
       for (const [uid, memUser] of edgeUsers.entries()) {
-        if (!uid.startsWith('bot_') && !uid.startsWith('seed_') && !d1UserIds.has(uid)) {
+        if (!uid.startsWith('bot_') && !uid.startsWith('seed_') && !d1KvIds.has(uid)) {
           await persistUserToD1(db, memUser);
         }
       }
@@ -590,11 +705,18 @@ async function hydrateEdgeUsers(env: CloudflareEnv, force = false) {
       console.warn('D1 user hydrate notice:', err);
     }
   }
+
+  // Keep Edge Cache synced with hydrated state
+  if (edgeUsers.size > 0) {
+    await persistToEdgeCache();
+  }
 }
 
-// Persist user to Cloudflare D1 and/or KV
+// Persist user to Cloudflare D1 (foxcoin_users_kv + users), Cloudflare KV, and Cloudflare Edge Cache
 async function persistUserToD1(db: any, user: UserGameState): Promise<boolean> {
   if (!user || !user.id || user.id.startsWith('bot_') || user.id.startsWith('seed_')) return false;
+
+  edgeUsers.set(user.id, user);
 
   const effectiveDb = db || resolveD1Binding(currentEdgeEnv);
   const effectiveKv = resolveKVBinding(currentEdgeEnv);
@@ -616,7 +738,14 @@ async function persistUserToD1(db: any, user: UserGameState): Promise<boolean> {
     channelVerifiedAt: user.channelVerifiedAt || undefined,
     lastEnergyTimestamp: (user as any).lastEnergyTimestamp || Date.now(),
   };
+  user.boosters = enrichedBoosters;
+  user.invitedUserIds = invitedUserIds;
+  if (referredByCode) user.referredByCode = referredByCode;
 
+  // 1. Always persist to Cloudflare Global Edge Cache (survives Worker isolate restarts)
+  await persistToEdgeCache(user);
+
+  // 2. Persist to Cloudflare KV if bound
   if (effectiveKv) {
     try {
       const realUsersObj: Record<string, UserGameState> = {};
@@ -631,8 +760,33 @@ async function persistUserToD1(db: any, user: UserGameState): Promise<boolean> {
   }
 
   if (!effectiveDb) return false;
+
+  let savedSuccess = false;
+  const now = Date.now();
+
   try {
     await ensureD1Schema(effectiveDb);
+
+    // 3. Persist full JSON snapshot to foxcoin_users_kv (100% schema-proof & constraint-proof)
+    await effectiveDb
+      .prepare(
+        `INSERT INTO foxcoin_users_kv (id, user_json, balance, updated_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           user_json = excluded.user_json,
+           balance = excluded.balance,
+           updated_at = excluded.updated_at`
+      )
+      .bind(user.id, JSON.stringify(user), Number(user.balance || 0), now)
+      .run();
+    savedSuccess = true;
+    lastD1Error = null;
+  } catch (kvErr: any) {
+    lastD1Error = kvErr?.message || String(kvErr);
+  }
+
+  // 4. Also persist to structured users table
+  const tryInsertStructuredUsers = async (refCodeToUse: string) => {
     await effectiveDb
       .prepare(
         `INSERT INTO users (
@@ -712,29 +866,44 @@ async function persistUserToD1(db: any, user: UserGameState): Promise<boolean> {
         Number(user.tapPower || 1),
         Number(user.profitPerHour || 0),
         Number(user.unclaimedPassive || 0),
-        Number(user.lastPassiveClaimTimestamp || Date.now()),
+        Number(user.lastPassiveClaimTimestamp || now),
         Number(user.maxOfflineHours || 3),
         JSON.stringify(user.upgrades || {}),
         Number(user.dailyStreak || 0),
         user.lastDailyClaimDate || null,
         JSON.stringify(user.tasks || {}),
-        user.referralCode || makeDeterministicReferralCode(user.id),
+        refCodeToUse,
         referredByCode,
         Number(user.referralCount || 0),
         Number(user.referralEarnings || 0),
         Number(user.claimedMilestones || 0),
         JSON.stringify(enrichedBoosters),
-        Number(user.createdAt || Date.now()),
-        Date.now()
+        Number(user.createdAt || now),
+        now
       )
       .run();
+  };
+
+  try {
+    await tryInsertStructuredUsers(user.referralCode || makeDeterministicReferralCode(user.id));
+    savedSuccess = true;
     lastD1Error = null;
-    return true;
   } catch (err: any) {
-    lastD1Error = err?.message || String(err);
-    console.warn('D1 user persist notice:', err);
-    return false;
+    const errMsg = err?.message || String(err);
+    if (errMsg.includes('UNIQUE') || errMsg.includes('referral_code')) {
+      try {
+        const uniqueFallbackCode = makeDeterministicReferralCode(user.id) + '_' + user.id.slice(-3).toUpperCase();
+        user.referralCode = uniqueFallbackCode;
+        await tryInsertStructuredUsers(uniqueFallbackCode);
+        savedSuccess = true;
+        lastD1Error = null;
+      } catch {}
+    } else if (!savedSuccess) {
+      lastD1Error = errMsg;
+    }
   }
+
+  return savedSuccess;
 }
 
 // Persist trade to Cloudflare D1
@@ -1162,8 +1331,14 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
   };
 
   // Automatically persist any client state attached via x-fox-sync header on any API call
+  // (Skip pre-creating temporary fox_ IDs during /api/auth/telegram so they merge cleanly into tg_ IDs)
   const autoSyncedHeaderUser = parseClientSyncUser();
-  if (autoSyncedHeaderUser && autoSyncedHeaderUser.id && !autoSyncedHeaderUser.id.startsWith('bot_')) {
+  if (
+    autoSyncedHeaderUser &&
+    autoSyncedHeaderUser.id &&
+    !autoSyncedHeaderUser.id.startsWith('bot_') &&
+    !(pathname === '/api/auth/telegram' && autoSyncedHeaderUser.id.startsWith('fox_'))
+  ) {
     const existing = edgeUsers.get(autoSyncedHeaderUser.id);
     if (existing) {
       const merged = refreshEdgeUserState(mergeUserProgress(existing, autoSyncedHeaderUser));
@@ -1415,14 +1590,28 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
       }
     }
 
-    if (syncedClient && (syncedClient.id === userId || String(syncedClient.telegramId) === cleanTgId)) {
+    if (
+      syncedClient &&
+      (syncedClient.id === userId ||
+        String(syncedClient.telegramId) === cleanTgId ||
+        syncedClient.id?.startsWith('fox_'))
+    ) {
+      const oldTempId = syncedClient.id !== userId && syncedClient.id?.startsWith('fox_') ? syncedClient.id : null;
       user = mergeUserProgress(user, {
         ...syncedClient,
         id: userId,
+        referralCode: user.referralCode || makeDeterministicReferralCode(userId),
         telegramId: user.telegramId,
         isTelegram: true,
         isGuest: false,
       });
+      if (oldTempId) {
+        edgeUsers.delete(oldTempId);
+        if (env.DB) {
+          await env.DB.prepare('DELETE FROM users WHERE id = ?').bind(oldTempId).run().catch(() => {});
+          await env.DB.prepare('DELETE FROM foxcoin_users_kv WHERE id = ?').bind(oldTempId).run().catch(() => {});
+        }
+      }
     }
 
     refreshEdgeUserState(user);
@@ -2089,13 +2278,49 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
     return jsonResponse({ trades });
   }
 
-  // Global Leaderboard (exclusively real registered users from Cloudflare D1 / KV)
+  // Global Leaderboard (exclusively real registered users from Cloudflare D1 / KV / Edge Cache)
   if (pathname === '/api/game/leaderboard') {
     await hydrateEdgeUsers(env, true);
     const user = getAuthUser();
     if (user && !user.id.startsWith('bot_') && !user.id.startsWith('seed_')) {
       edgeUsers.set(user.id, user);
       await persistUserToD1(env.DB, user);
+    }
+
+    // If client sent known players via POST body, re-hydrate any missing real players into D1 & Edge Cache
+    if (method === 'POST') {
+      try {
+        const body = (await request.json()) as any;
+        const knownPlayers = Array.isArray(body?.knownPlayers) ? body.knownPlayers : [];
+        for (const kp of knownPlayers) {
+          if (!kp || typeof kp.id !== 'string' || kp.id.startsWith('bot_') || kp.id.startsWith('seed_')) continue;
+          const existing = edgeUsers.get(kp.id);
+          if (!existing) {
+            const restored = createNewUserRecord(
+              kp.id,
+              kp.username || kp.displayName || `Fox_${kp.id.slice(-4)}`,
+              Boolean(kp.isTelegram || kp.id.startsWith('tg_')),
+              Boolean(kp.isGuest || kp.id.startsWith('guest_'))
+            );
+            restored.displayName = kp.displayName || restored.username;
+            restored.balance = Math.max(restored.balance, Number(kp.balance || 0));
+            restored.totalEarned = Math.max(restored.totalEarned, Number(kp.balance || 0));
+            restored.profitPerHour = Math.max(restored.profitPerHour, Number(kp.profitPerHour || 0));
+            restored.level = Math.max(restored.level, Number(kp.level || 1));
+            if (kp.levelName) restored.levelName = String(kp.levelName);
+            refreshEdgeUserState(restored);
+            edgeUsers.set(restored.id, restored);
+            await persistUserToD1(env.DB, restored);
+          } else if (Number(kp.balance || 0) > existing.balance) {
+            existing.balance = Number(kp.balance);
+            existing.totalEarned = Math.max(existing.totalEarned || 0, existing.balance);
+            existing.profitPerHour = Math.max(existing.profitPerHour || 0, Number(kp.profitPerHour || 0));
+            refreshEdgeUserState(existing);
+            edgeUsers.set(existing.id, existing);
+            await persistUserToD1(env.DB, existing);
+          }
+        }
+      } catch {}
     }
 
     const limit = Math.min(200, Math.max(10, Number(url.searchParams.get('limit') || 50)));

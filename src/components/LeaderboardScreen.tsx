@@ -9,26 +9,43 @@ interface LeaderboardScreenProps {
 }
 
 export const LeaderboardScreen: React.FC<LeaderboardScreenProps> = ({ user }) => {
-  const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
+  const [entries, setEntries] = useState<LeaderboardEntry[]>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const raw = localStorage.getItem('foxcoin_permanent_leaderboard_v1');
+        if (raw) {
+          const parsed = JSON.parse(raw) as LeaderboardEntry[];
+          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        }
+      } catch {}
+    }
+    return [];
+  });
   const [playerEntry, setPlayerEntry] = useState<LeaderboardEntry | undefined>();
-  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [isLoading, setIsLoading] = useState<boolean>(false);
 
-  const fetchLeaderboard = async () => {
+  const fetchLeaderboard = React.useCallback(async () => {
     try {
       setIsLoading(true);
-      const res = await api.getLeaderboard(50);
-      setEntries(res.list);
-      setPlayerEntry(res.playerEntry);
+      const res = await api.getLeaderboard(100);
+      if (Array.isArray(res.list) && res.list.length > 0) {
+        setEntries(res.list);
+      }
+      if (res.playerEntry) {
+        setPlayerEntry(res.playerEntry);
+      }
     } catch (err) {
       console.error('Failed to load leaderboard:', err);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     fetchLeaderboard();
-  }, []);
+    const timer = setInterval(fetchLeaderboard, 20000);
+    return () => clearInterval(timer);
+  }, [fetchLeaderboard]);
 
   const top3 = entries.slice(0, 3);
 

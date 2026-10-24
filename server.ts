@@ -635,12 +635,30 @@ app.post('/api/game/spin-wheel', requireAuth, (req: AuthenticatedRequest, res) =
   });
 });
 
-// Global Leaderboard
-app.get('/api/game/leaderboard', requireAuth, (req: AuthenticatedRequest, res) => {
+// Global Leaderboard (GET & POST with permanent player re-hydration)
+const handleLeaderboard = (req: AuthenticatedRequest, res: express.Response) => {
+  const knownPlayers = Array.isArray(req.body?.knownPlayers) ? req.body.knownPlayers : [];
+  for (const kp of knownPlayers) {
+    if (!kp || typeof kp.id !== 'string' || kp.id.startsWith('bot_') || kp.id.startsWith('seed_')) continue;
+    db.upsertUserSnapshot({
+      id: kp.id,
+      username: kp.username || kp.displayName || 'FoxPlayer',
+      displayName: kp.displayName || kp.username || 'FoxPlayer',
+      balance: Number(kp.balance || 0),
+      totalEarned: Number(kp.balance || 0),
+      profitPerHour: Number(kp.profitPerHour || 0),
+      level: Number(kp.level || 1),
+      levelName: kp.levelName || 'Bronze Fox',
+      isTelegram: kp.id.startsWith('tg_'),
+      isGuest: kp.id.startsWith('guest_'),
+    });
+  }
   const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 50;
   const data = db.getLeaderboard(limit, req.userId);
   res.json(data);
-});
+};
+app.get('/api/game/leaderboard', requireAuth, handleLeaderboard);
+app.post('/api/game/leaderboard', requireAuth, handleLeaderboard);
 
 // Get Current User's Invited Friends List
 app.get('/api/friends/list', requireAuth, (req: AuthenticatedRequest, res) => {

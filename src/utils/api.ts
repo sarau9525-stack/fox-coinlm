@@ -1286,40 +1286,147 @@ class ApiService {
   }
 
   public async getLeaderboard(limit = 50): Promise<{ list: LeaderboardEntry[]; playerEntry?: LeaderboardEntry }> {
-    try {
-      return await this.request<{ list: LeaderboardEntry[]; playerEntry?: LeaderboardEntry }>(`/api/game/leaderboard?limit=${limit}`);
-    } catch (err) {
-      if (this.isStaticFallbackError(err)) {
-        const user = this.getLocalUser();
-        const extraRaw = typeof window !== 'undefined' ? localStorage.getItem('foxcoin_local_all_users_v1') : null;
-        let storedUsers: UserGameState[] = [];
-        if (extraRaw) {
-          try {
-            storedUsers = JSON.parse(extraRaw);
-          } catch {}
-        }
-        const realUsers = storedUsers.filter(
-          (u) => u && u.id && !u.id.startsWith('bot_') && !u.id.startsWith('seed_') && u.id !== user.id
-        );
-        realUsers.push(user);
-        realUsers.sort((a, b) => b.balance - a.balance);
+    const PERM_LB_KEY = 'foxcoin_permanent_leaderboard_v1';
+    const currentUser = this.getLocalUser();
 
-        const list: LeaderboardEntry[] = realUsers.slice(0, limit).map((u, idx) => ({
-          rank: idx + 1,
-          id: u.id,
-          displayName: u.displayName || u.username,
-          username: u.username,
-          balance: u.balance,
-          profitPerHour: u.profitPerHour,
-          level: u.level,
-          levelName: u.levelName,
-          isCurrentPlayer: u.id === user.id,
-        }));
+    const loadKnownPlayers = (): LeaderboardEntry[] => {
+      const map = new Map<string, LeaderboardEntry>();
+      if (typeof window !== 'undefined') {
+        try {
+          const permRaw = localStorage.getItem(PERM_LB_KEY);
+          if (permRaw) {
+            const parsedPerm = JSON.parse(permRaw) as LeaderboardEntry[];
+            if (Array.isArray(parsedPerm)) {
+              for (const item of parsedPerm) {
+                if (item && item.id && !item.id.startsWith('bot_') && !item.id.startsWith('seed_')) {
+                  map.set(item.id, item);
+                }
+              }
+            }
+          }
+        } catch {}
 
-        const playerEntry = list.find((e) => e.isCurrentPlayer) || list[0];
-        return { list, playerEntry };
+        try {
+          const extraRaw = localStorage.getItem('foxcoin_local_all_users_v1');
+          if (extraRaw) {
+            const storedUsers = JSON.parse(extraRaw) as UserGameState[];
+            if (Array.isArray(storedUsers)) {
+              for (const u of storedUsers) {
+                if (u && u.id && !u.id.startsWith('bot_') && !u.id.startsWith('seed_')) {
+                  const prev = map.get(u.id);
+                  map.set(u.id, {
+                    rank: prev?.rank || 1,
+                    id: u.id,
+                    displayName: u.displayName || u.username || prev?.displayName || 'FoxPlayer',
+                    username: u.username || prev?.username || 'FoxPlayer',
+                    balance: Math.max(Number(u.balance || 0), Number(prev?.balance || 0)),
+                    profitPerHour: Math.max(Number(u.profitPerHour || 0), Number(prev?.profitPerHour || 0)),
+                    level: Math.max(Number(u.level || 1), Number(prev?.level || 1)),
+                    levelName: u.levelName || prev?.levelName || 'Bronze Fox',
+                    isCurrentPlayer: u.id === currentUser.id,
+                  });
+                }
+              }
+            }
+          }
+        } catch {}
       }
-      throw err;
+
+      if (currentUser && currentUser.id && !currentUser.id.startsWith('bot_')) {
+        const prev = map.get(currentUser.id);
+        map.set(currentUser.id, {
+          rank: prev?.rank || 1,
+          id: currentUser.id,
+          displayName: currentUser.displayName || currentUser.username,
+          username: currentUser.username,
+          balance: Math.max(Number(currentUser.balance || 0), Number(prev?.balance || 0)),
+          profitPerHour: Math.max(Number(currentUser.profitPerHour || 0), Number(prev?.profitPerHour || 0)),
+          level: Math.max(Number(currentUser.level || 1), Number(prev?.level || 1)),
+          levelName: currentUser.levelName || prev?.levelName || 'Bronze Fox',
+          isCurrentPlayer: true,
+        });
+      }
+
+      return Array.from(map.values());
+    };
+
+    const mergeAndSaveLeaderboard = (serverList: LeaderboardEntry[], knownList: LeaderboardEntry[]) => {
+      const mergedMap = new Map<string, LeaderboardEntry>();
+
+      for (const kp of knownList) {
+        if (!kp || !kp.id || kp.id.startsWith('bot_') || kp.id.startsWith('seed_')) continue;
+        mergedMap.set(kp.id, { ...kp, isCurrentPlayer: kp.id === currentUser.id });
+      }
+
+      for (const sp of serverList) {
+        if (!sp || !sp.id || sp.id.startsWith('bot_') || sp.id.startsWith('seed_')) continue;
+        const existing = mergedMap.get(sp.id);
+        mergedMap.set(sp.id, {
+          ...sp,
+          displayName: sp.displayName || existing?.displayName || sp.username,
+          username: sp.username || existing?.username || 'FoxPlayer',
+          balance: Math.max(Number(sp.balance || 0), Number(existing?.balance || 0)),
+          profitPerHour: Math.max(Number(sp.profitPerHour || 0), Number(existing?.profitPerHour || 0)),
+          level: Math.max(Number(sp.level || 1), Number(existing?.level || 1)),
+          levelName: sp.levelName || existing?.levelName || 'Bronze Fox',
+          isCurrentPlayer: Boolean(sp.isCurrentPlayer || sp.id === currentUser.id),
+        });
+      }
+
+      // If current user is a Telegram user (tg_...), remove any temporary local fox_... duplicate
+      if (currentUser?.id?.startsWith('tg_')) {
+        for (const key of Array.from(mergedMap.keys())) {
+          if (key.startsWith('fox_')) {
+            mergedMap.delete(key);
+          }
+        }
+      }
+
+      const sorted = Array.from(mergedMap.values()).sort((a, b) => {
+        if (b.balance !== a.balance) return b.balance - a.balance;
+        return (b.profitPerHour || 0) - (a.profitPerHour || 0);
+      });
+
+      const fullRanked: LeaderboardEntry[] = sorted.map((item, idx) => ({
+        ...item,
+        rank: idx + 1,
+        isCurrentPlayer: item.id === currentUser.id || Boolean(item.isCurrentPlayer && item.id === currentUser.id),
+      }));
+
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.setItem(PERM_LB_KEY, JSON.stringify(fullRanked.slice(0, 500)));
+        } catch {}
+      }
+
+      const list = fullRanked.slice(0, limit);
+      const playerEntry = fullRanked.find((e) => e.id === currentUser.id || e.isCurrentPlayer) || list[0];
+      return { list, playerEntry };
+    };
+
+    const knownPlayers = loadKnownPlayers();
+
+    try {
+      const serverRes = await this.request<{ list: LeaderboardEntry[]; playerEntry?: LeaderboardEntry }>(
+        `/api/game/leaderboard?limit=${limit}`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ knownPlayers: knownPlayers.slice(0, 200) }),
+        }
+      );
+      return mergeAndSaveLeaderboard(serverRes.list || [], knownPlayers);
+    } catch (err) {
+      try {
+        const getRes = await this.request<{ list: LeaderboardEntry[]; playerEntry?: LeaderboardEntry }>(
+          `/api/game/leaderboard?limit=${limit}`
+        );
+        return mergeAndSaveLeaderboard(getRes.list || [], knownPlayers);
+      } catch (fallbackErr) {
+        if (this.isStaticFallbackError(fallbackErr) || knownPlayers.length > 0) {
+          return mergeAndSaveLeaderboard([], knownPlayers);
+        }
+        throw fallbackErr;
+      }
     }
   }
 

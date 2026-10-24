@@ -30,13 +30,20 @@ CREATE TABLE IF NOT EXISTS users (
   daily_streak INTEGER DEFAULT 0,
   last_daily_claim_date TEXT,
   tasks_json TEXT DEFAULT '{}',
-  referral_code TEXT UNIQUE,
+  referral_code TEXT,
   referred_by_code TEXT,
   referral_count INTEGER DEFAULT 0,
   referral_earnings REAL DEFAULT 0,
   claimed_milestones INTEGER DEFAULT 0,
-  boosters_json TEXT DEFAULT '{"fullEnergyRemaining":3,"nextFullEnergyAt":0,"turboActiveUntil":0,"nextTurboAt":0}',
+  boosters_json TEXT DEFAULT '{"fullEnergyRemaining":6,"nextFullEnergyAt":0,"turboActiveUntil":0,"nextTurboAt":0}',
   created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS foxcoin_users_kv (
+  id TEXT PRIMARY KEY,
+  user_json TEXT NOT NULL,
+  balance REAL DEFAULT 0,
   updated_at INTEGER NOT NULL
 );
 
