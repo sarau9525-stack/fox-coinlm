@@ -5,6 +5,7 @@ import {
   UserGameState,
   InvitedFriendInfo,
   LeaderboardEntry,
+  FakeLeaderboardMember,
   PlayerLevel,
   UpgradeDefinition,
   TradeOrder,
@@ -94,6 +95,7 @@ interface DatabaseSchema {
   customUpgrades?: UpgradeDefinition[];
   deletedUpgradeIds?: string[];
   wheelPrizes?: LuckyWheelPrize[];
+  fakeLeaderboardMembers?: FakeLeaderboardMember[];
   starsInvoices?: Record<
     string,
     {
@@ -124,6 +126,7 @@ class DatabaseStore {
     customUpgrades: [],
     deletedUpgradeIds: [],
     wheelPrizes: [],
+    fakeLeaderboardMembers: [],
     starsInvoices: {},
   };
   private saveTimeout: NodeJS.Timeout | null = null;
@@ -185,10 +188,10 @@ class DatabaseStore {
       };
     }
 
-    // Purge any legacy mock bot users so rankings reflect only real registered users
+    // Purge any legacy mock bot users so real user table reflects only real registered users
     if (this.data.users) {
       for (const uid of Object.keys(this.data.users)) {
-        if (uid.startsWith('bot_') || uid.startsWith('seed_')) {
+        if (uid.startsWith('bot_') || uid.startsWith('seed_') || uid.startsWith('fake_lb_')) {
           const refCode = this.data.users[uid]?.referralCode;
           if (refCode && this.data.referralCodeToUserId) {
             delete this.data.referralCodeToUserId[refCode];
@@ -1307,18 +1310,58 @@ class DatabaseStore {
     return this.data.trades.filter((t) => t.userId === userId);
   }
 
-  // Leaderboard (exclusively real registered users)
+  // Leaderboard (real registered users + display-only admin fake leaderboard members)
   public getLeaderboard(limit = 50, currentUserId?: string): { list: LeaderboardEntry[]; playerEntry?: LeaderboardEntry } {
     const allUsers = Object.values(this.data.users)
-      .filter((u) => u && u.id && !u.id.startsWith('bot_') && !u.id.startsWith('seed_'))
+      .filter((u) => u && u.id && !u.id.startsWith('bot_') && !u.id.startsWith('seed_') && !u.id.startsWith('fake_lb_'))
       .map((u) => this.refreshUserState(u));
-    allUsers.sort((a, b) => {
+
+    const combinedEntries: Array<{
+      id: string;
+      displayName: string;
+      username: string;
+      balance: number;
+      profitPerHour: number;
+      level: number;
+      levelName: string;
+      totalEarned?: number;
+      isCurrentPlayer?: boolean;
+    }> = allUsers.map((u) => ({
+      id: u.id,
+      displayName: u.displayName || u.username,
+      username: u.username,
+      balance: u.balance,
+      profitPerHour: u.profitPerHour,
+      level: u.level,
+      levelName: u.levelName,
+      totalEarned: u.totalEarned || u.balance,
+      isCurrentPlayer: u.id === currentUserId,
+    }));
+
+    const fakeMembers = this.getFakeLeaderboardMembers();
+    for (const fm of fakeMembers) {
+      if (!fm || !fm.id) continue;
+      const lvlInfo = this.calculateLevel(fm.balance || 0);
+      combinedEntries.push({
+        id: fm.id,
+        displayName: fm.displayName || fm.username || 'FoxPlayer',
+        username: fm.username || 'fox_player',
+        balance: Math.max(0, Math.floor(Number(fm.balance) || 0)),
+        profitPerHour: Math.max(0, Math.floor(Number(fm.profitPerHour) || 0)),
+        level: fm.level || lvlInfo.level,
+        levelName: fm.levelName || lvlInfo.name,
+        totalEarned: Math.max(0, Math.floor(Number(fm.balance) || 0)),
+        isCurrentPlayer: false,
+      });
+    }
+
+    combinedEntries.sort((a, b) => {
       if (b.balance !== a.balance) return b.balance - a.balance;
       if (b.profitPerHour !== a.profitPerHour) return b.profitPerHour - a.profitPerHour;
       return (b.totalEarned || 0) - (a.totalEarned || 0);
     });
 
-    const list: LeaderboardEntry[] = allUsers.slice(0, limit).map((u, index) => ({
+    const list: LeaderboardEntry[] = combinedEntries.slice(0, limit).map((u, index) => ({
       rank: index + 1,
       id: u.id,
       displayName: u.displayName || u.username,
@@ -1327,14 +1370,14 @@ class DatabaseStore {
       profitPerHour: u.profitPerHour,
       level: u.level,
       levelName: u.levelName,
-      isCurrentPlayer: u.id === currentUserId,
+      isCurrentPlayer: Boolean(u.isCurrentPlayer),
     }));
 
     let playerEntry: LeaderboardEntry | undefined;
     if (currentUserId) {
-      const idx = allUsers.findIndex((u) => u.id === currentUserId);
+      const idx = combinedEntries.findIndex((u) => u.id === currentUserId);
       if (idx !== -1) {
-        const u = allUsers[idx];
+        const u = combinedEntries[idx];
         playerEntry = {
           rank: idx + 1,
           id: u.id,
@@ -1454,9 +1497,58 @@ class DatabaseStore {
 
   public getAllUsers(): UserGameState[] {
     const all = Object.values(this.data.users)
-      .filter((u) => u && u.id && !u.id.startsWith('bot_') && !u.id.startsWith('seed_'))
+      .filter((u) => u && u.id && !u.id.startsWith('bot_') && !u.id.startsWith('seed_') && !u.id.startsWith('fake_lb_'))
       .map((u) => this.refreshUserState(u));
     return all.sort((a, b) => b.balance - a.balance);
+  }
+
+  public getFakeLeaderboardMembers(): FakeLeaderboardMember[] {
+    const list = Array.isArray(this.data.fakeLeaderboardMembers) ? this.data.fakeLeaderboardMembers : [];
+    return list
+      .filter((m) => m && m.id)
+      .map((m) => {
+        const cleanBal = Math.max(0, Math.floor(Number(m.balance) || 0));
+        const lvlInfo = this.calculateLevel(cleanBal);
+        return {
+          id: String(m.id).startsWith('fake_lb_') ? String(m.id) : `fake_lb_${String(m.id)}`,
+          displayName: String(m.displayName || m.username || 'FoxPlayer').trim(),
+          username: String(m.username || 'fox_player').replace(/^@/, '').trim(),
+          balance: cleanBal,
+          profitPerHour: Math.max(0, Math.floor(Number(m.profitPerHour) || 0)),
+          level: Number(m.level) || lvlInfo.level,
+          levelName: String(m.levelName || lvlInfo.name),
+          createdAt: Number(m.createdAt) || Date.now(),
+        };
+      })
+      .sort((a, b) => b.balance - a.balance);
+  }
+
+  public adminSaveFakeLeaderboardMembers(members: FakeLeaderboardMember[]): FakeLeaderboardMember[] {
+    const sanitized = (Array.isArray(members) ? members : [])
+      .filter((m) => m && (m.displayName || m.username))
+      .map((m, idx) => {
+        const cleanBal = Math.max(0, Math.floor(Number(m.balance) || 0));
+        const lvlInfo = this.calculateLevel(cleanBal);
+        const rawId = String(m.id || `fake_lb_${Date.now()}_${idx}`);
+        const id = rawId.startsWith('fake_lb_') ? rawId : `fake_lb_${rawId}`;
+        const cleanUsername = String(m.username || m.displayName || `fox_${idx + 1}`)
+          .replace(/^@/, '')
+          .replace(/\s+/g, '_')
+          .trim();
+        return {
+          id,
+          displayName: String(m.displayName || cleanUsername).trim(),
+          username: cleanUsername,
+          balance: cleanBal,
+          profitPerHour: Math.max(0, Math.floor(Number(m.profitPerHour) || 0)),
+          level: Number(m.level) || lvlInfo.level,
+          levelName: String(m.levelName || lvlInfo.name),
+          createdAt: Number(m.createdAt) || Date.now(),
+        };
+      });
+    this.data.fakeLeaderboardMembers = sanitized;
+    this.save();
+    return this.getFakeLeaderboardMembers();
   }
 
   public adminAdjustUserBalance(params: {

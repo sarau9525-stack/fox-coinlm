@@ -146,6 +146,17 @@ export interface LeaderboardEntry {
   isCurrentPlayer?: boolean;
 }
 
+export interface FakeLeaderboardMember {
+  id: string;
+  displayName: string;
+  username: string;
+  balance: number;
+  profitPerHour: number;
+  level: number;
+  levelName: string;
+  createdAt?: number;
+}
+
 export interface TapResponse {
   balance: number;
   energy: number;

@@ -35,14 +35,56 @@ import {
   Compass,
   Save,
   Edit3,
+  Trophy,
+  UserPlus,
+  Crown,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { api, GameConfig } from '../utils/api.js';
-import { UserGameState, AdminTelegramConfigResponse, UpgradeDefinition, LuckyWheelPrize } from '../types/game.js';
-import { UPGRADES, LUCKY_WHEEL_PRIZES } from '../../server/gameConfig.js';
+import {
+  UserGameState,
+  AdminTelegramConfigResponse,
+  UpgradeDefinition,
+  LuckyWheelPrize,
+  FakeLeaderboardMember,
+} from '../types/game.js';
+import { UPGRADES, LUCKY_WHEEL_PRIZES, PLAYER_LEVELS } from '../../server/gameConfig.js';
 import { sound } from '../utils/audio.js';
 
-export type AdminTabType = 'users' | 'cards' | 'gifts' | 'wheel' | 'webhook' | 'github';
+export type AdminTabType = 'users' | 'fake_rank' | 'cards' | 'gifts' | 'wheel' | 'webhook' | 'github';
+
+const REALISTIC_FAKE_PROFILES: Array<{ displayName: string; username: string }> = [
+  { displayName: 'Arash Crypto 🦊', username: 'arash_fox99' },
+  { displayName: 'Mehdi Whale', username: 'mehdi_whale' },
+  { displayName: 'Sina Trader', username: 'sina_trd' },
+  { displayName: 'Kianosh_FX', username: 'kianosh_fx' },
+  { displayName: 'Nima Miner 💎', username: 'nima_miner' },
+  { displayName: 'Reza TonKing', username: 'reza_tonking' },
+  { displayName: 'Pouya Hodler', username: 'pouya_hodl' },
+  { displayName: 'Milad_BTC', username: 'milad_btc88' },
+  { displayName: 'Samaneh Fox', username: 'samaneh_fx' },
+  { displayName: 'AmirHossein 🚀', username: 'amirh_crypto' },
+  { displayName: 'Farzad_VIP', username: 'farzad_vip' },
+  { displayName: 'Behnam DeFi', username: 'behnam_defi' },
+  { displayName: 'Soroush Alpha', username: 'soroush_alpha' },
+  { displayName: 'Parsa_Web3', username: 'parsa_web3' },
+  { displayName: 'Hamed Satoshi', username: 'hamed_satoshi' },
+  { displayName: 'Omid_FoxKing 👑', username: 'omid_foxking' },
+  { displayName: 'Erfan_Miner', username: 'erfan_miner7' },
+  { displayName: 'Yashar_TON', username: 'yashar_ton' },
+  { displayName: 'Nazanin Crypto', username: 'nazanin_crp' },
+  { displayName: 'Saeed_Whale', username: 'saeed_whale1' },
+  { displayName: 'Danial_Pump', username: 'danial_pump' },
+  { displayName: 'kamran_pro', username: 'kamran_pro9' },
+  { displayName: 'pedram_dex', username: 'pedram_dex' },
+  { displayName: 'Alireza_Fox 🦊', username: 'alireza_fox' },
+  { displayName: 'Matin_Sniper', username: 'matin_sniper' },
+  { displayName: 'ShadowFox ⚡', username: 'shadow_fox_x' },
+  { displayName: 'Crypto Sultan', username: 'crypto_sultan_ir' },
+  { displayName: 'Ashkan_NFT', username: 'ashkan_nft' },
+  { displayName: 'Vahid_Bull', username: 'vahid_bullrun' },
+  { displayName: 'Soheil_Diamond', username: 'soheil_diamond' },
+];
 
 interface AdminTelegramSetupProps {
   user: UserGameState | null;
@@ -71,13 +113,25 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
   // Tab: 'users' | 'cards' | 'gifts' | 'wheel' | 'webhook' | 'github'
   const [activeTab, setActiveTab] = useState<AdminTabType>(initialTab);
 
-  // Cards, Gifts & Lucky Wheel Admin State
+  // Cards, Gifts, Lucky Wheel & Fake Rank Admin State
   const [adminUpgrades, setAdminUpgrades] = useState<UpgradeDefinition[]>(
     () => config?.upgrades || [...UPGRADES]
   );
   const [adminWheelPrizes, setAdminWheelPrizes] = useState<LuckyWheelPrize[]>(
     () => config?.wheelPrizes || [...LUCKY_WHEEL_PRIZES]
   );
+  const [adminFakeMembers, setAdminFakeMembers] = useState<FakeLeaderboardMember[]>(
+    () => config?.fakeLeaderboardMembers || api.getLocalFakeLeaderboardMembers()
+  );
+  const [editingFakeId, setEditingFakeId] = useState<string | null>(null);
+  const [fakeDisplayName, setFakeDisplayName] = useState<string>('');
+  const [fakeUsername, setFakeUsername] = useState<string>('');
+  const [fakeBalance, setFakeBalance] = useState<string>('250000');
+  const [fakeProfitPerHour, setFakeProfitPerHour] = useState<string>('18500');
+  const [fakeCustomLevel, setFakeCustomLevel] = useState<string>('auto');
+  const [bulkTier, setBulkTier] = useState<'mid' | 'pro' | 'whale'>('pro');
+  const [fakeSearchQuery, setFakeSearchQuery] = useState<string>('');
+  const [confirmClearAllFakes, setConfirmClearAllFakes] = useState<boolean>(false);
   const [adminFeedback, setAdminFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [isSavingAdminData, setIsSavingAdminData] = useState<boolean>(false);
 
@@ -211,6 +265,14 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
       setIsLoadingConfig(true);
       const effectiveSecret = secret || adminSecret || '123456';
       loadUsers(effectiveSecret);
+      api
+        .getAdminFakeLeaderboard(effectiveSecret)
+        .then((fakeRes) => {
+          if (Array.isArray(fakeRes.fakeLeaderboardMembers)) {
+            setAdminFakeMembers(fakeRes.fakeLeaderboardMembers);
+          }
+        })
+        .catch(() => {});
       const data = await api.getAdminTelegramConfig(effectiveSecret);
       setServerConfig(data);
       if (data.botUsername && onConfigUpdated && config && data.botUsername !== config.telegramBotUsername) {
@@ -515,21 +577,254 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
     }
   };
 
-  // Sync adminUpgrades and adminWheelPrizes when config prop changes
+  // Sync adminUpgrades, adminWheelPrizes, and adminFakeMembers when config prop changes
   useEffect(() => {
     if (config?.upgrades) setAdminUpgrades(config.upgrades);
     if (config?.wheelPrizes) setAdminWheelPrizes(config.wheelPrizes);
+    if (config?.fakeLeaderboardMembers) setAdminFakeMembers(config.fakeLeaderboardMembers);
   }, [config]);
 
-  const notifyConfigUpdate = (nextUpgrades: UpgradeDefinition[], nextWheel: LuckyWheelPrize[]) => {
+  const notifyConfigUpdate = (
+    nextUpgrades: UpgradeDefinition[],
+    nextWheel: LuckyWheelPrize[],
+    nextFakeMembers: FakeLeaderboardMember[] = adminFakeMembers
+  ) => {
     setAdminUpgrades(nextUpgrades);
     setAdminWheelPrizes(nextWheel);
+    setAdminFakeMembers(nextFakeMembers);
     if (onConfigUpdated && config) {
       onConfigUpdated({
         ...config,
         upgrades: nextUpgrades,
         wheelPrizes: nextWheel,
+        fakeLeaderboardMembers: nextFakeMembers,
       });
+    }
+  };
+
+  const calculateLevelForFakeBalance = (coins: number, customLvlStr = fakeCustomLevel) => {
+    if (customLvlStr !== 'auto') {
+      const parsedLvl = Number(customLvlStr);
+      const found = PLAYER_LEVELS.find((l) => l.level === parsedLvl);
+      if (found) return found;
+    }
+    let matched = PLAYER_LEVELS[0];
+    for (const lvl of PLAYER_LEVELS) {
+      if (coins >= lvl.minCoins) matched = lvl;
+      else break;
+    }
+    return matched;
+  };
+
+  const handlePickRandomFakeIdentity = () => {
+    const existingNames = new Set(adminFakeMembers.map((m) => m.username.toLowerCase()));
+    const available = REALISTIC_FAKE_PROFILES.filter((p) => !existingNames.has(p.username.toLowerCase()));
+    const pool = available.length > 0 ? available : REALISTIC_FAKE_PROFILES;
+    const chosen = pool[Math.floor(Math.random() * pool.length)];
+    const randomSuffix = available.length === 0 ? `_${Math.floor(10 + Math.random() * 89)}` : '';
+    setFakeDisplayName(chosen.displayName);
+    setFakeUsername(`${chosen.username}${randomSuffix}`);
+    sound.playTap();
+  };
+
+  const handleSaveSingleFakeMember = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanDisplay = fakeDisplayName.trim() || fakeUsername.trim();
+    if (!cleanDisplay) {
+      setAdminFeedback({ type: 'error', message: 'لطفاً نام نمایشی یا یوزرنیم ممبر فیک را وارد کنید.' });
+      return;
+    }
+
+    const cleanUsername = (fakeUsername.trim() || cleanDisplay)
+      .replace(/^@/, '')
+      .replace(/\s+/g, '_')
+      .replace(/[^A-Za-z0-9_]/g, '')
+      .toLowerCase() || `fox_${Math.floor(1000 + Math.random() * 9000)}`;
+
+    const cleanBal = Math.max(0, Math.floor(Number(fakeBalance) || 0));
+    const cleanPph = Math.max(0, Math.floor(Number(fakeProfitPerHour) || 0));
+    const lvlObj = calculateLevelForFakeBalance(cleanBal, fakeCustomLevel);
+
+    const memberObj: FakeLeaderboardMember = {
+      id: editingFakeId || `fake_lb_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      displayName: cleanDisplay,
+      username: cleanUsername,
+      balance: cleanBal,
+      profitPerHour: cleanPph,
+      level: lvlObj.level,
+      levelName: lvlObj.name,
+      createdAt: Date.now(),
+    };
+
+    try {
+      setIsSavingAdminData(true);
+      setAdminFeedback(null);
+      sound.playCoin();
+
+      let nextList: FakeLeaderboardMember[];
+      if (editingFakeId) {
+        nextList = adminFakeMembers.map((m) => (m.id === editingFakeId ? memberObj : m));
+      } else {
+        nextList = [memberObj, ...adminFakeMembers];
+      }
+
+      const res = await api.adminSaveFakeLeaderboard(nextList, adminSecret || '123456');
+      notifyConfigUpdate(adminUpgrades, adminWheelPrizes, res.fakeLeaderboardMembers);
+
+      setAdminFeedback({
+        type: 'success',
+        message: editingFakeId
+          ? `✅ ممبر فیک «${memberObj.displayName}» با موفقیت در رنک ویرایش شد!`
+          : `✅ ممبر فیک نمایشی «${memberObj.displayName}» با ${cleanBal.toLocaleString('en-US')} FOX به رنک اضافه شد!`,
+      });
+      setEditingFakeId(null);
+      setFakeDisplayName('');
+      setFakeUsername('');
+    } catch (err: any) {
+      setAdminFeedback({ type: 'error', message: err?.message || 'خطا در ذخیره ممبر فیک رنک' });
+    } finally {
+      setIsSavingAdminData(false);
+    }
+  };
+
+  const handleGenerateBulkFakeMembers = async (count: number) => {
+    try {
+      setIsSavingAdminData(true);
+      setAdminFeedback(null);
+      sound.playLevelUp();
+
+      const existingUsernames = new Set(adminFakeMembers.map((m) => m.username.toLowerCase()));
+      const generated: FakeLeaderboardMember[] = [];
+
+      let minCoins = 250000;
+      let maxCoins = 8500000;
+      if (bulkTier === 'mid') {
+        minCoins = 25000;
+        maxCoins = 450000;
+      } else if (bulkTier === 'pro') {
+        minCoins = 450000;
+        maxCoins = 12000000;
+      } else if (bulkTier === 'whale') {
+        minCoins = 12000000;
+        maxCoins = 180000000;
+      }
+
+      for (let i = 0; i < count; i++) {
+        const available = REALISTIC_FAKE_PROFILES.filter((p) => !existingUsernames.has(p.username.toLowerCase()));
+        const baseProfile =
+          available.length > 0
+            ? available[Math.floor(Math.random() * available.length)]
+            : REALISTIC_FAKE_PROFILES[Math.floor(Math.random() * REALISTIC_FAKE_PROFILES.length)];
+
+        const suffix = available.length > 0 ? '' : `_${Math.floor(10 + Math.random() * 89)}`;
+        const finalUsername = `${baseProfile.username}${suffix}`;
+        existingUsernames.add(finalUsername.toLowerCase());
+
+        const rawCoins = minCoins + Math.random() * (maxCoins - minCoins);
+        const roundedCoins = Math.floor(rawCoins / 50) * 50 + Math.floor(Math.random() * 49);
+        const pph = Math.max(1200, Math.floor(roundedCoins * (0.015 + Math.random() * 0.045)));
+        const lvlObj = calculateLevelForFakeBalance(roundedCoins, 'auto');
+
+        generated.push({
+          id: `fake_lb_${Date.now()}_${i}_${Math.random().toString(36).slice(2, 6)}`,
+          displayName: baseProfile.displayName,
+          username: finalUsername,
+          balance: roundedCoins,
+          profitPerHour: pph,
+          level: lvlObj.level,
+          levelName: lvlObj.name,
+          createdAt: Date.now() - i * 1000,
+        });
+      }
+
+      const nextList = [...generated, ...adminFakeMembers];
+      const res = await api.adminSaveFakeLeaderboard(nextList, adminSecret || '123456');
+      notifyConfigUpdate(adminUpgrades, adminWheelPrizes, res.fakeLeaderboardMembers);
+
+      setAdminFeedback({
+        type: 'success',
+        message: `🎉 تعداد ${count} ممبر فیک طبیعی با موفقیت ساخته شد و در جدول رنک قرار گرفت!`,
+      });
+    } catch (err: any) {
+      setAdminFeedback({ type: 'error', message: err?.message || 'خطا در ساخت گروهی ممبر فیک' });
+    } finally {
+      setIsSavingAdminData(false);
+    }
+  };
+
+  const handleQuickAdjustFakeMemberCoins = async (fakeId: string, delta: number) => {
+    try {
+      setIsSavingAdminData(true);
+      sound.playCoin();
+      const nextList = adminFakeMembers.map((m) => {
+        if (m.id !== fakeId) return m;
+        const newBal = Math.max(0, m.balance + delta);
+        const lvlObj = calculateLevelForFakeBalance(newBal, 'auto');
+        return {
+          ...m,
+          balance: newBal,
+          level: lvlObj.level,
+          levelName: lvlObj.name,
+        };
+      });
+      const res = await api.adminSaveFakeLeaderboard(nextList, adminSecret || '123456');
+      notifyConfigUpdate(adminUpgrades, adminWheelPrizes, res.fakeLeaderboardMembers);
+    } catch (err: any) {
+      setAdminFeedback({ type: 'error', message: err?.message || 'خطا در تغییر سکه ممبر فیک' });
+    } finally {
+      setIsSavingAdminData(false);
+    }
+  };
+
+  const handleEditFakeMemberClick = (member: FakeLeaderboardMember) => {
+    setEditingFakeId(member.id);
+    setFakeDisplayName(member.displayName);
+    setFakeUsername(member.username);
+    setFakeBalance(String(member.balance));
+    setFakeProfitPerHour(String(member.profitPerHour));
+    setFakeCustomLevel('auto');
+    sound.playTap();
+  };
+
+  const handleDeleteFakeMember = async (member: FakeLeaderboardMember) => {
+    try {
+      setIsSavingAdminData(true);
+      sound.playTap();
+      const nextList = adminFakeMembers.filter((m) => m.id !== member.id);
+      const res = await api.adminSaveFakeLeaderboard(nextList, adminSecret || '123456');
+      notifyConfigUpdate(adminUpgrades, adminWheelPrizes, res.fakeLeaderboardMembers);
+      if (editingFakeId === member.id) {
+        setEditingFakeId(null);
+        setFakeDisplayName('');
+        setFakeUsername('');
+      }
+      setAdminFeedback({
+        type: 'success',
+        message: `🗑️ ممبر فیک «${member.displayName}» از جدول رنک حذف شد.`,
+      });
+    } catch (err: any) {
+      setAdminFeedback({ type: 'error', message: err?.message || 'خطا در حذف ممبر فیک' });
+    } finally {
+      setIsSavingAdminData(false);
+    }
+  };
+
+  const handleClearAllFakeMembers = async () => {
+    try {
+      setIsSavingAdminData(true);
+      setConfirmClearAllFakes(false);
+      sound.playTap();
+      const res = await api.adminSaveFakeLeaderboard([], adminSecret || '123456');
+      notifyConfigUpdate(adminUpgrades, adminWheelPrizes, res.fakeLeaderboardMembers);
+      setEditingFakeId(null);
+      setAdminFeedback({
+        type: 'success',
+        message: '🧹 تمام ممبرهای فیک نمایشی از جدول رنک پاک شدند.',
+      });
+    } catch (err: any) {
+      setAdminFeedback({ type: 'error', message: err?.message || 'خطا در پاکسازی ممبرهای فیک' });
+    } finally {
+      setIsSavingAdminData(false);
     }
   };
 
@@ -795,7 +1090,7 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
           </div>
         ) : (
           <div className="py-4 space-y-4 flex-1">
-            {/* Top 6 Tabs: Users, Cards, Gift Prices, Lucky Wheel, Bot Setup, GitHub */}
+            {/* Top Admin Tabs: Users, Fake Rank, Cards, Gift Prices, Lucky Wheel, Bot Setup, GitHub */}
             <div className="grid grid-cols-3 gap-1.5 bg-slate-900/90 p-1.5 rounded-2xl border border-slate-800 text-[11px] font-bold">
               <button
                 type="button"
@@ -811,6 +1106,21 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
               >
                 <Users className="w-3.5 h-3.5" />
                 <span>Users ({allUsers.length})</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveTab('fake_rank');
+                  setAdminFeedback(null);
+                }}
+                className={`py-2 rounded-xl transition flex items-center justify-center gap-1 cursor-pointer ${
+                  activeTab === 'fake_rank'
+                    ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-slate-950 font-black shadow-md'
+                    : 'text-amber-300/90 hover:text-white bg-amber-500/10 border border-amber-500/25'
+                }`}
+              >
+                <Trophy className="w-3.5 h-3.5" />
+                <span>رنک فیک ({adminFakeMembers.length})</span>
               </button>
               <button
                 type="button"
@@ -878,14 +1188,14 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                   setActiveTab('github');
                   setAdminFeedback(null);
                 }}
-                className={`py-2 rounded-xl transition flex items-center justify-center gap-1 cursor-pointer ${
+                className={`col-span-3 py-2 rounded-xl transition flex items-center justify-center gap-1.5 cursor-pointer ${
                   activeTab === 'github'
                     ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-slate-950 font-black shadow-md'
                     : 'text-slate-400 hover:text-white bg-slate-950/40'
                 }`}
               >
                 <Github className="w-3.5 h-3.5" />
-                <span>GitHub</span>
+                <span>GitHub & Cloudflare Deploy</span>
               </button>
             </div>
 
@@ -961,6 +1271,29 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                     </div>
                   );
                 })()}
+
+                {/* Shortcut Banner to Fake Rank Manager */}
+                <div className="p-3 rounded-2xl bg-gradient-to-r from-amber-500/20 via-orange-500/10 to-slate-900 border border-amber-500/40 flex items-center justify-between gap-2">
+                  <div className="text-right" dir="rtl">
+                    <span className="text-xs font-black text-amber-300 flex items-center gap-1.5">
+                      <Trophy className="w-4 h-4 text-amber-400 shrink-0" />
+                      <span>مدیریت ممبرهای فیک در رنک (فقط نمایشی)</span>
+                    </span>
+                    <span className="text-[10px] text-slate-300 block mt-0.5">
+                      در حال حاضر <b className="text-amber-300">{adminFakeMembers.length} ممبر فیک نمایشی</b> در جدول رنک فعال هستند.
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveTab('fake_rank');
+                      setAdminFeedback(null);
+                    }}
+                    className="px-3 py-2 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-black text-[11px] shrink-0 shadow-md transition active:scale-95 cursor-pointer"
+                  >
+                    افزودن ممبر فیک ⬅
+                  </button>
+                </div>
 
                 {/* Cloudflare D1 Database Status & 1-Click Force Save */}
                 <div
@@ -1657,6 +1990,537 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                         );
                       })}
                     </div>
+                  );
+                })()}
+              </div>
+            )}
+
+            {/* TAB: DISPLAY-ONLY FAKE LEADERBOARD MEMBERS (ممبر های فیک فقط نمایشی در رنک) */}
+            {activeTab === 'fake_rank' && (
+              <div className="space-y-4 animate-fade-in">
+                {(() => {
+                  const realPlayers = allUsers.filter(
+                    (u) => u && u.id && !u.id.startsWith('bot_') && !u.id.startsWith('seed_') && !u.id.startsWith('fake_lb_')
+                  );
+                  const topRealCoins = realPlayers.reduce((max, u) => Math.max(max, Math.floor(u.balance || 0)), 0);
+                  const topFakeCoins = adminFakeMembers.reduce((max, m) => Math.max(max, Math.floor(m.balance || 0)), 0);
+                  const currentTop1Balance = Math.max(topRealCoins, topFakeCoins, 5000);
+
+                  // Combined ranking map so admin sees exact live rank (#1, #2, ...) of every fake member
+                  const combinedRanking = [
+                    ...realPlayers.map((u) => ({
+                      id: u.id,
+                      balance: Math.floor(u.balance || 0),
+                      profitPerHour: Math.floor(u.profitPerHour || 0),
+                      isFake: false,
+                    })),
+                    ...adminFakeMembers.map((m) => ({
+                      id: m.id,
+                      balance: Math.floor(m.balance || 0),
+                      profitPerHour: Math.floor(m.profitPerHour || 0),
+                      isFake: true,
+                    })),
+                  ].sort((a, b) => {
+                    if (b.balance !== a.balance) return b.balance - a.balance;
+                    return b.profitPerHour - a.profitPerHour;
+                  });
+
+                  const rankById = new Map<string, number>();
+                  combinedRanking.forEach((item, idx) => {
+                    rankById.set(item.id, idx + 1);
+                  });
+
+                  // Calculate predicted rank for the form's current balance input
+                  const previewCoins = Math.max(0, Math.floor(Number(fakeBalance) || 0));
+                  const previewLevelObj = calculateLevelForFakeBalance(previewCoins, fakeCustomLevel);
+                  const betterCount = combinedRanking.filter(
+                    (item) => item.id !== editingFakeId && item.balance > previewCoins
+                  ).length;
+                  const predictedRank = betterCount + 1;
+
+                  const cleanFilter = fakeSearchQuery.trim().replace(/^@/, '').toLowerCase();
+                  const filteredFakes = cleanFilter
+                    ? adminFakeMembers.filter(
+                        (m) =>
+                          m.displayName.toLowerCase().includes(cleanFilter) ||
+                          m.username.toLowerCase().includes(cleanFilter)
+                      )
+                    : adminFakeMembers;
+
+                  return (
+                    <>
+                      {/* Top Overview Card */}
+                      <div className="p-3.5 rounded-2xl bg-gradient-to-br from-amber-500/20 via-slate-900 to-slate-900 border border-amber-500/40 space-y-2.5" dir="rtl">
+                        <div className="flex items-center justify-between">
+                          <h4 className="font-black text-xs text-amber-300 flex items-center gap-1.5">
+                            <Trophy className="w-4 h-4 text-amber-400" />
+                            <span>مدیریت ممبرهای فیک در رنک (فقط نمایشی)</span>
+                          </h4>
+                          <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-[10px] font-black">
+                            دائمی و بدون حذف
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-300 leading-relaxed">
+                          ممبرهایی که در این بخش اضافه می‌کنید <b>فقط نمایشی در جدول رنک (Hall of Foxes)</b> هستند و برای همه پلیرها دقیقاً مثل کاربران واقعی نمایش داده می‌شوند، اما وارد لیست کاربران واقعی نمی‌شوند.
+                        </p>
+
+                        <div className="grid grid-cols-3 gap-2 pt-1 text-center">
+                          <div className="p-2 rounded-xl bg-slate-950/90 border border-slate-800">
+                            <span className="text-[9px] text-slate-400 block">ممبرهای فیک فعال</span>
+                            <span className="text-xs font-black text-amber-400 block">
+                              {adminFakeMembers.length} نفر
+                            </span>
+                          </div>
+                          <div className="p-2 rounded-xl bg-slate-950/90 border border-slate-800">
+                            <span className="text-[9px] text-slate-400 block">پلیرهای واقعی</span>
+                            <span className="text-xs font-black text-emerald-400 block">
+                              {realPlayers.length} نفر
+                            </span>
+                          </div>
+                          <div className="p-2 rounded-xl bg-slate-950/90 border border-slate-800">
+                            <span className="text-[9px] text-slate-400 block">سکه نفر اول رنک (#1)</span>
+                            <span className="text-xs font-black text-sky-400 block">
+                              {currentTop1Balance.toLocaleString('en-US')}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Add / Edit Single Fake Member Form */}
+                      <form
+                        onSubmit={handleSaveSingleFakeMember}
+                        className="p-4 rounded-2xl bg-slate-900/95 border border-amber-500/40 space-y-3 shadow-lg"
+                        dir="rtl"
+                      >
+                        <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
+                          <div>
+                            <span className="text-[10px] text-amber-400 font-black block">
+                              {editingFakeId ? '✏️ ویرایش ممبر فیک در رنک' : '➕ افزودن ممبر فیک تکی به رنک'}
+                            </span>
+                            <h5 className="font-black text-xs text-white mt-0.5">
+                              {editingFakeId
+                                ? `در حال ویرایش: ${fakeDisplayName}`
+                                : 'مشخصات و تعداد سکه ممبر نمایشی را وارد کنید'}
+                            </h5>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={handlePickRandomFakeIdentity}
+                              className="px-2.5 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 text-[10px] font-black flex items-center gap-1 transition cursor-pointer"
+                            >
+                              <Sparkles className="w-3 h-3" />
+                              <span>🎲 نام تصادفی طبیعی</span>
+                            </button>
+                            {editingFakeId && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditingFakeId(null);
+                                  setFakeDisplayName('');
+                                  setFakeUsername('');
+                                }}
+                                className="px-2 py-1.5 rounded-xl bg-slate-800 text-slate-300 text-[10px] font-bold hover:text-white cursor-pointer"
+                              >
+                                انصراف
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <label className="text-[10px] text-slate-300 font-bold block mb-1">
+                              نام نمایشی در رنک (Display Name)
+                            </label>
+                            <input
+                              type="text"
+                              required
+                              placeholder="مثلاً: Arash Crypto 🦊"
+                              value={fakeDisplayName}
+                              onChange={(e) => {
+                                setFakeDisplayName(e.target.value);
+                                if (!editingFakeId && !fakeUsername) {
+                                  // Optional helper preview
+                                }
+                              }}
+                              className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-400"
+                              dir="ltr"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[10px] text-slate-300 font-bold block mb-1">
+                              یوزرنیم تلگرام (بدون @)
+                            </label>
+                            <input
+                              type="text"
+                              placeholder="مثلاً: arash_fox99"
+                              value={fakeUsername}
+                              onChange={(e) => setFakeUsername(e.target.value)}
+                              className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-sky-300 font-mono focus:outline-none focus:border-amber-400"
+                              dir="ltr"
+                            />
+                          </div>
+                        </div>
+
+                        {/* Balance & Profit Per Hour Inputs */}
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <label className="text-[10px] text-amber-300 font-bold block mb-1">
+                              تعداد سکه در رنک (FOX Balance)
+                            </label>
+                            <input
+                              type="number"
+                              min="0"
+                              required
+                              value={fakeBalance}
+                              onChange={(e) => setFakeBalance(e.target.value)}
+                              className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-amber-300 font-mono font-black focus:outline-none focus:border-amber-400"
+                              dir="ltr"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[10px] text-emerald-300 font-bold block mb-1">
+                              سود ساعتی نمایشی (+FOX/hr)
+                            </label>
+                            <input
+                              type="number"
+                              min="0"
+                              required
+                              value={fakeProfitPerHour}
+                              onChange={(e) => setFakeProfitPerHour(e.target.value)}
+                              className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-emerald-400 font-mono font-bold focus:outline-none focus:border-emerald-400"
+                              dir="ltr"
+                            />
+                          </div>
+                        </div>
+
+                        {/* Quick Balance Presets */}
+                        <div className="space-y-1.5">
+                          <span className="text-[10px] text-slate-400 font-bold block">
+                            انتخاب سریع مقدار سکه ممبر فیک:
+                          </span>
+                          <div className="grid grid-cols-4 gap-1.5 text-[10px] font-black" dir="ltr">
+                            {[
+                              { label: '100K FOX', coins: 100000, pph: 8500 },
+                              { label: '500K FOX', coins: 500000, pph: 24000 },
+                              { label: '1M FOX', coins: 1000000, pph: 48000 },
+                              { label: '5M FOX', coins: 5000000, pph: 145000 },
+                              { label: '15M FOX', coins: 15000000, pph: 360000 },
+                              { label: '50M FOX', coins: 50000000, pph: 820000 },
+                              { label: '150M FOX', coins: 150000000, pph: 1950000 },
+                            ].map((preset) => (
+                              <button
+                                key={preset.label}
+                                type="button"
+                                onClick={() => {
+                                  setFakeBalance(String(preset.coins));
+                                  setFakeProfitPerHour(String(preset.pph));
+                                  sound.playTap();
+                                }}
+                                className="py-1.5 rounded-lg bg-slate-950 hover:bg-amber-500/20 border border-slate-800 hover:border-amber-500/40 text-amber-300 transition cursor-pointer"
+                              >
+                                {preset.label}
+                              </button>
+                            ))}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const beatTop1 = currentTop1Balance + Math.floor(25000 + Math.random() * 125000);
+                                setFakeBalance(String(beatTop1));
+                                setFakeProfitPerHour(String(Math.max(50000, Math.floor(beatTop1 * 0.025))));
+                                sound.playCoin();
+                              }}
+                              className="py-1.5 rounded-lg bg-gradient-to-r from-amber-500/30 to-orange-500/30 hover:from-amber-500/40 hover:to-orange-500/40 border border-amber-400/50 text-amber-200 flex items-center justify-center gap-1 transition cursor-pointer"
+                              title="تنظیم سکه بالاتر از نفر اول فعلی رنک"
+                            >
+                              <Crown className="w-3 h-3 text-amber-400" />
+                              <span>نفر اول (#1)</span>
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Level Selector & Live Rank Preview */}
+                        <div className="grid grid-cols-2 gap-2 items-center pt-1">
+                          <div>
+                            <label className="text-[10px] text-slate-300 font-bold block mb-1">
+                              لول نمایشی پلیر در رنک
+                            </label>
+                            <select
+                              value={fakeCustomLevel}
+                              onChange={(e) => setFakeCustomLevel(e.target.value)}
+                              className="w-full bg-slate-950 border border-slate-700 rounded-xl px-2.5 py-2 text-[11px] text-white focus:outline-none focus:border-amber-400"
+                              dir="ltr"
+                            >
+                              <option value="auto">
+                                Auto ({previewLevelObj.name} - Lvl {previewLevelObj.level})
+                              </option>
+                              {PLAYER_LEVELS.map((lvl) => (
+                                <option key={lvl.level} value={String(lvl.level)}>
+                                  Level {lvl.level}: {lvl.name}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div className="p-2 rounded-xl bg-slate-950/90 border border-amber-500/30 text-center">
+                            <span className="text-[9px] text-slate-400 block">جایگاه پیش‌بینی‌شده در رنک کل:</span>
+                            <span className="text-xs font-black text-amber-400 block mt-0.5">
+                              رتبه #{predictedRank} در جدول ({previewLevelObj.name})
+                            </span>
+                          </div>
+                        </div>
+
+                        <button
+                          type="submit"
+                          disabled={isSavingAdminData}
+                          className="w-full py-3 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-black text-xs rounded-xl shadow-lg shadow-amber-500/20 flex items-center justify-center gap-2 transition active:scale-95 cursor-pointer disabled:opacity-50"
+                        >
+                          <UserPlus className="w-4 h-4" />
+                          <span>
+                            {isSavingAdminData
+                              ? 'در حال ذخیره در رنک...'
+                              : editingFakeId
+                              ? 'ذخیره تغییرات ممبر فیک در رنک'
+                              : 'افزودن فوری ممبر فیک به رنک'}
+                          </span>
+                        </button>
+                      </form>
+
+                      {/* 1-Click Bulk Realistic Fake Members Generator */}
+                      <div className="p-4 rounded-2xl bg-gradient-to-br from-emerald-500/15 via-slate-900 to-slate-900 border border-emerald-500/35 space-y-3" dir="rtl">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <span className="text-[10px] text-emerald-400 font-black block">
+                              ⚡ ساخت گروهی و هوشمند ممبر فیک طبیعی
+                            </span>
+                            <h5 className="font-black text-xs text-white mt-0.5">
+                              افزودن چند ممبر فیک با اسامی و سکه‌های کاملاً طبیعی با ۱ کلیک
+                            </h5>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-3 gap-1.5 bg-slate-950/80 p-1 rounded-xl border border-slate-800 text-[10px] font-bold">
+                          <button
+                            type="button"
+                            onClick={() => setBulkTier('mid')}
+                            className={`py-1.5 rounded-lg transition cursor-pointer ${
+                              bulkTier === 'mid'
+                                ? 'bg-amber-500 text-slate-950 font-black'
+                                : 'text-slate-400 hover:text-white'
+                            }`}
+                          >
+                            🥉 متوسط (25K - 450K)
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setBulkTier('pro')}
+                            className={`py-1.5 rounded-lg transition cursor-pointer ${
+                              bulkTier === 'pro'
+                                ? 'bg-amber-500 text-slate-950 font-black'
+                                : 'text-slate-400 hover:text-white'
+                            }`}
+                          >
+                            🥇 حرفه‌ای (450K - 12M)
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setBulkTier('whale')}
+                            className={`py-1.5 rounded-lg transition cursor-pointer ${
+                              bulkTier === 'whale'
+                                ? 'bg-amber-500 text-slate-950 font-black'
+                                : 'text-slate-400 hover:text-white'
+                            }`}
+                          >
+                            💎 نهنگ‌ها (12M - 180M)
+                          </button>
+                        </div>
+
+                        <div className="grid grid-cols-3 gap-2">
+                          {[5, 10, 20].map((cnt) => (
+                            <button
+                              key={cnt}
+                              type="button"
+                              disabled={isSavingAdminData}
+                              onClick={() => handleGenerateBulkFakeMembers(cnt)}
+                              className="py-2.5 px-2 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 font-black text-xs flex items-center justify-center gap-1 transition active:scale-95 cursor-pointer disabled:opacity-50"
+                            >
+                              <PlusCircle className="w-3.5 h-3.5" />
+                              <span>+{cnt} ممبر فیک</span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Active Fake Members List with Live Rank & Controls */}
+                      <div className="space-y-2.5" dir="rtl">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs font-black text-white">
+                            📋 لیست ممبرهای فیک فعال در رنک ({adminFakeMembers.length} مورد)
+                          </span>
+                          {adminFakeMembers.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => setConfirmClearAllFakes(true)}
+                              className="px-2.5 py-1 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 text-rose-300 text-[10px] font-black flex items-center gap-1 transition cursor-pointer"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                              <span>حذف همه فیک‌ها</span>
+                            </button>
+                          )}
+                        </div>
+
+                        {confirmClearAllFakes && (
+                          <div className="p-3 rounded-2xl bg-rose-500/20 border border-rose-500/40 space-y-2 text-xs">
+                            <p className="font-bold text-rose-200">
+                              آیا مطمئن هستید که می‌خواهید تمام {adminFakeMembers.length} ممبر فیک نمایشی را از جدول رنک پاک کنید؟ (کاربران واقعی دست‌نخورده باقی می‌مانند)
+                            </p>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={handleClearAllFakeMembers}
+                                className="flex-1 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-black cursor-pointer"
+                              >
+                                بله، حذف همه فیک‌ها
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setConfirmClearAllFakes(false)}
+                                className="flex-1 py-1.5 rounded-xl bg-slate-800 text-slate-300 font-bold cursor-pointer"
+                              >
+                                انصراف
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                        {adminFakeMembers.length > 3 && (
+                          <div className="relative" dir="ltr">
+                            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                            <input
+                              type="text"
+                              placeholder="جستجو در ممبرهای فیک بر اساس نام یا یوزرنیم..."
+                              value={fakeSearchQuery}
+                              onChange={(e) => setFakeSearchQuery(e.target.value)}
+                              className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-amber-400"
+                            />
+                          </div>
+                        )}
+
+                        {filteredFakes.length === 0 ? (
+                          <div className="p-5 rounded-2xl bg-slate-900/70 border border-slate-800 text-center space-y-1.5">
+                            <Trophy className="w-7 h-7 text-slate-600 mx-auto" />
+                            <p className="text-xs font-bold text-slate-300">
+                              هنوز ممبر فیک نمایشی به رنک اضافه نشده است.
+                            </p>
+                            <p className="text-[10px] text-slate-400">
+                              از فرم بالا به صورت تکی یا با دکمه‌های +5 و +10 ممبرهای فیک طبیعی به رنک اضافه کنید.
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="space-y-2 max-h-[380px] overflow-y-auto pr-1" dir="ltr">
+                            {filteredFakes.map((fm) => {
+                              const liveRank = rankById.get(fm.id) || 1;
+                              return (
+                                <div
+                                  key={fm.id}
+                                  className="p-3 rounded-2xl bg-slate-900/90 border border-slate-800 hover:border-amber-500/40 transition space-y-2"
+                                >
+                                  <div className="flex items-center justify-between gap-2">
+                                    <div className="flex items-center gap-2.5 min-w-0">
+                                      <span
+                                        className={`px-2 py-1 rounded-xl font-black text-xs shrink-0 ${
+                                          liveRank === 1
+                                            ? 'bg-amber-400 text-slate-950'
+                                            : liveRank === 2
+                                            ? 'bg-slate-300 text-slate-950'
+                                            : liveRank === 3
+                                            ? 'bg-amber-700 text-amber-100'
+                                            : 'bg-slate-800 text-amber-300 border border-slate-700'
+                                        }`}
+                                      >
+                                        #{liveRank}
+                                      </span>
+                                      <div className="min-w-0">
+                                        <div className="flex items-center gap-1.5">
+                                          <span className="font-black text-xs text-white truncate">
+                                            {fm.displayName}
+                                          </span>
+                                          <span className="px-1.5 py-0.5 rounded bg-purple-500/20 border border-purple-500/30 text-purple-300 text-[8px] font-black">
+                                            FAKE (فقط در مدیریت)
+                                          </span>
+                                        </div>
+                                        <div className="text-[10px] text-slate-400 font-mono truncate">
+                                          @{fm.username} • Lvl {fm.level} ({fm.levelName})
+                                        </div>
+                                      </div>
+                                    </div>
+
+                                    <div className="text-right shrink-0">
+                                      <div className="text-xs font-black text-amber-400">
+                                        {Math.floor(fm.balance).toLocaleString('en-US')} FOX
+                                      </div>
+                                      <div className="text-[10px] text-emerald-400 font-bold">
+                                        +{Math.floor(fm.profitPerHour).toLocaleString('en-US')}/hr
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  {/* Quick Inline Controls for each Fake Member */}
+                                  <div className="flex items-center justify-between gap-1.5 pt-1.5 border-t border-slate-800/80">
+                                    <div className="flex items-center gap-1">
+                                      <button
+                                        type="button"
+                                        disabled={isSavingAdminData}
+                                        onClick={() => handleQuickAdjustFakeMemberCoins(fm.id, 100000)}
+                                        className="px-2 py-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300 text-[10px] font-black cursor-pointer"
+                                      >
+                                        +100K
+                                      </button>
+                                      <button
+                                        type="button"
+                                        disabled={isSavingAdminData}
+                                        onClick={() => handleQuickAdjustFakeMemberCoins(fm.id, 1000000)}
+                                        className="px-2 py-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300 text-[10px] font-black cursor-pointer"
+                                      >
+                                        +1M
+                                      </button>
+                                      <button
+                                        type="button"
+                                        disabled={isSavingAdminData}
+                                        onClick={() => handleQuickAdjustFakeMemberCoins(fm.id, -100000)}
+                                        className="px-2 py-1 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 text-rose-300 text-[10px] font-black cursor-pointer"
+                                      >
+                                        -100K
+                                      </button>
+                                    </div>
+
+                                    <div className="flex items-center gap-1.5">
+                                      <button
+                                        type="button"
+                                        onClick={() => handleEditFakeMemberClick(fm)}
+                                        className="px-2.5 py-1 rounded-lg bg-amber-500/15 hover:bg-amber-500/30 border border-amber-500/30 text-amber-300 text-[10px] font-bold flex items-center gap-1 cursor-pointer"
+                                      >
+                                        <Edit3 className="w-3 h-3" />
+                                        <span>ویرایش</span>
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleDeleteFakeMember(fm)}
+                                        className="px-2.5 py-1 rounded-lg bg-rose-500/15 hover:bg-rose-500/30 border border-rose-500/30 text-rose-300 text-[10px] font-bold flex items-center gap-1 cursor-pointer"
+                                      >
+                                        <Trash2 className="w-3 h-3" />
+                                        <span>حذف</span>
+                                      </button>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    </>
                   );
                 })()}
               </div>

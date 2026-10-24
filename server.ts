@@ -185,6 +185,7 @@ app.get('/api/game/config', async (req, res) => {
   res.json({
     upgrades: db.getUpgrades(),
     wheelPrizes: db.getWheelPrizes(),
+    fakeLeaderboardMembers: db.getFakeLeaderboardMembers(),
     levels: PLAYER_LEVELS,
     tasks: TASKS,
     dailyRewards: DAILY_REWARDS,
@@ -635,11 +636,20 @@ app.post('/api/game/spin-wheel', requireAuth, (req: AuthenticatedRequest, res) =
   });
 });
 
-// Global Leaderboard (GET & POST with permanent player re-hydration)
+// Global Leaderboard (GET & POST with permanent player re-hydration + display-only fake members)
 const handleLeaderboard = (req: AuthenticatedRequest, res: express.Response) => {
   const knownPlayers = Array.isArray(req.body?.knownPlayers) ? req.body.knownPlayers : [];
   for (const kp of knownPlayers) {
-    if (!kp || typeof kp.id !== 'string' || kp.id.startsWith('bot_') || kp.id.startsWith('seed_')) continue;
+    if (
+      !kp ||
+      typeof kp.id !== 'string' ||
+      kp.id.startsWith('bot_') ||
+      kp.id.startsWith('seed_') ||
+      kp.id.startsWith('fake_lb_') ||
+      kp.id.startsWith('__config_')
+    ) {
+      continue;
+    }
     db.upsertUserSnapshot({
       id: kp.id,
       username: kp.username || kp.displayName || 'FoxPlayer',
@@ -655,7 +665,10 @@ const handleLeaderboard = (req: AuthenticatedRequest, res: express.Response) => 
   }
   const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 50;
   const data = db.getLeaderboard(limit, req.userId);
-  res.json(data);
+  res.json({
+    ...data,
+    fakeLeaderboardMembers: db.getFakeLeaderboardMembers(),
+  });
 };
 app.get('/api/game/leaderboard', requireAuth, handleLeaderboard);
 app.post('/api/game/leaderboard', requireAuth, handleLeaderboard);
@@ -970,6 +983,23 @@ app.post('/api/admin/wheel/save', requireAdmin, (req: AuthenticatedRequest, res)
 
   const wheelPrizes = db.adminSaveWheelPrizes(cleanPrizes as any);
   res.json({ success: true, wheelPrizes });
+});
+
+// Admin: Get & Save Display-Only Fake Leaderboard Members
+app.get('/api/admin/fake-leaderboard', requireAdmin, (_req: AuthenticatedRequest, res) => {
+  res.json({
+    success: true,
+    fakeLeaderboardMembers: db.getFakeLeaderboardMembers(),
+  });
+});
+
+app.post('/api/admin/fake-leaderboard/save', requireAdmin, (req: AuthenticatedRequest, res) => {
+  const members = Array.isArray(req.body?.members) ? req.body.members : [];
+  const saved = db.adminSaveFakeLeaderboardMembers(members);
+  res.json({
+    success: true,
+    fakeLeaderboardMembers: saved,
+  });
 });
 
 // Check Webhook Status with Telegram

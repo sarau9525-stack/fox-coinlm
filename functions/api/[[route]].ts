@@ -20,6 +20,7 @@ import {
   UserGameState,
   InvitedFriendInfo,
   LeaderboardEntry,
+  FakeLeaderboardMember,
   TradeOrder,
   UpgradeDefinition,
   LuckyWheelPrize,
@@ -55,6 +56,8 @@ const edgeUsers = new Map<string, UserGameState>();
 const edgeTrades: TradeOrder[] = [];
 let edgeUpgrades: UpgradeDefinition[] = [...UPGRADES];
 let edgeWheelPrizes: LuckyWheelPrize[] = [...LUCKY_WHEEL_PRIZES];
+let edgeFakeLeaderboard: FakeLeaderboardMember[] = [];
+let fakeLeaderboardHydrated = false;
 let edgeBotConfig = {
   botToken: '',
   webhookUrl: '',
@@ -567,6 +570,142 @@ function mergeUserProgress(base: UserGameState, incoming?: Partial<UserGameState
 }
 
 const EDGE_CACHE_USERS_URL = 'https://foxcoin-edge-storage.internal/users-map-v3';
+const EDGE_CACHE_FAKE_LB_URL = 'https://foxcoin-edge-storage.internal/fake-leaderboard-v1';
+const D1_FAKE_LB_CONFIG_ID = '__config_fake_leaderboard__';
+
+function sanitizeFakeLeaderboardList(rawList: any[]): FakeLeaderboardMember[] {
+  if (!Array.isArray(rawList)) return [];
+  return rawList
+    .filter((m) => m && (m.displayName || m.username))
+    .map((m, idx) => {
+      const cleanBal = Math.max(0, Math.floor(Number(m.balance) || 0));
+      const lvlInfo = getPlayerLevel(cleanBal);
+      const rawId = String(m.id || `fake_lb_${Date.now()}_${idx}`);
+      const id = rawId.startsWith('fake_lb_') ? rawId : `fake_lb_${rawId}`;
+      const cleanUsername = String(m.username || m.displayName || `fox_${idx + 1}`)
+        .replace(/^@/, '')
+        .replace(/\s+/g, '_')
+        .trim();
+      return {
+        id,
+        displayName: String(m.displayName || cleanUsername).trim(),
+        username: cleanUsername,
+        balance: cleanBal,
+        profitPerHour: Math.max(0, Math.floor(Number(m.profitPerHour) || 0)),
+        level: Number(m.level) || lvlInfo.level,
+        levelName: String(m.levelName || lvlInfo.name),
+        createdAt: Number(m.createdAt) || Date.now(),
+      };
+    })
+    .sort((a, b) => b.balance - a.balance);
+}
+
+async function hydrateEdgeFakeLeaderboard(env: CloudflareEnv): Promise<FakeLeaderboardMember[]> {
+  const edgeCache = getGlobalEdgeCache();
+  const kv = resolveKVBinding(env);
+  const db = resolveD1Binding(env);
+
+  // 1. Try D1 foxcoin_users_kv config row first (most authoritative)
+  if (db) {
+    try {
+      await ensureD1Schema(db);
+      const row = await db
+        .prepare('SELECT user_json FROM foxcoin_users_kv WHERE id = ?')
+        .bind(D1_FAKE_LB_CONFIG_ID)
+        .first();
+      if (row && row.user_json) {
+        const parsed = JSON.parse(String(row.user_json));
+        if (Array.isArray(parsed)) {
+          edgeFakeLeaderboard = sanitizeFakeLeaderboardList(parsed);
+          fakeLeaderboardHydrated = true;
+          return edgeFakeLeaderboard;
+        }
+      }
+    } catch {}
+  }
+
+  // 2. Try Cloudflare KV if bound
+  if (kv) {
+    try {
+      const rawKv = await kv.get('foxcoin_fake_leaderboard_v1');
+      if (rawKv) {
+        const parsed = JSON.parse(rawKv);
+        if (Array.isArray(parsed)) {
+          edgeFakeLeaderboard = sanitizeFakeLeaderboardList(parsed);
+          fakeLeaderboardHydrated = true;
+          return edgeFakeLeaderboard;
+        }
+      }
+    } catch {}
+  }
+
+  // 3. Try Cloudflare Global Edge Cache
+  if (edgeCache) {
+    try {
+      const cachedRes = await edgeCache.match(EDGE_CACHE_FAKE_LB_URL);
+      if (cachedRes && cachedRes.ok) {
+        const parsed = await cachedRes.json();
+        if (Array.isArray(parsed)) {
+          edgeFakeLeaderboard = sanitizeFakeLeaderboardList(parsed);
+          fakeLeaderboardHydrated = true;
+          return edgeFakeLeaderboard;
+        }
+      }
+    } catch {}
+  }
+
+  fakeLeaderboardHydrated = true;
+  return edgeFakeLeaderboard;
+}
+
+async function persistEdgeFakeLeaderboard(
+  env: CloudflareEnv,
+  members: FakeLeaderboardMember[]
+): Promise<FakeLeaderboardMember[]> {
+  const sanitized = sanitizeFakeLeaderboardList(members);
+  edgeFakeLeaderboard = sanitized;
+  fakeLeaderboardHydrated = true;
+
+  const jsonPayload = JSON.stringify(sanitized);
+  const edgeCache = getGlobalEdgeCache();
+  if (edgeCache) {
+    try {
+      const res = new Response(jsonPayload, {
+        headers: {
+          'Content-Type': 'application/json',
+          'Cache-Control': 'public, max-age=31536000, s-maxage=31536000',
+        },
+      });
+      await edgeCache.put(EDGE_CACHE_FAKE_LB_URL, res);
+    } catch {}
+  }
+
+  const kv = resolveKVBinding(env);
+  if (kv) {
+    try {
+      await kv.put('foxcoin_fake_leaderboard_v1', jsonPayload);
+    } catch {}
+  }
+
+  const db = resolveD1Binding(env);
+  if (db) {
+    try {
+      await ensureD1Schema(db);
+      await db
+        .prepare(
+          `INSERT INTO foxcoin_users_kv (id, user_json, balance, updated_at)
+           VALUES (?, ?, 0, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             user_json = excluded.user_json,
+             updated_at = excluded.updated_at`
+        )
+        .bind(D1_FAKE_LB_CONFIG_ID, jsonPayload, Date.now())
+        .run();
+    } catch {}
+  }
+
+  return edgeFakeLeaderboard;
+}
 
 function getGlobalEdgeCache(): any {
   try {
@@ -586,7 +725,16 @@ async function hydrateFromEdgeCache(): Promise<void> {
       const parsedMap = (await cachedRes.json()) as Record<string, UserGameState>;
       if (parsedMap && typeof parsedMap === 'object') {
         for (const [uid, cachedUser] of Object.entries(parsedMap)) {
-          if (!uid || !cachedUser || uid.startsWith('bot_') || uid.startsWith('seed_')) continue;
+          if (
+            !uid ||
+            !cachedUser ||
+            uid.startsWith('bot_') ||
+            uid.startsWith('seed_') ||
+            uid.startsWith('fake_lb_') ||
+            uid.startsWith('__config_')
+          ) {
+            continue;
+          }
           const existing = edgeUsers.get(uid);
           edgeUsers.set(uid, existing ? mergeUserProgress(existing, cachedUser) : { ...cachedUser, dailyRewardDays: DAILY_REWARDS });
         }
@@ -601,11 +749,25 @@ async function persistToEdgeCache(user?: UserGameState): Promise<void> {
   try {
     const realUsersObj: Record<string, UserGameState> = {};
     for (const [uid, u] of edgeUsers.entries()) {
-      if (uid && u && !uid.startsWith('bot_') && !uid.startsWith('seed_')) {
+      if (
+        uid &&
+        u &&
+        !uid.startsWith('bot_') &&
+        !uid.startsWith('seed_') &&
+        !uid.startsWith('fake_lb_') &&
+        !uid.startsWith('__config_')
+      ) {
         realUsersObj[uid] = u;
       }
     }
-    if (user && user.id && !user.id.startsWith('bot_') && !user.id.startsWith('seed_')) {
+    if (
+      user &&
+      user.id &&
+      !user.id.startsWith('bot_') &&
+      !user.id.startsWith('seed_') &&
+      !user.id.startsWith('fake_lb_') &&
+      !user.id.startsWith('__config_')
+    ) {
       realUsersObj[user.id] = user;
     }
     const snapshotResponse = new Response(JSON.stringify(realUsersObj), {
@@ -626,7 +788,7 @@ async function hydrateEdgeUsers(env: CloudflareEnv, force = false) {
 
   // Purge any legacy mock bot entries from memory
   for (const uid of Array.from(edgeUsers.keys())) {
-    if (uid.startsWith('bot_') || uid.startsWith('seed_')) {
+    if (uid.startsWith('bot_') || uid.startsWith('seed_') || uid.startsWith('fake_lb_') || uid.startsWith('__config_')) {
       edgeUsers.delete(uid);
     }
   }
@@ -644,7 +806,16 @@ async function hydrateEdgeUsers(env: CloudflareEnv, force = false) {
       if (rawKv) {
         const parsedMap = JSON.parse(rawKv) as Record<string, UserGameState>;
         for (const [uid, kvUser] of Object.entries(parsedMap)) {
-          if (!uid || !kvUser || uid.startsWith('bot_') || uid.startsWith('seed_')) continue;
+          if (
+            !uid ||
+            !kvUser ||
+            uid.startsWith('bot_') ||
+            uid.startsWith('seed_') ||
+            uid.startsWith('fake_lb_') ||
+            uid.startsWith('__config_')
+          ) {
+            continue;
+          }
           const existing = edgeUsers.get(uid);
           edgeUsers.set(uid, existing ? mergeUserProgress(existing, kvUser) : { ...kvUser, dailyRewardDays: DAILY_REWARDS });
         }
@@ -663,14 +834,23 @@ async function hydrateEdgeUsers(env: CloudflareEnv, force = false) {
       // 3a. Load from schema-proof foxcoin_users_kv table
       try {
         const kvRes = await db
-          .prepare("SELECT id, user_json FROM foxcoin_users_kv WHERE id NOT LIKE 'bot_%' AND id NOT LIKE 'seed_%' ORDER BY balance DESC, updated_at DESC LIMIT 5000")
+          .prepare("SELECT id, user_json FROM foxcoin_users_kv WHERE id NOT LIKE 'bot_%' AND id NOT LIKE 'seed_%' AND id NOT LIKE 'fake_lb_%' AND id NOT LIKE '__config_%' ORDER BY balance DESC, updated_at DESC LIMIT 5000")
           .all();
         if (kvRes && Array.isArray(kvRes.results)) {
           for (const row of kvRes.results) {
             if (!row?.id || !row?.user_json) continue;
             try {
               const parsed = JSON.parse(String(row.user_json)) as UserGameState;
-              if (!parsed || !parsed.id || parsed.id.startsWith('bot_') || parsed.id.startsWith('seed_')) continue;
+              if (
+                !parsed ||
+                !parsed.id ||
+                parsed.id.startsWith('bot_') ||
+                parsed.id.startsWith('seed_') ||
+                parsed.id.startsWith('fake_lb_') ||
+                parsed.id.startsWith('__config_')
+              ) {
+                continue;
+              }
               d1KvIds.add(parsed.id);
               const existing = edgeUsers.get(parsed.id);
               edgeUsers.set(parsed.id, existing ? mergeUserProgress(parsed, existing) : { ...parsed, dailyRewardDays: DAILY_REWARDS });
@@ -682,12 +862,12 @@ async function hydrateEdgeUsers(env: CloudflareEnv, force = false) {
       // 3b. Load from structured users table
       try {
         const res = await db
-          .prepare("SELECT * FROM users WHERE id NOT LIKE 'bot_%' AND id NOT LIKE 'seed_%' ORDER BY balance DESC, updated_at DESC LIMIT 5000")
+          .prepare("SELECT * FROM users WHERE id NOT LIKE 'bot_%' AND id NOT LIKE 'seed_%' AND id NOT LIKE 'fake_lb_%' ORDER BY balance DESC, updated_at DESC LIMIT 5000")
           .all();
         if (res && Array.isArray(res.results)) {
           for (const row of res.results) {
             const d1User = mapD1RowToUser(row);
-            if (d1User.id.startsWith('bot_') || d1User.id.startsWith('seed_')) continue;
+            if (d1User.id.startsWith('bot_') || d1User.id.startsWith('seed_') || d1User.id.startsWith('fake_lb_')) continue;
             const existing = edgeUsers.get(d1User.id);
             edgeUsers.set(d1User.id, existing ? mergeUserProgress(d1User, existing) : d1User);
           }
@@ -696,7 +876,13 @@ async function hydrateEdgeUsers(env: CloudflareEnv, force = false) {
 
       // 3c. Flush any in-memory or Edge-Cached users that were not yet stored in D1 foxcoin_users_kv into D1 immediately
       for (const [uid, memUser] of edgeUsers.entries()) {
-        if (!uid.startsWith('bot_') && !uid.startsWith('seed_') && !d1KvIds.has(uid)) {
+        if (
+          !uid.startsWith('bot_') &&
+          !uid.startsWith('seed_') &&
+          !uid.startsWith('fake_lb_') &&
+          !uid.startsWith('__config_') &&
+          !d1KvIds.has(uid)
+        ) {
           await persistUserToD1(db, memUser);
         }
       }
@@ -714,7 +900,16 @@ async function hydrateEdgeUsers(env: CloudflareEnv, force = false) {
 
 // Persist user to Cloudflare D1 (foxcoin_users_kv + users), Cloudflare KV, and Cloudflare Edge Cache
 async function persistUserToD1(db: any, user: UserGameState): Promise<boolean> {
-  if (!user || !user.id || user.id.startsWith('bot_') || user.id.startsWith('seed_')) return false;
+  if (
+    !user ||
+    !user.id ||
+    user.id.startsWith('bot_') ||
+    user.id.startsWith('seed_') ||
+    user.id.startsWith('fake_lb_') ||
+    user.id.startsWith('__config_')
+  ) {
+    return false;
+  }
 
   edgeUsers.set(user.id, user);
 
@@ -1452,10 +1647,14 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
 
   // 2. Game Config
   if (pathname === '/api/game/config') {
+    if (!fakeLeaderboardHydrated) {
+      await hydrateEdgeFakeLeaderboard(env);
+    }
     const telegramBotUsername = await resolveEdgeBotUsername();
     return jsonResponse({
       upgrades: edgeUpgrades,
       wheelPrizes: edgeWheelPrizes,
+      fakeLeaderboardMembers: edgeFakeLeaderboard,
       levels: PLAYER_LEVELS,
       tasks: TASKS,
       dailyRewards: DAILY_REWARDS,
@@ -2278,11 +2477,18 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
     return jsonResponse({ trades });
   }
 
-  // Global Leaderboard (exclusively real registered users from Cloudflare D1 / KV / Edge Cache)
+  // Global Leaderboard (real registered users + display-only admin fake members)
   if (pathname === '/api/game/leaderboard') {
     await hydrateEdgeUsers(env, true);
+    await hydrateEdgeFakeLeaderboard(env);
     const user = getAuthUser();
-    if (user && !user.id.startsWith('bot_') && !user.id.startsWith('seed_')) {
+    if (
+      user &&
+      !user.id.startsWith('bot_') &&
+      !user.id.startsWith('seed_') &&
+      !user.id.startsWith('fake_lb_') &&
+      !user.id.startsWith('__config_')
+    ) {
       edgeUsers.set(user.id, user);
       await persistUserToD1(env.DB, user);
     }
@@ -2293,7 +2499,16 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
         const body = (await request.json()) as any;
         const knownPlayers = Array.isArray(body?.knownPlayers) ? body.knownPlayers : [];
         for (const kp of knownPlayers) {
-          if (!kp || typeof kp.id !== 'string' || kp.id.startsWith('bot_') || kp.id.startsWith('seed_')) continue;
+          if (
+            !kp ||
+            typeof kp.id !== 'string' ||
+            kp.id.startsWith('bot_') ||
+            kp.id.startsWith('seed_') ||
+            kp.id.startsWith('fake_lb_') ||
+            kp.id.startsWith('__config_')
+          ) {
+            continue;
+          }
           const existing = edgeUsers.get(kp.id);
           if (!existing) {
             const restored = createNewUserRecord(
@@ -2324,16 +2539,63 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
     }
 
     const limit = Math.min(200, Math.max(10, Number(url.searchParams.get('limit') || 50)));
-    const allRealSorted = Array.from(edgeUsers.values())
-      .filter((u) => u && u.id && !u.id.startsWith('bot_') && !u.id.startsWith('seed_'))
-      .map((u) => refreshEdgeUserState(u))
-      .sort((a, b) => {
-        if (b.balance !== a.balance) return b.balance - a.balance;
-        if (b.profitPerHour !== a.profitPerHour) return b.profitPerHour - a.profitPerHour;
-        return (b.totalEarned || 0) - (a.totalEarned || 0);
-      });
+    const allRealUsers = Array.from(edgeUsers.values())
+      .filter(
+        (u) =>
+          u &&
+          u.id &&
+          !u.id.startsWith('bot_') &&
+          !u.id.startsWith('seed_') &&
+          !u.id.startsWith('fake_lb_') &&
+          !u.id.startsWith('__config_')
+      )
+      .map((u) => refreshEdgeUserState(u));
 
-    const entries: LeaderboardEntry[] = allRealSorted.slice(0, limit).map((u, idx) => ({
+    const combinedEntries: Array<{
+      id: string;
+      username: string;
+      displayName: string;
+      balance: number;
+      profitPerHour: number;
+      level: number;
+      levelName: string;
+      totalEarned?: number;
+      isCurrentPlayer?: boolean;
+    }> = allRealUsers.map((u) => ({
+      id: u.id,
+      username: u.username,
+      displayName: u.displayName || u.username,
+      balance: u.balance,
+      profitPerHour: u.profitPerHour,
+      level: u.level,
+      levelName: u.levelName,
+      totalEarned: u.totalEarned || u.balance,
+      isCurrentPlayer: user?.id === u.id,
+    }));
+
+    for (const fm of edgeFakeLeaderboard) {
+      if (!fm || !fm.id) continue;
+      const lvlInfo = getPlayerLevel(fm.balance || 0);
+      combinedEntries.push({
+        id: fm.id,
+        username: fm.username || 'fox_player',
+        displayName: fm.displayName || fm.username || 'FoxPlayer',
+        balance: Math.max(0, Math.floor(Number(fm.balance) || 0)),
+        profitPerHour: Math.max(0, Math.floor(Number(fm.profitPerHour) || 0)),
+        level: fm.level || lvlInfo.level,
+        levelName: fm.levelName || lvlInfo.name,
+        totalEarned: Math.max(0, Math.floor(Number(fm.balance) || 0)),
+        isCurrentPlayer: false,
+      });
+    }
+
+    combinedEntries.sort((a, b) => {
+      if (b.balance !== a.balance) return b.balance - a.balance;
+      if (b.profitPerHour !== a.profitPerHour) return b.profitPerHour - a.profitPerHour;
+      return (b.totalEarned || 0) - (a.totalEarned || 0);
+    });
+
+    const entries: LeaderboardEntry[] = combinedEntries.slice(0, limit).map((u, idx) => ({
       rank: idx + 1,
       id: u.id,
       username: u.username,
@@ -2342,13 +2604,13 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
       level: u.level,
       levelName: u.levelName,
       profitPerHour: u.profitPerHour,
-      isCurrentPlayer: user?.id === u.id,
+      isCurrentPlayer: Boolean(u.isCurrentPlayer),
     }));
 
     let playerEntry = entries.find((e) => e.isCurrentPlayer);
     if (!playerEntry && user) {
-      const fullIdx = allRealSorted.findIndex((u) => u.id === user.id);
-      const rank = fullIdx >= 0 ? fullIdx + 1 : allRealSorted.length + 1;
+      const fullIdx = combinedEntries.findIndex((u) => u.id === user.id);
+      const rank = fullIdx >= 0 ? fullIdx + 1 : combinedEntries.length + 1;
       playerEntry = {
         rank,
         id: user.id,
@@ -2366,7 +2628,8 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
       list: entries,
       playerEntry,
       entries,
-      totalPlayers: allRealSorted.length,
+      fakeLeaderboardMembers: edgeFakeLeaderboard,
+      totalPlayers: combinedEntries.length,
       currentUserRank: playerEntry?.rank || 1,
     });
   }
@@ -3110,6 +3373,24 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
     }));
 
     return jsonResponse({ success: true, wheelPrizes: edgeWheelPrizes });
+  }
+
+  // Admin: Get & Save Display-Only Fake Leaderboard Members
+  if (pathname === '/api/admin/fake-leaderboard' && method === 'GET') {
+    if (!isAdmin) return jsonResponse({ error: 'Forbidden' }, 403);
+    const list = await hydrateEdgeFakeLeaderboard(env);
+    return jsonResponse({ success: true, fakeLeaderboardMembers: list });
+  }
+
+  if (pathname === '/api/admin/fake-leaderboard/save' && method === 'POST') {
+    if (!isAdmin) return jsonResponse({ error: 'Forbidden' }, 403);
+    let body: any = {};
+    try {
+      body = await request.json();
+    } catch {}
+    const members = Array.isArray(body?.members) ? body.members : [];
+    const saved = await persistEdgeFakeLeaderboard(env, members);
+    return jsonResponse({ success: true, fakeLeaderboardMembers: saved });
   }
 
   // 8. Fallback for undefined edge API routes

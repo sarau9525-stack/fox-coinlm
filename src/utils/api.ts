@@ -1,4 +1,4 @@
-import { UserGameState, InvitedFriendInfo, LeaderboardEntry, UpgradeDefinition, TaskDefinition, DailyRewardDay, TradeOrder, LuckyWheelPrize } from '../types/game.js';
+import { UserGameState, InvitedFriendInfo, LeaderboardEntry, FakeLeaderboardMember, UpgradeDefinition, TaskDefinition, DailyRewardDay, TradeOrder, LuckyWheelPrize } from '../types/game.js';
 import { UPGRADES, PLAYER_LEVELS, TASKS, DAILY_REWARDS, GAME_CONSTANTS, LUCKY_WHEEL_PRIZES, pickLuckyWheelPrize, reconcileUserLevel, getUpgradeXpBonus, sanitizeWheelPrize, sanitizeUpgrade } from '../../server/gameConfig.js';
 import { TelegramService, TelegramInvoiceStatus } from './telegram.js';
 
@@ -38,10 +38,12 @@ const LOCAL_TRADES_KEY = 'foxcoin_local_trades_v1';
 const LOCAL_BOT_KEY = 'foxcoin_local_bot_v1';
 const LOCAL_UPGRADES_KEY = 'foxcoin_local_upgrades_v4';
 const LOCAL_WHEEL_KEY = 'foxcoin_local_wheel_v4';
+const LOCAL_FAKE_LB_KEY = 'foxcoin_fake_leaderboard_v1';
 
 export interface GameConfig {
   upgrades: UpgradeDefinition[];
   wheelPrizes?: LuckyWheelPrize[];
+  fakeLeaderboardMembers?: FakeLeaderboardMember[];
   levels: Array<{ level: number; name: string; minCoins: number; badge: string }>;
   tasks: TaskDefinition[];
   dailyRewards: DailyRewardDay[];
@@ -426,11 +428,113 @@ class ApiService {
     return [...LUCKY_WHEEL_PRIZES];
   }
 
+  public getLocalFakeLeaderboardMembers(): FakeLeaderboardMember[] {
+    if (typeof window !== 'undefined') {
+      const raw = localStorage.getItem(LOCAL_FAKE_LB_KEY);
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw) as FakeLeaderboardMember[];
+          if (Array.isArray(parsed)) {
+            return parsed
+              .filter((m) => m && (m.displayName || m.username))
+              .map((m, idx) => {
+                const bal = Math.max(0, Math.floor(Number(m.balance) || 0));
+                const lvl = getPlayerLevel(bal);
+                const rawId = String(m.id || `fake_lb_${idx}`);
+                return {
+                  id: rawId.startsWith('fake_lb_') ? rawId : `fake_lb_${rawId}`,
+                  displayName: String(m.displayName || m.username || 'FoxPlayer').trim(),
+                  username: String(m.username || 'fox_player').replace(/^@/, '').trim(),
+                  balance: bal,
+                  profitPerHour: Math.max(0, Math.floor(Number(m.profitPerHour) || 0)),
+                  level: Number(m.level) || lvl.level,
+                  levelName: String(m.levelName || lvl.name),
+                  createdAt: Number(m.createdAt) || Date.now(),
+                };
+              })
+              .sort((a, b) => b.balance - a.balance);
+          }
+        } catch {}
+      }
+    }
+    return [];
+  }
+
+  public saveLocalFakeLeaderboardMembers(members: FakeLeaderboardMember[]) {
+    if (typeof window === 'undefined') return;
+    try {
+      const sanitized = (Array.isArray(members) ? members : [])
+        .filter((m) => m && (m.displayName || m.username))
+        .map((m, idx) => {
+          const bal = Math.max(0, Math.floor(Number(m.balance) || 0));
+          const lvl = getPlayerLevel(bal);
+          const rawId = String(m.id || `fake_lb_${Date.now()}_${idx}`);
+          return {
+            id: rawId.startsWith('fake_lb_') ? rawId : `fake_lb_${rawId}`,
+            displayName: String(m.displayName || m.username || 'FoxPlayer').trim(),
+            username: String(m.username || 'fox_player').replace(/^@/, '').trim(),
+            balance: bal,
+            profitPerHour: Math.max(0, Math.floor(Number(m.profitPerHour) || 0)),
+            level: Number(m.level) || lvl.level,
+            levelName: String(m.levelName || lvl.name),
+            createdAt: Number(m.createdAt) || Date.now(),
+          };
+        })
+        .sort((a, b) => b.balance - a.balance);
+
+      localStorage.setItem(LOCAL_FAKE_LB_KEY, JSON.stringify(sanitized));
+
+      // Also sync foxcoin_permanent_leaderboard_v1 immediately so added/edited/deleted fake members update right away
+      const PERM_LB_KEY = 'foxcoin_permanent_leaderboard_v1';
+      const permRaw = localStorage.getItem(PERM_LB_KEY);
+      const existingReal: LeaderboardEntry[] = [];
+      if (permRaw) {
+        try {
+          const parsedPerm = JSON.parse(permRaw) as LeaderboardEntry[];
+          if (Array.isArray(parsedPerm)) {
+            for (const item of parsedPerm) {
+              if (item && item.id && !item.id.startsWith('fake_lb_') && !item.id.startsWith('bot_') && !item.id.startsWith('seed_')) {
+                existingReal.push(item);
+              }
+            }
+          }
+        } catch {}
+      }
+      const fakeEntries: LeaderboardEntry[] = sanitized.map((fm) => ({
+        rank: 1,
+        id: fm.id,
+        displayName: fm.displayName,
+        username: fm.username,
+        balance: fm.balance,
+        profitPerHour: fm.profitPerHour,
+        level: fm.level,
+        levelName: fm.levelName,
+        isCurrentPlayer: false,
+      }));
+      const combined = [...existingReal, ...fakeEntries].sort((a, b) => {
+        if (b.balance !== a.balance) return b.balance - a.balance;
+        return (b.profitPerHour || 0) - (a.profitPerHour || 0);
+      });
+      const ranked = combined.map((entry, idx) => ({ ...entry, rank: idx + 1 }));
+      localStorage.setItem(PERM_LB_KEY, JSON.stringify(ranked.slice(0, 500)));
+    } catch {}
+  }
+
   public async getConfig(): Promise<GameConfig> {
     try {
       const cfg = await this.request<GameConfig>('/api/game/config');
       if (cfg.upgrades) cfg.upgrades = cfg.upgrades.map(sanitizeUpgrade);
       if (cfg.wheelPrizes) cfg.wheelPrizes = cfg.wheelPrizes.map(sanitizeWheelPrize);
+      if (Array.isArray(cfg.fakeLeaderboardMembers)) {
+        const localFakes = this.getLocalFakeLeaderboardMembers();
+        if (cfg.fakeLeaderboardMembers.length > 0 || localFakes.length === 0) {
+          this.saveLocalFakeLeaderboardMembers(cfg.fakeLeaderboardMembers);
+        } else if (localFakes.length > 0) {
+          cfg.fakeLeaderboardMembers = localFakes;
+        }
+      } else {
+        cfg.fakeLeaderboardMembers = this.getLocalFakeLeaderboardMembers();
+      }
 
       const resolvedBot = await this.resolveBotUsername(cfg.telegramBotUsername);
       if (resolvedBot) {
@@ -443,6 +547,7 @@ class ApiService {
         return {
           upgrades: this.getLocalUpgrades(),
           wheelPrizes: this.getLocalWheelPrizes(),
+          fakeLeaderboardMembers: this.getLocalFakeLeaderboardMembers(),
           levels: PLAYER_LEVELS,
           tasks: TASKS,
           dailyRewards: DAILY_REWARDS,
@@ -1289,7 +1394,7 @@ class ApiService {
     const PERM_LB_KEY = 'foxcoin_permanent_leaderboard_v1';
     const currentUser = this.getLocalUser();
 
-    const loadKnownPlayers = (): LeaderboardEntry[] => {
+    const loadKnownRealPlayers = (): LeaderboardEntry[] => {
       const map = new Map<string, LeaderboardEntry>();
       if (typeof window !== 'undefined') {
         try {
@@ -1298,7 +1403,14 @@ class ApiService {
             const parsedPerm = JSON.parse(permRaw) as LeaderboardEntry[];
             if (Array.isArray(parsedPerm)) {
               for (const item of parsedPerm) {
-                if (item && item.id && !item.id.startsWith('bot_') && !item.id.startsWith('seed_')) {
+                if (
+                  item &&
+                  item.id &&
+                  !item.id.startsWith('bot_') &&
+                  !item.id.startsWith('seed_') &&
+                  !item.id.startsWith('fake_lb_') &&
+                  !item.id.startsWith('__config_')
+                ) {
                   map.set(item.id, item);
                 }
               }
@@ -1312,7 +1424,14 @@ class ApiService {
             const storedUsers = JSON.parse(extraRaw) as UserGameState[];
             if (Array.isArray(storedUsers)) {
               for (const u of storedUsers) {
-                if (u && u.id && !u.id.startsWith('bot_') && !u.id.startsWith('seed_')) {
+                if (
+                  u &&
+                  u.id &&
+                  !u.id.startsWith('bot_') &&
+                  !u.id.startsWith('seed_') &&
+                  !u.id.startsWith('fake_lb_') &&
+                  !u.id.startsWith('__config_')
+                ) {
                   const prev = map.get(u.id);
                   map.set(u.id, {
                     rank: prev?.rank || 1,
@@ -1332,7 +1451,7 @@ class ApiService {
         } catch {}
       }
 
-      if (currentUser && currentUser.id && !currentUser.id.startsWith('bot_')) {
+      if (currentUser && currentUser.id && !currentUser.id.startsWith('bot_') && !currentUser.id.startsWith('fake_lb_')) {
         const prev = map.get(currentUser.id);
         map.set(currentUser.id, {
           rank: prev?.rank || 1,
@@ -1350,16 +1469,48 @@ class ApiService {
       return Array.from(map.values());
     };
 
-    const mergeAndSaveLeaderboard = (serverList: LeaderboardEntry[], knownList: LeaderboardEntry[]) => {
+    const mergeAndSaveLeaderboard = (
+      serverList: LeaderboardEntry[],
+      knownRealList: LeaderboardEntry[],
+      serverFakeMembers?: FakeLeaderboardMember[]
+    ) => {
       const mergedMap = new Map<string, LeaderboardEntry>();
 
-      for (const kp of knownList) {
-        if (!kp || !kp.id || kp.id.startsWith('bot_') || kp.id.startsWith('seed_')) continue;
+      if (Array.isArray(serverFakeMembers)) {
+        const localFakes = this.getLocalFakeLeaderboardMembers();
+        if (serverFakeMembers.length > 0 || localFakes.length === 0) {
+          this.saveLocalFakeLeaderboardMembers(serverFakeMembers);
+        }
+      }
+      const activeFakeMembers = this.getLocalFakeLeaderboardMembers();
+      const activeFakeIds = new Set(activeFakeMembers.map((f) => f.id));
+
+      for (const kp of knownRealList) {
+        if (
+          !kp ||
+          !kp.id ||
+          kp.id.startsWith('bot_') ||
+          kp.id.startsWith('seed_') ||
+          kp.id.startsWith('fake_lb_') ||
+          kp.id.startsWith('__config_')
+        ) {
+          continue;
+        }
         mergedMap.set(kp.id, { ...kp, isCurrentPlayer: kp.id === currentUser.id });
       }
 
       for (const sp of serverList) {
-        if (!sp || !sp.id || sp.id.startsWith('bot_') || sp.id.startsWith('seed_')) continue;
+        if (!sp || !sp.id || sp.id.startsWith('bot_') || sp.id.startsWith('seed_') || sp.id.startsWith('__config_')) {
+          continue;
+        }
+        if (sp.id.startsWith('fake_lb_')) {
+          if (!activeFakeIds.has(sp.id)) continue;
+          mergedMap.set(sp.id, {
+            ...sp,
+            isCurrentPlayer: false,
+          });
+          continue;
+        }
         const existing = mergedMap.get(sp.id);
         mergedMap.set(sp.id, {
           ...sp,
@@ -1370,6 +1521,23 @@ class ApiService {
           level: Math.max(Number(sp.level || 1), Number(existing?.level || 1)),
           levelName: sp.levelName || existing?.levelName || 'Bronze Fox',
           isCurrentPlayer: Boolean(sp.isCurrentPlayer || sp.id === currentUser.id),
+        });
+      }
+
+      // Always apply the latest display-only fake leaderboard members
+      for (const fm of activeFakeMembers) {
+        if (!fm || !fm.id) continue;
+        const lvl = getPlayerLevel(fm.balance || 0);
+        mergedMap.set(fm.id, {
+          rank: 1,
+          id: fm.id,
+          displayName: fm.displayName || fm.username || 'FoxPlayer',
+          username: fm.username || 'fox_player',
+          balance: Math.max(0, Math.floor(Number(fm.balance) || 0)),
+          profitPerHour: Math.max(0, Math.floor(Number(fm.profitPerHour) || 0)),
+          level: Number(fm.level) || lvl.level,
+          levelName: fm.levelName || lvl.name,
+          isCurrentPlayer: false,
         });
       }
 
@@ -1404,26 +1572,29 @@ class ApiService {
       return { list, playerEntry };
     };
 
-    const knownPlayers = loadKnownPlayers();
+    const knownRealPlayers = loadKnownRealPlayers();
 
     try {
-      const serverRes = await this.request<{ list: LeaderboardEntry[]; playerEntry?: LeaderboardEntry }>(
-        `/api/game/leaderboard?limit=${limit}`,
-        {
-          method: 'POST',
-          body: JSON.stringify({ knownPlayers: knownPlayers.slice(0, 200) }),
-        }
-      );
-      return mergeAndSaveLeaderboard(serverRes.list || [], knownPlayers);
+      const serverRes = await this.request<{
+        list: LeaderboardEntry[];
+        playerEntry?: LeaderboardEntry;
+        fakeLeaderboardMembers?: FakeLeaderboardMember[];
+      }>(`/api/game/leaderboard?limit=${limit}`, {
+        method: 'POST',
+        body: JSON.stringify({ knownPlayers: knownRealPlayers.slice(0, 200) }),
+      });
+      return mergeAndSaveLeaderboard(serverRes.list || [], knownRealPlayers, serverRes.fakeLeaderboardMembers);
     } catch (err) {
       try {
-        const getRes = await this.request<{ list: LeaderboardEntry[]; playerEntry?: LeaderboardEntry }>(
-          `/api/game/leaderboard?limit=${limit}`
-        );
-        return mergeAndSaveLeaderboard(getRes.list || [], knownPlayers);
+        const getRes = await this.request<{
+          list: LeaderboardEntry[];
+          playerEntry?: LeaderboardEntry;
+          fakeLeaderboardMembers?: FakeLeaderboardMember[];
+        }>(`/api/game/leaderboard?limit=${limit}`);
+        return mergeAndSaveLeaderboard(getRes.list || [], knownRealPlayers, getRes.fakeLeaderboardMembers);
       } catch (fallbackErr) {
-        if (this.isStaticFallbackError(fallbackErr) || knownPlayers.length > 0) {
-          return mergeAndSaveLeaderboard([], knownPlayers);
+        if (this.isStaticFallbackError(fallbackErr) || knownRealPlayers.length > 0) {
+          return mergeAndSaveLeaderboard([], knownRealPlayers);
         }
         throw fallbackErr;
       }
@@ -2159,6 +2330,58 @@ class ApiService {
         return { success: true, wheelPrizes: prizes };
       }
       throw err;
+    }
+  }
+
+  public async getAdminFakeLeaderboard(
+    adminSecret?: string
+  ): Promise<{ success: boolean; fakeLeaderboardMembers: FakeLeaderboardMember[] }> {
+    try {
+      const headers: Record<string, string> = {};
+      if (adminSecret) headers['x-admin-secret'] = adminSecret;
+      const res = await this.request<{ success: boolean; fakeLeaderboardMembers: FakeLeaderboardMember[] }>(
+        '/api/admin/fake-leaderboard',
+        { headers }
+      );
+      if (Array.isArray(res.fakeLeaderboardMembers)) {
+        const localFakes = this.getLocalFakeLeaderboardMembers();
+        if (res.fakeLeaderboardMembers.length > 0 || localFakes.length === 0) {
+          this.saveLocalFakeLeaderboardMembers(res.fakeLeaderboardMembers);
+          return { success: true, fakeLeaderboardMembers: this.getLocalFakeLeaderboardMembers() };
+        }
+        // If local has fake members that server lost on cold start, push them to server
+        return await this.adminSaveFakeLeaderboard(localFakes, adminSecret);
+      }
+      return { success: true, fakeLeaderboardMembers: this.getLocalFakeLeaderboardMembers() };
+    } catch {
+      return { success: true, fakeLeaderboardMembers: this.getLocalFakeLeaderboardMembers() };
+    }
+  }
+
+  public async adminSaveFakeLeaderboard(
+    members: FakeLeaderboardMember[],
+    adminSecret?: string
+  ): Promise<{ success: boolean; fakeLeaderboardMembers: FakeLeaderboardMember[] }> {
+    this.saveLocalFakeLeaderboardMembers(members);
+    const localSaved = this.getLocalFakeLeaderboardMembers();
+    try {
+      const headers: Record<string, string> = {};
+      if (adminSecret) headers['x-admin-secret'] = adminSecret;
+      const res = await this.request<{ success: boolean; fakeLeaderboardMembers: FakeLeaderboardMember[] }>(
+        '/api/admin/fake-leaderboard/save',
+        {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ members: localSaved }),
+        }
+      );
+      if (Array.isArray(res.fakeLeaderboardMembers)) {
+        this.saveLocalFakeLeaderboardMembers(res.fakeLeaderboardMembers);
+        return { success: true, fakeLeaderboardMembers: this.getLocalFakeLeaderboardMembers() };
+      }
+      return { success: true, fakeLeaderboardMembers: localSaved };
+    } catch {
+      return { success: true, fakeLeaderboardMembers: localSaved };
     }
   }
 }
