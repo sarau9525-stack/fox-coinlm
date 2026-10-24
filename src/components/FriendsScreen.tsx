@@ -475,7 +475,7 @@ export const FriendsScreen: React.FC<FriendsScreenProps> = ({
         </div>
       </div>
 
-      {/* YOUR INVITED FRIENDS LIST (لیست دعوتی‌های ثبت‌شده شما) */}
+      {/* YOUR INVITED FRIENDS LIST */}
       <div className="w-full bg-slate-900/95 border border-emerald-500/40 rounded-3xl p-4 mb-5 shadow-xl">
         <div className="flex items-center justify-between gap-2 mb-3">
           <div className="flex items-center gap-2">
@@ -484,10 +484,10 @@ export const FriendsScreen: React.FC<FriendsScreenProps> = ({
             </div>
             <div>
               <h4 className="text-sm font-black text-white flex items-center gap-1.5">
-                <span>لیست دعوت‌شده‌های شما (Your Referrals)</span>
+                <span>Your Invited Friends</span>
               </h4>
               <p className="text-[11px] text-slate-400">
-                کاربرانی که با لینک شما در <span className="text-amber-300 font-mono">@{cleanBot}</span> ثبت شده‌اند
+                Friends who joined via your <span className="text-amber-300 font-mono">@{cleanBot}</span> link
               </p>
             </div>
           </div>
@@ -502,7 +502,10 @@ export const FriendsScreen: React.FC<FriendsScreenProps> = ({
             className="px-2.5 py-1.5 rounded-xl bg-slate-800/90 hover:bg-slate-700 border border-slate-700 text-xs font-bold text-emerald-300 flex items-center gap-1.5 transition active:scale-95 cursor-pointer shrink-0"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isLoadingFriends ? 'animate-spin' : ''}`} />
-            <span>{invitedFriends.length || currentCount} نفر</span>
+            <span>
+              {invitedFriends.length || currentCount}{' '}
+              {(invitedFriends.length || currentCount) === 1 ? 'Friend' : 'Friends'}
+            </span>
           </button>
         </div>
 
@@ -532,7 +535,7 @@ export const FriendsScreen: React.FC<FriendsScreenProps> = ({
                             : 'bg-slate-800 text-slate-400'
                         }`}
                       >
-                        {friend.isActive ? '🟢 فعال' : '⚪ ثبت‌شده'}
+                        {friend.isActive ? '🟢 Active' : '⚪ Joined'}
                       </span>
                     </div>
                     <div className="text-[10px] text-slate-400 mt-0.5 flex items-center gap-2 flex-wrap">
@@ -546,7 +549,7 @@ export const FriendsScreen: React.FC<FriendsScreenProps> = ({
                       {friend.joinedAt ? (
                         <>
                           <span>•</span>
-                          <span>{new Date(friend.joinedAt).toLocaleDateString('fa-IR')}</span>
+                          <span>{new Date(friend.joinedAt).toLocaleDateString('en-US')}</span>
                         </>
                       ) : null}
                     </div>
@@ -559,26 +562,23 @@ export const FriendsScreen: React.FC<FriendsScreenProps> = ({
                     <span>+{(friend.rewardEarned || 5000).toLocaleString('en-US')}</span>
                   </div>
                   <span className="text-[9px] text-slate-400 font-semibold block mt-0.5">
-                    پاداش دعوت ثبت شد
+                    Referral Bonus
                   </span>
                 </div>
               </div>
             ))}
           </div>
         ) : (
-          <div className="p-4 rounded-2xl bg-slate-950/80 border border-slate-800/90 text-center space-y-2" dir="rtl">
+          <div className="p-4 rounded-2xl bg-slate-950/80 border border-slate-800/90 text-center space-y-1.5">
             <p className="text-xs font-bold text-slate-200">
               {currentCount > 0
-                ? `شما تاکنون ${currentCount} دعوت ثبت‌شده دارید. برای همگام‌سازی جزئیات روی دکمه بروزرسانی بالا بزنید.`
-                : 'هنوز دوستی با لینک دعوت شما وارد ربات نشده است.'}
+                ? `You have ${currentCount} recorded referral${currentCount === 1 ? '' : 's'}. Tap refresh above to sync details.`
+                : 'No friends have joined via your invite link yet.'}
             </p>
             <p className="text-[11px] text-slate-400 leading-relaxed">
-              به محض اینکه دوستانتان از طریق لینک اختصاصی شما وارد ربات{' '}
-              <span className="text-amber-300 font-mono font-bold" dir="ltr">
-                @{cleanBot}
-              </span>{' '}
-              شوند و استارت بزنند، نام و مشخصات آن‌ها به صورت خودکار در این لیست برای شما ثبت و نمایش داده می‌شود و{' '}
-              <b className="text-emerald-400">+5,000 FOX</b> دریافت می‌کنید!
+              Share your exclusive{' '}
+              <span className="text-amber-300 font-mono font-bold">@{cleanBot}</span> referral link with friends. As soon as they start the bot, they will appear here and you will earn{' '}
+              <b className="text-emerald-400">+5,000 FOX</b> instantly!
             </p>
           </div>
         )}

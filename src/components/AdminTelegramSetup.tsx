@@ -1055,9 +1055,72 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                   </div>
                 )}
 
+                {/* QUICK USER SEARCH BAR BY ID OR TELEGRAM @USERNAME */}
+                <div className="p-3 rounded-2xl bg-slate-900/95 border border-amber-500/40 space-y-2 shadow-md">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[11px] font-black text-amber-300 flex items-center gap-1.5">
+                      <Search className="w-3.5 h-3.5 text-amber-400" />
+                      <span>جستجوی سریع کاربر (با آیدی یا یوزرنیم تلگرام / Search by ID or @username)</span>
+                    </label>
+                    {userSearch.trim() && (
+                      <button
+                        type="button"
+                        onClick={() => setUserSearch('')}
+                        className="text-[10px] font-bold text-rose-300 hover:text-rose-200 bg-rose-500/15 border border-rose-500/30 px-2 py-0.5 rounded-lg cursor-pointer"
+                      >
+                        پاک کردن ✕
+                      </button>
+                    )}
+                  </div>
+                  <div className="relative">
+                    <Search className="w-4 h-4 text-amber-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      placeholder="Search by User ID, Telegram ID, @username, Display Name, or Referral Code..."
+                      value={userSearch}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setUserSearch(val);
+                        const cleanQ = val.trim().replace(/^@/, '').toLowerCase();
+                        if (cleanQ) {
+                          const match = allUsers.find(
+                            (u) =>
+                              (u.id || '').toLowerCase().includes(cleanQ) ||
+                              String(u.telegramId || '').toLowerCase().includes(cleanQ) ||
+                              (u.username || '').toLowerCase().includes(cleanQ) ||
+                              (u.displayName || '').toLowerCase().includes(cleanQ) ||
+                              (u.referralCode || '').toLowerCase().includes(cleanQ)
+                          );
+                          if (match) {
+                            setSelectedUserId(match.id);
+                          }
+                        }
+                      }}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-xl pl-9 pr-3 py-2.5 text-xs text-white font-mono placeholder-slate-500 focus:outline-none focus:border-amber-400"
+                    />
+                  </div>
+                </div>
+
                 {/* SELECTED USER PERFORMANCE & TOKEN MANAGEMENT DASHBOARD */}
                 {(() => {
-                  const targetUser = allUsers.find((u) => u.id === selectedUserId) || allUsers[0];
+                  const cleanQuery = userSearch.trim().replace(/^@/, '').toLowerCase();
+                  const matchingUsers = cleanQuery
+                    ? allUsers.filter(
+                        (u) =>
+                          (u.username || '').toLowerCase().includes(cleanQuery) ||
+                          (u.displayName || '').toLowerCase().includes(cleanQuery) ||
+                          (u.id || '').toLowerCase().includes(cleanQuery) ||
+                          String(u.telegramId || '').toLowerCase().includes(cleanQuery) ||
+                          (u.referralCode || '').toLowerCase().includes(cleanQuery) ||
+                          (u.email || '').toLowerCase().includes(cleanQuery)
+                      )
+                    : allUsers;
+
+                  const targetUser =
+                    matchingUsers.find((u) => u.id === selectedUserId) ||
+                    matchingUsers[0] ||
+                    allUsers.find((u) => u.id === selectedUserId) ||
+                    allUsers[0];
                   if (!targetUser) return null;
 
                   const upgradeEntries = Object.entries(targetUser.upgrades || {}).filter(([, lvl]) => Number(lvl) > 0);
@@ -1465,12 +1528,12 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                   ))}
                 </div>
 
-                {/* Search Input */}
+                {/* Search Input Above Users List */}
                 <div className="relative">
                   <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                   <input
                     type="text"
-                    placeholder="جستجوی کاربر با نام، یوزرنیم، آیدی تلگرام یا کد رفرال..."
+                    placeholder="Search user by ID, Telegram @username, Name, or Referral Code..."
                     value={userSearch}
                     onChange={(e) => setUserSearch(e.target.value)}
                     className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-amber-400"
@@ -1478,112 +1541,124 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                 </div>
 
                 {/* All Users List with Full Performance Badges */}
-                <div className="space-y-2 max-h-[380px] overflow-y-auto pr-1">
-                  {allUsers
-                    .filter((u) => {
-                      const upCount = Object.values(u.upgrades || {}).filter((lvl) => Number(lvl) > 0).length;
-                      const isActive =
-                        (u.totalTaps || 0) > 0 ||
-                        (u.profitPerHour || 0) > 0 ||
-                        upCount > 0 ||
-                        (u.balance || 0) > 5000;
+                {(() => {
+                  const cleanQ = userSearch.trim().replace(/^@/, '').toLowerCase();
+                  const filteredList = allUsers.filter((u) => {
+                    const upCount = Object.values(u.upgrades || {}).filter((lvl) => Number(lvl) > 0).length;
+                    const isActive =
+                      (u.totalTaps || 0) > 0 ||
+                      (u.profitPerHour || 0) > 0 ||
+                      upCount > 0 ||
+                      (u.balance || 0) > 5000;
 
-                      if (userActivityFilter === 'active' && !isActive) return false;
-                      if (userActivityFilter === 'inactive' && isActive) return false;
-                      if (userActivityFilter === 'referrals' && !(u.referralCount && u.referralCount > 0)) return false;
+                    if (userActivityFilter === 'active' && !isActive) return false;
+                    if (userActivityFilter === 'inactive' && isActive) return false;
+                    if (userActivityFilter === 'referrals' && !(u.referralCount && u.referralCount > 0)) return false;
 
-                      if (!userSearch.trim()) return true;
-                      const q = userSearch.toLowerCase();
-                      return (
-                        (u.username || '').toLowerCase().includes(q) ||
-                        (u.displayName || '').toLowerCase().includes(q) ||
-                        (u.id || '').toLowerCase().includes(q) ||
-                        String(u.telegramId || '').toLowerCase().includes(q) ||
-                        (u.referralCode || '').toLowerCase().includes(q) ||
-                        (u.email || '').toLowerCase().includes(q)
-                      );
-                    })
-                    .map((u, idx) => {
-                      const isSelected = u.id === (selectedUserId || allUsers[0]?.id);
-                      const isCurrentPlayer = u.id === user?.id;
-                      const upCount = Object.values(u.upgrades || {}).filter((lvl) => Number(lvl) > 0).length;
-                      const isActive =
-                        (u.totalTaps || 0) > 0 ||
-                        (u.profitPerHour || 0) > 0 ||
-                        upCount > 0 ||
-                        (u.balance || 0) > 5000;
+                    if (!cleanQ) return true;
+                    return (
+                      (u.username || '').toLowerCase().includes(cleanQ) ||
+                      (u.displayName || '').toLowerCase().includes(cleanQ) ||
+                      (u.id || '').toLowerCase().includes(cleanQ) ||
+                      String(u.telegramId || '').toLowerCase().includes(cleanQ) ||
+                      (u.referralCode || '').toLowerCase().includes(cleanQ) ||
+                      (u.email || '').toLowerCase().includes(cleanQ)
+                    );
+                  });
 
-                      return (
-                        <div
-                          key={u.id}
-                          onClick={() => setSelectedUserId(u.id)}
-                          className={`p-3 rounded-2xl border transition cursor-pointer space-y-1.5 ${
-                            isSelected
-                              ? 'bg-amber-500/15 border-amber-500/60 shadow-md'
-                              : 'bg-slate-900/80 border-slate-800 hover:border-slate-700'
-                          }`}
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="min-w-0 flex-1">
-                              <div className="flex items-center gap-1.5 flex-wrap">
-                                <span className="text-[10px] font-black text-amber-400">#{idx + 1}</span>
-                                <span className="font-extrabold text-xs text-white truncate">
-                                  {u.displayName || u.username}
-                                </span>
-                                {isCurrentPlayer && (
-                                  <span className="px-1.5 py-0.2 bg-sky-500/20 text-sky-300 border border-sky-500/30 text-[9px] font-black rounded">
-                                    YOU
+                  if (filteredList.length === 0) {
+                    return (
+                      <div className="p-4 rounded-2xl bg-slate-900/70 border border-slate-800 text-center text-xs text-slate-400">
+                        کاربری با مشخصات «{userSearch}» یافت نشد.
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div className="space-y-2 max-h-[380px] overflow-y-auto pr-1">
+                      {filteredList.map((u, idx) => {
+                        const isSelected = u.id === (selectedUserId || filteredList[0]?.id);
+                        const isCurrentPlayer = u.id === user?.id;
+                        const upCount = Object.values(u.upgrades || {}).filter((lvl) => Number(lvl) > 0).length;
+                        const isActive =
+                          (u.totalTaps || 0) > 0 ||
+                          (u.profitPerHour || 0) > 0 ||
+                          upCount > 0 ||
+                          (u.balance || 0) > 5000;
+
+                        return (
+                          <div
+                            key={u.id}
+                            onClick={() => setSelectedUserId(u.id)}
+                            className={`p-3 rounded-2xl border transition cursor-pointer space-y-1.5 ${
+                              isSelected
+                                ? 'bg-amber-500/15 border-amber-500/60 shadow-md'
+                                : 'bg-slate-900/80 border-slate-800 hover:border-slate-700'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className="text-[10px] font-black text-amber-400">#{idx + 1}</span>
+                                  <span className="font-extrabold text-xs text-white truncate">
+                                    {u.displayName || u.username}
                                   </span>
-                                )}
-                                {u.isTelegram && (
-                                  <span className="px-1.5 py-0.2 bg-blue-500/20 text-blue-300 text-[9px] font-bold rounded">
-                                    TG
+                                  {isCurrentPlayer && (
+                                    <span className="px-1.5 py-0.2 bg-sky-500/20 text-sky-300 border border-sky-500/30 text-[9px] font-black rounded">
+                                      YOU
+                                    </span>
+                                  )}
+                                  {u.isTelegram && (
+                                    <span className="px-1.5 py-0.2 bg-blue-500/20 text-blue-300 text-[9px] font-bold rounded">
+                                      TG
+                                    </span>
+                                  )}
+                                  <span
+                                    className={`px-1.5 py-0.2 rounded text-[8px] font-bold ${
+                                      isActive
+                                        ? 'bg-emerald-500/20 text-emerald-300'
+                                        : 'bg-slate-800 text-slate-400'
+                                    }`}
+                                  >
+                                    {isActive ? 'فعال' : 'غیرفعال'}
                                   </span>
-                                )}
-                                <span
-                                  className={`px-1.5 py-0.2 rounded text-[8px] font-bold ${
-                                    isActive
-                                      ? 'bg-emerald-500/20 text-emerald-300'
-                                      : 'bg-slate-800 text-slate-400'
-                                  }`}
-                                >
-                                  {isActive ? 'فعال' : 'غیرفعال'}
-                                </span>
+                                </div>
+                                <div className="text-[10px] text-slate-400 font-mono truncate">
+                                  @{u.username} • {u.id}{u.telegramId ? ` (TG: ${u.telegramId})` : ''} • Lvl {u.level} ({u.levelName})
+                                </div>
                               </div>
-                              <div className="text-[10px] text-slate-400 font-mono truncate">
-                                @{u.username} • {u.id} • Lvl {u.level} ({u.levelName})
+
+                              <div className="text-right shrink-0">
+                                <div className="text-xs font-black text-amber-400">
+                                  {Math.floor(u.balance || 0).toLocaleString('en-US')} FOX
+                                </div>
+                                <div className="text-[10px] text-emerald-400 font-semibold">
+                                  دعوت: {u.referralCount || 0} نفر ({Math.floor(u.referralEarnings || 0).toLocaleString('en-US')} FOX)
+                                </div>
                               </div>
                             </div>
 
-                            <div className="text-right shrink-0">
-                              <div className="text-xs font-black text-amber-400">
-                                {Math.floor(u.balance || 0).toLocaleString('en-US')} FOX
+                            {/* Compact Performance Row for Every User */}
+                            <div className="grid grid-cols-4 gap-1 pt-1 border-t border-slate-800/80 text-[9px] text-slate-300 text-center">
+                              <div className="bg-slate-950/60 rounded px-1 py-0.5">
+                                ⚡ سود/ساعت: <b className="text-sky-300">+{Math.floor(u.profitPerHour || 0).toLocaleString('en-US')}</b>
                               </div>
-                              <div className="text-[10px] text-emerald-400 font-semibold">
-                                دعوت: {u.referralCount || 0} نفر ({Math.floor(u.referralEarnings || 0).toLocaleString('en-US')} FOX)
+                              <div className="bg-slate-950/60 rounded px-1 py-0.5">
+                                👆 تپ‌ها: <b className="text-purple-300">{Math.floor(u.totalTaps || 0).toLocaleString('en-US')}</b>
+                              </div>
+                              <div className="bg-slate-950/60 rounded px-1 py-0.5">
+                                🃏 کارت‌ها: <b className="text-orange-300">{upCount}</b>
+                              </div>
+                              <div className="bg-slate-950/60 rounded px-1 py-0.5">
+                                🔥 استریک: <b className="text-amber-300">{u.dailyStreak || 0} روز</b>
                               </div>
                             </div>
                           </div>
-
-                          {/* Compact Performance Row for Every User */}
-                          <div className="grid grid-cols-4 gap-1 pt-1 border-t border-slate-800/80 text-[9px] text-slate-300 text-center">
-                            <div className="bg-slate-950/60 rounded px-1 py-0.5">
-                              ⚡ سود/ساعت: <b className="text-sky-300">+{Math.floor(u.profitPerHour || 0).toLocaleString('en-US')}</b>
-                            </div>
-                            <div className="bg-slate-950/60 rounded px-1 py-0.5">
-                              👆 تپ‌ها: <b className="text-purple-300">{Math.floor(u.totalTaps || 0).toLocaleString('en-US')}</b>
-                            </div>
-                            <div className="bg-slate-950/60 rounded px-1 py-0.5">
-                              🃏 کارت‌ها: <b className="text-orange-300">{upCount}</b>
-                            </div>
-                            <div className="bg-slate-950/60 rounded px-1 py-0.5">
-                              🔥 استریک: <b className="text-amber-300">{u.dailyStreak || 0} روز</b>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
               </div>
             )}
 
