@@ -165,17 +165,25 @@ class DatabaseStore {
   }
 
   public save() {
-    if (this.saveTimeout) clearTimeout(this.saveTimeout);
-    this.saveTimeout = setTimeout(() => {
-      try {
-        fs.writeFileSync(DB_FILE, JSON.stringify(this.data, null, 2), 'utf-8');
-      } catch (err) {
-        console.error('[Database] Error saving database asynchronously:', err);
-      }
-    }, 200);
+    if (this.saveTimeout) {
+      clearTimeout(this.saveTimeout);
+      this.saveTimeout = null;
+    }
+    this.saveSync();
   }
 
   private seedInitialData() {
+    if (
+      !this.data.botConfig?.botUsername ||
+      this.data.botConfig.botUsername === 'FoxCoinOfficialBot' ||
+      this.data.botConfig.botUsername === 'FOXCOINBot'
+    ) {
+      this.data.botConfig = {
+        ...this.data.botConfig,
+        botUsername: 'FOX_COINlBOT',
+      };
+    }
+
     // Purge any legacy mock bot users so rankings reflect only real registered users
     if (this.data.users) {
       for (const uid of Object.keys(this.data.users)) {
@@ -407,6 +415,112 @@ class DatabaseStore {
     const userId = this.data.telegramIdToUserId[String(telegramId)];
     if (!userId) return null;
     return this.getUserById(userId);
+  }
+
+  public upsertUserSnapshot(incoming: Partial<UserGameState>, referredByCode?: string): UserGameState {
+    const now = Date.now();
+    let existing: UserGameState | undefined;
+
+    if (incoming.id && this.data.users[incoming.id]) {
+      existing = this.data.users[incoming.id];
+    } else if (incoming.telegramId && this.data.telegramIdToUserId[String(incoming.telegramId)]) {
+      const uid = this.data.telegramIdToUserId[String(incoming.telegramId)];
+      existing = this.data.users[uid];
+    } else if (incoming.email && this.data.emailToUserId[incoming.email.toLowerCase()]) {
+      const uid = this.data.emailToUserId[incoming.email.toLowerCase()];
+      existing = this.data.users[uid];
+    }
+
+    if (!existing) {
+      const created = this.createNewUser({
+        username: incoming.username || incoming.displayName || 'FoxPlayer',
+        displayName: incoming.displayName || incoming.username || 'FoxPlayer',
+        email: incoming.email,
+        telegramId: incoming.telegramId,
+        avatarUrl: incoming.avatarUrl,
+        isGuest: incoming.isGuest ?? !incoming.isTelegram,
+        isTelegram: Boolean(incoming.isTelegram),
+        referredByCode,
+      });
+
+      if (incoming.id && incoming.id !== created.id) {
+        delete this.data.users[created.id];
+        created.id = incoming.id;
+        this.data.users[created.id] = created;
+        if (created.referralCode) {
+          this.data.referralCodeToUserId[created.referralCode] = created.id;
+        }
+        if (created.telegramId) {
+          this.data.telegramIdToUserId[String(created.telegramId)] = created.id;
+        }
+        if (created.email) {
+          this.data.emailToUserId[created.email.toLowerCase()] = created.id;
+        }
+      }
+      existing = created;
+    }
+
+    if (incoming.username && !incoming.username.startsWith('Fox_')) existing.username = incoming.username;
+    if (incoming.displayName && !incoming.displayName.startsWith('Fox_')) existing.displayName = incoming.displayName;
+    if (incoming.email) {
+      existing.email = incoming.email;
+      this.data.emailToUserId[incoming.email.toLowerCase()] = existing.id;
+    }
+    if (incoming.telegramId) {
+      existing.telegramId = incoming.telegramId;
+      existing.isTelegram = true;
+      this.data.telegramIdToUserId[String(incoming.telegramId)] = existing.id;
+    }
+    if (incoming.referralCode) {
+      existing.referralCode = incoming.referralCode;
+      this.data.referralCodeToUserId[incoming.referralCode] = existing.id;
+    }
+
+    existing.balance = Math.max(Number(existing.balance || 0), Number(incoming.balance || 0));
+    existing.totalEarned = Math.max(
+      Number(existing.totalEarned || 0),
+      Number(incoming.totalEarned || 0),
+      existing.balance
+    );
+    existing.totalTaps = Math.max(Number(existing.totalTaps || 0), Number(incoming.totalTaps || 0));
+    existing.unclaimedPassive = Math.max(Number(existing.unclaimedPassive || 0), Number(incoming.unclaimedPassive || 0));
+    existing.referralCount = Math.max(Number(existing.referralCount || 0), Number(incoming.referralCount || 0));
+    existing.referralEarnings = Math.max(Number(existing.referralEarnings || 0), Number(incoming.referralEarnings || 0));
+    existing.claimedMilestones = Math.max(Number(existing.claimedMilestones || 0), Number(incoming.claimedMilestones || 0));
+    existing.dailyStreak = Math.max(Number(existing.dailyStreak || 0), Number(incoming.dailyStreak || 0));
+    if (incoming.lastDailyClaimDate && (!existing.lastDailyClaimDate || incoming.lastDailyClaimDate > existing.lastDailyClaimDate)) {
+      existing.lastDailyClaimDate = incoming.lastDailyClaimDate;
+    }
+    if (incoming.hasJoinedChannel) {
+      existing.hasJoinedChannel = true;
+    }
+
+    if (incoming.upgrades && typeof incoming.upgrades === 'object') {
+      existing.upgrades = existing.upgrades || {};
+      for (const [upId, lvl] of Object.entries(incoming.upgrades)) {
+        const numLvl = Number(lvl) || 0;
+        if (numLvl > (existing.upgrades[upId] || 0)) {
+          existing.upgrades[upId] = numLvl;
+        }
+      }
+    }
+
+    if (incoming.tasks && typeof incoming.tasks === 'object') {
+      existing.tasks = existing.tasks || {};
+      for (const [tId, tState] of Object.entries(incoming.tasks)) {
+        const cur = existing.tasks[tId];
+        if (!cur || (tState?.claimed && !cur.claimed) || (tState?.completed && !cur.completed)) {
+          existing.tasks[tId] = tState;
+        }
+      }
+    }
+
+    (existing as any).updatedAt = now;
+    this.recalculatePlayerStats(existing);
+    this.refreshUserState(existing, now);
+    this.data.users[existing.id] = existing;
+    this.saveSync();
+    return existing;
   }
 
   public addAuditLog(userId: string, type: AuditLog['type'], amount: number, balanceAfter: number, description: string) {

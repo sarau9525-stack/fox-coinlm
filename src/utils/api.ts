@@ -208,16 +208,114 @@ class ApiService {
         if (
           localParsed &&
           (localParsed.id === serverUser.id ||
-            (localParsed.telegramId && String(localParsed.telegramId) === String(serverUser.telegramId)))
+            (localParsed.telegramId && String(localParsed.telegramId) === String(serverUser.telegramId)) ||
+            (localParsed.id?.startsWith('fox_') && serverUser.isTelegram))
         ) {
           const syncedLocal = this.syncLocalUserProgress({ ...localParsed });
+          let localHadMoreProgress = false;
+
           if ((syncedLocal.unclaimedPassive || 0) > (serverUser.unclaimedPassive || 0)) {
             serverUser.unclaimedPassive = syncedLocal.unclaimedPassive;
+            localHadMoreProgress = true;
+          }
+          if ((syncedLocal.balance || 0) > (serverUser.balance || 0)) {
+            serverUser.balance = syncedLocal.balance;
+            localHadMoreProgress = true;
+          }
+          if ((syncedLocal.totalEarned || 0) > (serverUser.totalEarned || 0)) {
+            serverUser.totalEarned = syncedLocal.totalEarned;
+            localHadMoreProgress = true;
+          }
+          if ((syncedLocal.totalTaps || 0) > (serverUser.totalTaps || 0)) {
+            serverUser.totalTaps = syncedLocal.totalTaps;
+            localHadMoreProgress = true;
+          }
+          if ((syncedLocal.referralCount || 0) > (serverUser.referralCount || 0)) {
+            serverUser.referralCount = syncedLocal.referralCount;
+            localHadMoreProgress = true;
+          }
+          if ((syncedLocal.referralEarnings || 0) > (serverUser.referralEarnings || 0)) {
+            serverUser.referralEarnings = syncedLocal.referralEarnings;
+            localHadMoreProgress = true;
+          }
+          if ((syncedLocal.claimedMilestones || 0) > (serverUser.claimedMilestones || 0)) {
+            serverUser.claimedMilestones = syncedLocal.claimedMilestones;
+            localHadMoreProgress = true;
+          }
+          if ((syncedLocal.dailyStreak || 0) > (serverUser.dailyStreak || 0)) {
+            serverUser.dailyStreak = syncedLocal.dailyStreak;
+            serverUser.lastDailyClaimDate = syncedLocal.lastDailyClaimDate || serverUser.lastDailyClaimDate;
+            localHadMoreProgress = true;
+          }
+          if (syncedLocal.hasJoinedChannel && !serverUser.hasJoinedChannel) {
+            serverUser.hasJoinedChannel = true;
+            localHadMoreProgress = true;
+          }
+          if (syncedLocal.upgrades && typeof syncedLocal.upgrades === 'object') {
+            serverUser.upgrades = serverUser.upgrades || {};
+            for (const [upId, lvl] of Object.entries(syncedLocal.upgrades)) {
+              const numLvl = Number(lvl) || 0;
+              if (numLvl > (serverUser.upgrades[upId] || 0)) {
+                serverUser.upgrades[upId] = numLvl;
+                localHadMoreProgress = true;
+              }
+            }
+          }
+          if (syncedLocal.tasks && typeof syncedLocal.tasks === 'object') {
+            serverUser.tasks = serverUser.tasks || {};
+            for (const [tId, tState] of Object.entries(syncedLocal.tasks)) {
+              const cur = serverUser.tasks[tId];
+              if (!cur || (tState?.claimed && !cur.claimed) || (tState?.completed && !cur.completed)) {
+                serverUser.tasks[tId] = tState;
+                localHadMoreProgress = true;
+              }
+            }
+          }
+
+          reconcileUserLevel(serverUser, this.getLocalUpgrades());
+
+          if (localHadMoreProgress) {
+            setTimeout(() => {
+              this.syncUserToServer(serverUser).catch(() => {});
+            }, 150);
           }
         }
       }
     } catch {}
     return serverUser;
+  }
+
+  public async syncUserToServer(userOverride?: UserGameState, refCode?: string): Promise<UserGameState | null> {
+    try {
+      let targetUser = userOverride;
+      if (!targetUser && typeof window !== 'undefined') {
+        const raw = localStorage.getItem(LOCAL_USER_KEY);
+        if (raw) {
+          targetUser = JSON.parse(raw) as UserGameState;
+        }
+      }
+      if (!targetUser) return null;
+
+      const res = await this.request<{ success: boolean; savedToD1?: boolean; token?: string; user: UserGameState }>(
+        '/api/game/sync',
+        {
+          method: 'POST',
+          body: JSON.stringify({ user: targetUser, refCode }),
+        }
+      );
+
+      if (res.token) {
+        this.setToken(res.token);
+      }
+      if (res.user) {
+        const reconciled = reconcileUserLevel(res.user, this.getLocalUpgrades());
+        this.saveLocalUser(reconciled);
+        return reconciled;
+      }
+      return null;
+    } catch {
+      return null;
+    }
   }
 
   private saveLocalUser(user: UserGameState) {
@@ -289,8 +387,7 @@ class ApiService {
       msg.startsWith('ENDPOINT_NOT_JSON') ||
       msg.includes('Failed to fetch') ||
       msg.includes('NetworkError') ||
-      msg.includes('404') ||
-      msg.includes('Unauthorized')
+      msg.includes('404')
     );
   }
 
@@ -342,7 +439,7 @@ class ApiService {
       return cfg;
     } catch (err) {
       if (this.isStaticFallbackError(err)) {
-        const botUsername = (await this.resolveBotUsername('FOXCOINBot')) || 'FOXCOINBot';
+        const botUsername = (await this.resolveBotUsername('FOX_COINlBOT')) || 'FOX_COINlBOT';
         return {
           upgrades: this.getLocalUpgrades(),
           wheelPrizes: this.getLocalWheelPrizes(),
@@ -358,10 +455,11 @@ class ApiService {
   }
 
   public async authTelegram(initData: string, refCode?: string): Promise<{ token: string; user: UserGameState }> {
+    const telegramUser = TelegramService.getWebApp()?.initDataUnsafe?.user;
     try {
       const res = await this.request<{ token: string; user: UserGameState }>('/api/auth/telegram', {
         method: 'POST',
-        body: JSON.stringify({ initData, refCode }),
+        body: JSON.stringify({ initData, telegramUser, refCode }),
       });
       this.setToken(res.token);
       const mergedUser = this.reconcileWithLocalOffline(res.user);
@@ -369,13 +467,20 @@ class ApiService {
       return { token: res.token, user: mergedUser };
     } catch (err) {
       if (this.isStaticFallbackError(err)) {
-        let username = 'TelegramFox';
+        let username = telegramUser?.username || telegramUser?.first_name || 'TelegramFox';
         try {
           const params = new URLSearchParams(initData);
           const u = JSON.parse(params.get('user') || '{}');
           if (u.username || u.first_name) username = u.username || u.first_name;
         } catch {}
         const user = this.getLocalUser(username, true, refCode);
+        if (telegramUser?.id) {
+          user.id = `tg_${telegramUser.id}`;
+          user.telegramId = telegramUser.id;
+          user.isTelegram = true;
+          user.isGuest = false;
+          this.saveLocalUser(user);
+        }
         const token = `local_token_${user.id}`;
         this.setToken(token);
         return { token, user };
@@ -391,8 +496,9 @@ class ApiService {
         body: JSON.stringify({ username, refCode }),
       });
       this.setToken(res.token);
-      this.saveLocalUser(res.user);
-      return res;
+      const mergedUser = this.reconcileWithLocalOffline(res.user);
+      this.saveLocalUser(mergedUser);
+      return { token: res.token, user: mergedUser };
     } catch (err) {
       if (this.isStaticFallbackError(err)) {
         const user = this.getLocalUser(username || 'FoxPlayer', false, refCode);
@@ -411,8 +517,9 @@ class ApiService {
         body: JSON.stringify({ email, password: pass, username, refCode }),
       });
       this.setToken(res.token);
-      this.saveLocalUser(res.user);
-      return res;
+      const mergedUser = this.reconcileWithLocalOffline(res.user);
+      this.saveLocalUser(mergedUser);
+      return { token: res.token, user: mergedUser };
     } catch (err) {
       if (this.isStaticFallbackError(err)) {
         const user = this.getLocalUser(username || email.split('@')[0], false, refCode);
@@ -435,8 +542,9 @@ class ApiService {
         body: JSON.stringify({ email, password: pass }),
       });
       this.setToken(res.token);
-      this.saveLocalUser(res.user);
-      return res;
+      const mergedUser = this.reconcileWithLocalOffline(res.user);
+      this.saveLocalUser(mergedUser);
+      return { token: res.token, user: mergedUser };
     } catch (err) {
       if (this.isStaticFallbackError(err)) {
         const user = this.getLocalUser(email.split('@')[0], false);
@@ -459,6 +567,10 @@ class ApiService {
       this.saveLocalUser(mergedUser);
       return { user: mergedUser };
     } catch (err) {
+      const synced = await this.syncUserToServer();
+      if (synced) {
+        return { user: synced };
+      }
       if (this.isStaticFallbackError(err)) {
         return { user: this.getLocalUser() };
       }
@@ -658,11 +770,11 @@ class ApiService {
       return localUsername;
     }
 
-    if (cleanServer && cleanServer !== 'FoxCoinOfficialBot') {
+    if (cleanServer && cleanServer !== 'FoxCoinOfficialBot' && cleanServer !== 'FOXCOINBot') {
       return cleanServer;
     }
 
-    return cleanServer || 'FOXCOINBot';
+    return 'FOX_COINlBOT';
   }
 
   private saveLocalBotMetadata(fields: Record<string, any>): void {
@@ -1594,21 +1706,71 @@ class ApiService {
       engine: string;
       d1Bound: boolean;
       kvBound: boolean;
+      d1UsersCount?: number;
+      lastD1Error?: string | null;
       realUsersCount: number;
     };
   }> {
     try {
       const headers: Record<string, string> = {};
       if (adminSecret) headers['x-admin-secret'] = adminSecret;
-      return await this.request<{
+
+      // Also gather any locally cached users so they are pushed into the server/D1 database automatically
+      const localCandidates: UserGameState[] = [];
+      if (typeof window !== 'undefined') {
+        try {
+          const currentRaw = localStorage.getItem(LOCAL_USER_KEY);
+          if (currentRaw) localCandidates.push(JSON.parse(currentRaw));
+        } catch {}
+        try {
+          const extraRaw = localStorage.getItem('foxcoin_local_all_users_v1');
+          if (extraRaw) {
+            const parsed = JSON.parse(extraRaw);
+            if (Array.isArray(parsed)) localCandidates.push(...parsed);
+          }
+        } catch {}
+      }
+
+      if (localCandidates.length > 0) {
+        try {
+          const syncedRes = await this.request<{
+            users: UserGameState[];
+            storage?: {
+              engine: string;
+              d1Bound: boolean;
+              kvBound: boolean;
+              d1UsersCount?: number;
+              lastD1Error?: string | null;
+              realUsersCount: number;
+            };
+          }>('/api/admin/users/sync-all', {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({ users: localCandidates }),
+          });
+          if (typeof window !== 'undefined' && Array.isArray(syncedRes.users)) {
+            localStorage.setItem('foxcoin_local_all_users_v1', JSON.stringify(syncedRes.users));
+          }
+          return syncedRes;
+        } catch {}
+      }
+
+      const res = await this.request<{
         users: UserGameState[];
         storage?: {
           engine: string;
           d1Bound: boolean;
           kvBound: boolean;
+          d1UsersCount?: number;
+          lastD1Error?: string | null;
           realUsersCount: number;
         };
       }>('/api/admin/users', { headers });
+
+      if (typeof window !== 'undefined' && Array.isArray(res.users)) {
+        localStorage.setItem('foxcoin_local_all_users_v1', JSON.stringify(res.users));
+      }
+      return res;
     } catch (err) {
       if (this.isStaticFallbackError(err)) {
         const currentUser = this.getLocalUser();
@@ -1634,12 +1796,50 @@ class ApiService {
             engine: 'local_fallback',
             d1Bound: false,
             kvBound: false,
+            d1UsersCount: list.length,
             realUsersCount: list.filter((u) => !u.id.startsWith('bot_')).length,
           },
         };
       }
       throw err;
     }
+  }
+
+  public async syncAllAdminUsers(
+    usersToSync: UserGameState[],
+    adminSecret?: string
+  ): Promise<{
+    users: UserGameState[];
+    storage?: {
+      engine: string;
+      d1Bound: boolean;
+      kvBound: boolean;
+      d1UsersCount?: number;
+      lastD1Error?: string | null;
+      realUsersCount: number;
+    };
+  }> {
+    const headers: Record<string, string> = {};
+    if (adminSecret) headers['x-admin-secret'] = adminSecret;
+    const res = await this.request<{
+      users: UserGameState[];
+      storage?: {
+        engine: string;
+        d1Bound: boolean;
+        kvBound: boolean;
+        d1UsersCount?: number;
+        lastD1Error?: string | null;
+        realUsersCount: number;
+      };
+    }>('/api/admin/users/sync-all', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ users: usersToSync }),
+    });
+    if (typeof window !== 'undefined' && Array.isArray(res.users)) {
+      localStorage.setItem('foxcoin_local_all_users_v1', JSON.stringify(res.users));
+    }
+    return res;
   }
 
   public async adjustAdminUserBalance(

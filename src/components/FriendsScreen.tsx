@@ -96,7 +96,7 @@ const MILESTONE_TIERS: MilestoneTier[] = [
 
 export const FriendsScreen: React.FC<FriendsScreenProps> = ({
   user,
-  botUsername = 'FOXCOINBot',
+  botUsername = 'FOX_COINlBOT',
   onTradeTab,
   onBotUsernameUpdated,
 }) => {
@@ -104,7 +104,13 @@ export const FriendsScreen: React.FC<FriendsScreenProps> = ({
   const [isClaiming, setIsClaiming] = useState<boolean>(false);
   const [claimSuccess, setClaimSuccess] = useState<string | null>(null);
   const [activeBotUsername, setActiveBotUsername] = useState<string>(() => {
-    return api.getSavedBotUsername() || botUsername.replace(/^@/, '').trim() || 'FOXCOINBot';
+    const saved = api.getSavedBotUsername();
+    if (saved) return saved;
+    const cleanProp = botUsername.replace(/^@/, '').trim();
+    if (cleanProp && cleanProp !== 'FOXCOINBot' && cleanProp !== 'FoxCoinOfficialBot') {
+      return cleanProp;
+    }
+    return 'FOX_COINlBOT';
   });
   const [isEditingBot, setIsEditingBot] = useState<boolean>(false);
   const [botInput, setBotInput] = useState<string>('');
@@ -116,9 +122,11 @@ export const FriendsScreen: React.FC<FriendsScreenProps> = ({
     api.resolveBotUsername(botUsername).then((resolved) => {
       if (mounted && resolved) {
         const clean = resolved.replace(/^@/, '').trim();
-        setActiveBotUsername(clean);
-        if (onBotUsernameUpdated && clean !== botUsername.replace(/^@/, '').trim()) {
-          onBotUsernameUpdated(clean);
+        const finalBot =
+          clean && clean !== 'FOXCOINBot' && clean !== 'FoxCoinOfficialBot' ? clean : 'FOX_COINlBOT';
+        setActiveBotUsername(finalBot);
+        if (onBotUsernameUpdated && finalBot !== botUsername.replace(/^@/, '').trim()) {
+          onBotUsernameUpdated(finalBot);
         }
       }
     });

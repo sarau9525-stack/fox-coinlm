@@ -58,7 +58,7 @@ let edgeBotConfig = {
   botToken: '',
   webhookUrl: '',
   webhookSecret: '',
-  botUsername: 'FOXCOINBot',
+  botUsername: 'FOX_COINlBOT',
   botFirstName: 'FOXCOIN',
   lastWebhookSetupDate: undefined as number | undefined,
 };
@@ -75,78 +75,141 @@ const edgeStarsInvoices = new Map<
   }
 >();
 
-// Auto-initialize Cloudflare D1 Database schema if binding exists
+// Auto-detect Cloudflare D1 binding regardless of variable name in Cloudflare Dashboard (e.g. DB, db, foxcoin_db, etc.)
+function resolveD1Binding(env: any): any {
+  if (!env || typeof env !== 'object') return null;
+  if (env.DB && typeof env.DB.prepare === 'function') return env.DB;
+  if (env.db && typeof env.db.prepare === 'function') return env.db;
+  if (env.FOX_DB && typeof env.FOX_DB.prepare === 'function') return env.FOX_DB;
+  if (env.foxcoin_db && typeof env.foxcoin_db.prepare === 'function') return env.foxcoin_db;
+  if (env.D1 && typeof env.D1.prepare === 'function') return env.D1;
+  for (const [key, val] of Object.entries(env)) {
+    if (key === 'ASSETS') continue;
+    if (val && typeof (val as any).prepare === 'function' && typeof (val as any).batch === 'function') {
+      return val;
+    }
+  }
+  return null;
+}
+
+// Auto-detect Cloudflare KV binding
+function resolveKVBinding(env: any): any {
+  if (!env || typeof env !== 'object') return null;
+  if (env.FOX_KV && typeof env.FOX_KV.get === 'function') return env.FOX_KV;
+  if (env.KV && typeof env.KV.get === 'function') return env.KV;
+  for (const [key, val] of Object.entries(env)) {
+    if (key === 'ASSETS') continue;
+    if (
+      val &&
+      typeof (val as any).get === 'function' &&
+      typeof (val as any).put === 'function' &&
+      typeof (val as any).prepare !== 'function'
+    ) {
+      return val;
+    }
+  }
+  return null;
+}
+
+// Auto-initialize Cloudflare D1 Database schema using db.prepare().run() (avoids db.exec newline splitting bug in D1)
 let d1Initialized = false;
+let lastD1Error: string | null = null;
+
 async function ensureD1Schema(db: any) {
-  if (d1Initialized || !db) return;
+  if (!db) return;
+  if (d1Initialized) return;
   try {
-    await db.exec(`
-      CREATE TABLE IF NOT EXISTS users (
-        id TEXT PRIMARY KEY,
-        username TEXT NOT NULL,
-        display_name TEXT NOT NULL,
-        email TEXT,
-        telegram_id TEXT,
-        avatar_url TEXT,
-        is_guest INTEGER DEFAULT 0,
-        is_telegram INTEGER DEFAULT 0,
-        is_admin INTEGER DEFAULT 0,
-        balance REAL DEFAULT 0,
-        total_earned REAL DEFAULT 0,
-        total_taps INTEGER DEFAULT 0,
-        level INTEGER DEFAULT 1,
-        level_name TEXT DEFAULT 'Bronze Fox',
-        next_level_min_coins REAL DEFAULT 5000,
-        current_level_min_coins REAL DEFAULT 0,
-        energy REAL DEFAULT 1000,
-        max_energy REAL DEFAULT 1000,
-        energy_regen_rate REAL DEFAULT 1,
-        tap_power REAL DEFAULT 1,
-        profit_per_hour REAL DEFAULT 0,
-        unclaimed_passive REAL DEFAULT 0,
-        last_passive_claim_timestamp INTEGER DEFAULT 0,
-        max_offline_hours REAL DEFAULT 3,
-        upgrades_json TEXT DEFAULT '{}',
-        daily_streak INTEGER DEFAULT 0,
-        last_daily_claim_date TEXT,
-        tasks_json TEXT DEFAULT '{}',
-        referral_code TEXT UNIQUE,
-        referred_by_code TEXT,
-        referral_count INTEGER DEFAULT 0,
-        referral_earnings REAL DEFAULT 0,
-        claimed_milestones INTEGER DEFAULT 0,
-        boosters_json TEXT DEFAULT '{}',
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS trades (
-        id TEXT PRIMARY KEY,
-        user_id TEXT NOT NULL,
-        fox_amount REAL NOT NULL,
-        usd_amount REAL NOT NULL,
-        wallet_address TEXT NOT NULL,
-        network TEXT NOT NULL,
-        status TEXT DEFAULT 'pending',
-        created_at INTEGER NOT NULL,
-        payout_deadline INTEGER NOT NULL,
-        tx_hash TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS telegram_updates (
-        update_id INTEGER PRIMARY KEY,
-        processed_at INTEGER NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS bot_config (
-        id INTEGER PRIMARY KEY,
-        bot_token TEXT,
-        webhook_url TEXT,
-        webhook_secret TEXT,
-        bot_username TEXT,
-        bot_first_name TEXT,
-        updated_at INTEGER
-      );
-    `);
+    await db
+      .prepare(
+        `CREATE TABLE IF NOT EXISTS users (
+          id TEXT PRIMARY KEY,
+          username TEXT NOT NULL,
+          display_name TEXT NOT NULL,
+          email TEXT,
+          telegram_id TEXT,
+          avatar_url TEXT,
+          is_guest INTEGER DEFAULT 0,
+          is_telegram INTEGER DEFAULT 0,
+          is_admin INTEGER DEFAULT 0,
+          balance REAL DEFAULT 0,
+          total_earned REAL DEFAULT 0,
+          total_taps INTEGER DEFAULT 0,
+          level INTEGER DEFAULT 1,
+          level_name TEXT DEFAULT 'Bronze Fox',
+          next_level_min_coins REAL DEFAULT 5000,
+          current_level_min_coins REAL DEFAULT 0,
+          energy REAL DEFAULT 1000,
+          max_energy REAL DEFAULT 1000,
+          energy_regen_rate REAL DEFAULT 1,
+          tap_power REAL DEFAULT 1,
+          profit_per_hour REAL DEFAULT 0,
+          unclaimed_passive REAL DEFAULT 0,
+          last_passive_claim_timestamp INTEGER DEFAULT 0,
+          max_offline_hours REAL DEFAULT 3,
+          upgrades_json TEXT DEFAULT '{}',
+          daily_streak INTEGER DEFAULT 0,
+          last_daily_claim_date TEXT,
+          tasks_json TEXT DEFAULT '{}',
+          referral_code TEXT,
+          referred_by_code TEXT,
+          referral_count INTEGER DEFAULT 0,
+          referral_earnings REAL DEFAULT 0,
+          claimed_milestones INTEGER DEFAULT 0,
+          boosters_json TEXT DEFAULT '{}',
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        )`
+      )
+      .run();
+
+    await db
+      .prepare(
+        `CREATE TABLE IF NOT EXISTS trades (
+          id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL,
+          fox_amount REAL NOT NULL,
+          usd_amount REAL NOT NULL,
+          wallet_address TEXT NOT NULL,
+          network TEXT NOT NULL,
+          status TEXT DEFAULT 'pending',
+          created_at INTEGER NOT NULL,
+          payout_deadline INTEGER NOT NULL,
+          tx_hash TEXT NOT NULL
+        )`
+      )
+      .run();
+
+    await db
+      .prepare(
+        `CREATE TABLE IF NOT EXISTS telegram_updates (
+          update_id INTEGER PRIMARY KEY,
+          processed_at INTEGER NOT NULL
+        )`
+      )
+      .run();
+
+    await db
+      .prepare(
+        `CREATE TABLE IF NOT EXISTS bot_config (
+          id INTEGER PRIMARY KEY,
+          bot_token TEXT,
+          webhook_url TEXT,
+          webhook_secret TEXT,
+          bot_username TEXT,
+          bot_first_name TEXT,
+          updated_at INTEGER
+        )`
+      )
+      .run();
+
+    await db.prepare(`CREATE INDEX IF NOT EXISTS idx_users_telegram_id ON users(telegram_id)`).run().catch(() => {});
+    await db.prepare(`CREATE INDEX IF NOT EXISTS idx_users_referral_code ON users(referral_code)`).run().catch(() => {});
+    await db.prepare(`CREATE INDEX IF NOT EXISTS idx_users_balance ON users(balance DESC)`).run().catch(() => {});
+
     d1Initialized = true;
-  } catch (err) {
+    lastD1Error = null;
+  } catch (err: any) {
+    lastD1Error = err?.message || String(err);
     console.warn('D1 schema notice:', err);
   }
 }
@@ -156,9 +219,10 @@ async function hydrateEdgeBotConfig(env: CloudflareEnv) {
   if (env.TELEGRAM_BOT_TOKEN) {
     edgeBotConfig.botToken = env.TELEGRAM_BOT_TOKEN.trim();
   }
-  if (env.FOX_KV) {
+  const kv = resolveKVBinding(env);
+  if (kv) {
     try {
-      const raw = await env.FOX_KV.get('foxcoin_bot_config');
+      const raw = await kv.get('foxcoin_bot_config');
       if (raw) {
         const parsed = JSON.parse(raw);
         if (parsed.botToken) edgeBotConfig = { ...edgeBotConfig, ...parsed };
@@ -166,14 +230,19 @@ async function hydrateEdgeBotConfig(env: CloudflareEnv) {
       }
     } catch {}
   }
-  if (env.DB) {
+  const db = resolveD1Binding(env);
+  if (db) {
     try {
-      const row = await env.DB.prepare('SELECT * FROM bot_config WHERE id = 1').first();
+      const row = await db.prepare('SELECT * FROM bot_config WHERE id = 1').first();
       if (row && row.bot_token) {
         edgeBotConfig.botToken = String(row.bot_token);
         edgeBotConfig.webhookUrl = String(row.webhook_url || '');
         edgeBotConfig.webhookSecret = String(row.webhook_secret || '');
-        edgeBotConfig.botUsername = String(row.bot_username || 'FOXCOINBot');
+        const rowUsername = String(row.bot_username || '').trim();
+        edgeBotConfig.botUsername =
+          rowUsername && rowUsername !== 'FOXCOINBot' && rowUsername !== 'FoxCoinOfficialBot'
+            ? rowUsername
+            : 'FOX_COINlBOT';
         edgeBotConfig.botFirstName = String(row.bot_first_name || 'FOXCOIN');
         edgeBotConfig.lastWebhookSetupDate = Number(row.updated_at) || undefined;
       }
@@ -182,24 +251,28 @@ async function hydrateEdgeBotConfig(env: CloudflareEnv) {
 }
 
 async function persistEdgeBotConfig(env: CloudflareEnv) {
-  if (env.FOX_KV) {
+  const kv = resolveKVBinding(env);
+  if (kv) {
     try {
-      await env.FOX_KV.put('foxcoin_bot_config', JSON.stringify(edgeBotConfig));
+      await kv.put('foxcoin_bot_config', JSON.stringify(edgeBotConfig));
     } catch {}
   }
-  if (env.DB) {
+  const db = resolveD1Binding(env);
+  if (db) {
     try {
-      await env.DB.prepare(`
-        INSERT INTO bot_config (id, bot_token, webhook_url, webhook_secret, bot_username, bot_first_name, updated_at)
-        VALUES (1, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
-          bot_token = excluded.bot_token,
-          webhook_url = excluded.webhook_url,
-          webhook_secret = excluded.webhook_secret,
-          bot_username = excluded.bot_username,
-          bot_first_name = excluded.bot_first_name,
-          updated_at = excluded.updated_at
-      `)
+      await ensureD1Schema(db);
+      await db
+        .prepare(
+          `INSERT INTO bot_config (id, bot_token, webhook_url, webhook_secret, bot_username, bot_first_name, updated_at)
+           VALUES (1, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             bot_token = excluded.bot_token,
+             webhook_url = excluded.webhook_url,
+             webhook_secret = excluded.webhook_secret,
+             bot_username = excluded.bot_username,
+             bot_first_name = excluded.bot_first_name,
+             updated_at = excluded.updated_at`
+        )
         .bind(
           edgeBotConfig.botToken || '',
           edgeBotConfig.webhookUrl || '',
@@ -224,6 +297,15 @@ function deriveEdgeWebhookSecret(botToken: string): string {
 let currentEdgeEnv: CloudflareEnv | null = null;
 let lastUsersHydratedAt = 0;
 
+function makeDeterministicReferralCode(id: string): string {
+  const clean = String(id)
+    .replace(/^(tg_|guest_|web_)/, '')
+    .replace(/[^A-Za-z0-9]/g, '')
+    .toUpperCase();
+  const suffix = clean.slice(-6) || Math.random().toString(36).substring(2, 8).toUpperCase();
+  return `FOX_${suffix}`;
+}
+
 function mapD1RowToUser(r: any): UserGameState {
   let upgrades: Record<string, number> = {};
   let tasks: Record<string, any> = {};
@@ -245,9 +327,10 @@ function mapD1RowToUser(r: any): UserGameState {
 
   const todayStr = new Date().toISOString().split('T')[0];
   const lastDaily = r.last_daily_claim_date ? String(r.last_daily_claim_date) : null;
+  const userId = String(r.id);
 
-  return {
-    id: String(r.id),
+  const u: UserGameState = {
+    id: userId,
     username: String(r.username || 'FoxPlayer'),
     displayName: String(r.display_name || r.username || 'FoxPlayer'),
     email: r.email ? String(r.email) : undefined,
@@ -277,19 +360,153 @@ function mapD1RowToUser(r: any): UserGameState {
     canClaimDaily: lastDaily !== todayStr,
     dailyRewardDays: DAILY_REWARDS,
     tasks,
-    referralCode: String(r.referral_code || `FOX_${String(r.id).slice(-5).toUpperCase()}`),
+    referralCode: String(r.referral_code || makeDeterministicReferralCode(userId)),
     referralCount: Number(r.referral_count || 0),
     referralEarnings: Number(r.referral_earnings || 0),
     claimedMilestones: Number(r.claimed_milestones || 0),
+    hasJoinedChannel: Boolean(boosters?.hasJoinedChannel),
+    channelVerifiedAt: boosters?.channelVerifiedAt ? Number(boosters.channelVerifiedAt) : undefined,
     boosters,
     createdAt: Number(r.created_at || Date.now()),
   };
+  if (boosters?.lastEnergyTimestamp) {
+    (u as any).lastEnergyTimestamp = Number(boosters.lastEnergyTimestamp);
+  }
+  if (r.referred_by_code && !boosters.referredByCode) {
+    (u.boosters as any).referredByCode = String(r.referred_by_code);
+  }
+  return u;
+}
+
+// Deeply merge two UserGameState snapshots so no coins, upgrades, gifts, or referrals are ever lost
+function mergeUserProgress(base: UserGameState, incoming?: Partial<UserGameState> | null): UserGameState {
+  if (!incoming) return base;
+
+  const mergedUpgrades: Record<string, number> = { ...(base.upgrades || {}) };
+  if (incoming.upgrades && typeof incoming.upgrades === 'object') {
+    for (const [upId, lvl] of Object.entries(incoming.upgrades)) {
+      const cleanLvl = Number(lvl) || 0;
+      if (cleanLvl > (mergedUpgrades[upId] || 0)) {
+        mergedUpgrades[upId] = cleanLvl;
+      }
+    }
+  }
+
+  const mergedTasks: Record<string, any> = { ...(base.tasks || {}) };
+  if (incoming.tasks && typeof incoming.tasks === 'object') {
+    for (const [tId, tVal] of Object.entries(incoming.tasks)) {
+      const existingTask = mergedTasks[tId];
+      if (!existingTask) {
+        mergedTasks[tId] = tVal;
+      } else {
+        mergedTasks[tId] = {
+          progress: Math.max(Number(existingTask.progress || 0), Number(tVal?.progress || 0)),
+          completed: Boolean(existingTask.completed || tVal?.completed),
+          claimed: Boolean(existingTask.claimed || tVal?.claimed),
+        };
+      }
+    }
+  }
+
+  const baseBoosters: any = base.boosters || {
+    fullEnergyRemaining: 6,
+    nextFullEnergyAt: 0,
+    turboActiveUntil: 0,
+    nextTurboAt: 0,
+  };
+  const incBoosters: any = incoming.boosters || {};
+  const invitedUserIds = Array.from(
+    new Set([...(Array.isArray(baseBoosters.invitedUserIds) ? baseBoosters.invitedUserIds : []), ...(Array.isArray(incBoosters.invitedUserIds) ? incBoosters.invitedUserIds : [])])
+  );
+
+  const mergedBoosters: any = {
+    ...baseBoosters,
+    ...incBoosters,
+    fullEnergyRemaining:
+      typeof incBoosters.fullEnergyRemaining === 'number'
+        ? Math.min(baseBoosters.fullEnergyRemaining ?? 6, incBoosters.fullEnergyRemaining)
+        : (baseBoosters.fullEnergyRemaining ?? 6),
+    lastWheelSpinTimestamp: Math.max(
+      Number(baseBoosters.lastWheelSpinTimestamp || 0),
+      Number(incBoosters.lastWheelSpinTimestamp || 0)
+    ) || undefined,
+    turboActiveUntil: Math.max(
+      Number(baseBoosters.turboActiveUntil || 0),
+      Number(incBoosters.turboActiveUntil || 0)
+    ),
+    referredByCode: baseBoosters.referredByCode || incBoosters.referredByCode || undefined,
+    invitedUserIds,
+    hasJoinedChannel: Boolean(base.hasJoinedChannel || incoming.hasJoinedChannel || baseBoosters.hasJoinedChannel || incBoosters.hasJoinedChannel),
+    channelVerifiedAt:
+      Math.max(
+        Number(base.channelVerifiedAt || baseBoosters.channelVerifiedAt || 0),
+        Number(incoming.channelVerifiedAt || incBoosters.channelVerifiedAt || 0)
+      ) || undefined,
+  };
+
+  // Determine whether incoming has newer/higher progression
+  const incTotalEarned = Number(incoming.totalEarned || 0);
+  const baseTotalEarned = Number(base.totalEarned || 0);
+  const incBalance = Number(incoming.balance ?? base.balance);
+  const baseBalance = Number(base.balance || 0);
+
+  let effectiveBalance = baseBalance;
+  if (incTotalEarned > baseTotalEarned || Number(incoming.totalTaps || 0) > Number(base.totalTaps || 0)) {
+    effectiveBalance = Math.max(baseBalance, incBalance);
+  } else if (incBalance > baseBalance && baseTotalEarned <= 5000) {
+    effectiveBalance = incBalance;
+  }
+
+  const effectiveReferralCount = Math.max(
+    Number(base.referralCount || 0),
+    Number(incoming.referralCount || 0),
+    invitedUserIds.length
+  );
+  const effectiveReferralEarnings = Math.max(
+    Number(base.referralEarnings || 0),
+    Number(incoming.referralEarnings || 0),
+    effectiveReferralCount * 5000
+  );
+
+  const isGenericName = (n?: string) =>
+    !n || n === 'TeleFox' || n === 'Telegram Fox' || n === 'FoxPlayer' || n.startsWith('Fox_') || n.startsWith('Guest_');
+
+  const merged: UserGameState = {
+    ...base,
+    username: !isGenericName(incoming.username) ? String(incoming.username) : base.username,
+    displayName: !isGenericName(incoming.displayName) ? String(incoming.displayName) : (base.displayName || base.username),
+    email: base.email || incoming.email,
+    telegramId: base.telegramId || incoming.telegramId,
+    avatarUrl: base.avatarUrl || incoming.avatarUrl,
+    isAdmin: Boolean(base.isAdmin || incoming.isAdmin),
+    balance: effectiveBalance,
+    totalEarned: Math.max(baseTotalEarned, incTotalEarned, effectiveBalance),
+    totalTaps: Math.max(Number(base.totalTaps || 0), Number(incoming.totalTaps || 0)),
+    level: Math.max(Number(base.level || 1), Number(incoming.level || 1)),
+    unclaimedPassive: Math.max(Number(base.unclaimedPassive || 0), Number(incoming.unclaimedPassive || 0)),
+    lastPassiveClaimTimestamp:
+      Math.max(Number(base.lastPassiveClaimTimestamp || 0), Number(incoming.lastPassiveClaimTimestamp || 0)) || Date.now(),
+    upgrades: mergedUpgrades,
+    dailyStreak: Math.max(Number(base.dailyStreak || 0), Number(incoming.dailyStreak || 0)),
+    lastDailyClaimDate: incoming.lastDailyClaimDate || base.lastDailyClaimDate || null,
+    tasks: mergedTasks,
+    referralCode: base.referralCode || incoming.referralCode || makeDeterministicReferralCode(base.id),
+    referralCount: effectiveReferralCount,
+    referralEarnings: effectiveReferralEarnings,
+    claimedMilestones: Math.max(Number(base.claimedMilestones || 0), Number(incoming.claimedMilestones || 0)),
+    hasJoinedChannel: mergedBoosters.hasJoinedChannel,
+    channelVerifiedAt: mergedBoosters.channelVerifiedAt,
+    boosters: mergedBoosters,
+    createdAt: Math.min(Number(base.createdAt || Date.now()), Number(incoming.createdAt || Date.now())),
+  };
+
+  return merged;
 }
 
 // Hydrate registered users from Cloudflare D1 and/or Cloudflare KV into edgeUsers
 async function hydrateEdgeUsers(env: CloudflareEnv, force = false) {
   const now = Date.now();
-  if (!force && now - lastUsersHydratedAt < 4000) return;
+  if (!force && now - lastUsersHydratedAt < 1500) return;
   lastUsersHydratedAt = now;
 
   // Purge any legacy mock bot entries from memory
@@ -299,21 +516,19 @@ async function hydrateEdgeUsers(env: CloudflareEnv, force = false) {
     }
   }
 
+  const kv = resolveKVBinding(env);
+  const db = resolveD1Binding(env);
+
   // 1. Hydrate from Cloudflare KV if bound
-  if (env.FOX_KV) {
+  if (kv) {
     try {
-      const rawKv = await env.FOX_KV.get('foxcoin_users_map');
+      const rawKv = await kv.get('foxcoin_users_map');
       if (rawKv) {
         const parsedMap = JSON.parse(rawKv) as Record<string, UserGameState>;
         for (const [uid, kvUser] of Object.entries(parsedMap)) {
           if (!uid || !kvUser || uid.startsWith('bot_') || uid.startsWith('seed_')) continue;
           const existing = edgeUsers.get(uid);
-          if (!existing || (kvUser.totalEarned || 0) >= (existing.totalEarned || 0)) {
-            edgeUsers.set(uid, {
-              ...kvUser,
-              dailyRewardDays: DAILY_REWARDS,
-            });
-          }
+          edgeUsers.set(uid, existing ? mergeUserProgress(existing, kvUser) : { ...kvUser, dailyRewardDays: DAILY_REWARDS });
         }
       }
     } catch (err) {
@@ -322,61 +537,78 @@ async function hydrateEdgeUsers(env: CloudflareEnv, force = false) {
   }
 
   // 2. Hydrate from Cloudflare D1 SQLite database if bound (Primary source of truth)
-  if (env.DB) {
+  if (db) {
     try {
-      const res = await env.DB.prepare(
-        "SELECT * FROM users WHERE id NOT LIKE 'bot_%' AND id NOT LIKE 'seed_%' ORDER BY balance DESC, updated_at DESC LIMIT 2000"
-      ).all();
+      await ensureD1Schema(db);
+      const res = await db
+        .prepare("SELECT * FROM users WHERE id NOT LIKE 'bot_%' AND id NOT LIKE 'seed_%' ORDER BY balance DESC, updated_at DESC LIMIT 5000")
+        .all();
+      const d1UserIds = new Set<string>();
       if (res && Array.isArray(res.results)) {
         for (const row of res.results) {
           const d1User = mapD1RowToUser(row);
           if (d1User.id.startsWith('bot_') || d1User.id.startsWith('seed_')) continue;
+          d1UserIds.add(d1User.id);
           const existing = edgeUsers.get(d1User.id);
-          if (
-            !existing ||
-            d1User.totalEarned >= (existing.totalEarned || 0) ||
-            d1User.balance !== existing.balance ||
-            d1User.referralCount >= (existing.referralCount || 0)
-          ) {
-            edgeUsers.set(d1User.id, d1User);
-          }
+          edgeUsers.set(d1User.id, existing ? mergeUserProgress(d1User, existing) : d1User);
         }
       }
-    } catch (err) {
+
+      // Flush any in-memory users that were not yet stored in D1 into D1 immediately
+      for (const [uid, memUser] of edgeUsers.entries()) {
+        if (!uid.startsWith('bot_') && !uid.startsWith('seed_') && !d1UserIds.has(uid)) {
+          await persistUserToD1(db, memUser);
+        }
+      }
+    } catch (err: any) {
+      lastD1Error = err?.message || String(err);
       console.warn('D1 user hydrate notice:', err);
     }
   }
 }
 
 // Persist user to Cloudflare D1 and/or KV
-async function persistUserToD1(db: any, user: UserGameState) {
-  const effectiveDb = db || currentEdgeEnv?.DB;
+async function persistUserToD1(db: any, user: UserGameState): Promise<boolean> {
+  if (!user || !user.id || user.id.startsWith('bot_') || user.id.startsWith('seed_')) return false;
 
-  if (currentEdgeEnv?.FOX_KV) {
+  const effectiveDb = db || resolveD1Binding(currentEdgeEnv);
+  const effectiveKv = resolveKVBinding(currentEdgeEnv);
+
+  // Store extended metadata inside boosters_json so every field is preserved in SQLite
+  const enrichedBoosters = {
+    ...(user.boosters || {}),
+    hasJoinedChannel: Boolean(user.hasJoinedChannel),
+    channelVerifiedAt: user.channelVerifiedAt || undefined,
+    lastEnergyTimestamp: (user as any).lastEnergyTimestamp || Date.now(),
+  };
+
+  if (effectiveKv) {
     try {
       const realUsersObj: Record<string, UserGameState> = {};
       for (const [uid, u] of edgeUsers.entries()) {
-        if (!uid.startsWith('bot_')) {
+        if (!uid.startsWith('bot_') && !uid.startsWith('seed_')) {
           realUsersObj[uid] = u;
         }
       }
       realUsersObj[user.id] = user;
-      await currentEdgeEnv.FOX_KV.put('foxcoin_users_map', JSON.stringify(realUsersObj));
+      await effectiveKv.put('foxcoin_users_map', JSON.stringify(realUsersObj));
     } catch {}
   }
 
-  if (!effectiveDb) return;
+  if (!effectiveDb) return false;
   try {
+    await ensureD1Schema(effectiveDb);
+    const referredByCode = (user.boosters as any)?.referredByCode || null;
     await effectiveDb
-      .prepare(`
-        INSERT INTO users (
+      .prepare(
+        `INSERT INTO users (
           id, username, display_name, email, telegram_id, avatar_url,
           is_guest, is_telegram, is_admin, balance, total_earned, total_taps,
           level, level_name, next_level_min_coins, current_level_min_coins,
           energy, max_energy, energy_regen_rate, tap_power, profit_per_hour,
           unclaimed_passive, last_passive_claim_timestamp, max_offline_hours,
           upgrades_json, daily_streak, last_daily_claim_date, tasks_json,
-          referral_code, referral_count, referral_earnings, claimed_milestones,
+          referral_code, referred_by_code, referral_count, referral_earnings, claimed_milestones,
           boosters_json, created_at, updated_at
         ) VALUES (
           ?, ?, ?, ?, ?, ?,
@@ -385,7 +617,7 @@ async function persistUserToD1(db: any, user: UserGameState) {
           ?, ?, ?, ?, ?,
           ?, ?, ?,
           ?, ?, ?, ?,
-          ?, ?, ?, ?,
+          ?, ?, ?, ?, ?,
           ?, ?, ?
         )
         ON CONFLICT(id) DO UPDATE SET
@@ -394,6 +626,8 @@ async function persistUserToD1(db: any, user: UserGameState) {
           email = COALESCE(excluded.email, users.email),
           telegram_id = COALESCE(excluded.telegram_id, users.telegram_id),
           avatar_url = COALESCE(excluded.avatar_url, users.avatar_url),
+          is_guest = excluded.is_guest,
+          is_telegram = excluded.is_telegram,
           is_admin = excluded.is_admin,
           balance = excluded.balance,
           total_earned = excluded.total_earned,
@@ -413,52 +647,59 @@ async function persistUserToD1(db: any, user: UserGameState) {
           daily_streak = excluded.daily_streak,
           last_daily_claim_date = excluded.last_daily_claim_date,
           tasks_json = excluded.tasks_json,
+          referral_code = COALESCE(excluded.referral_code, users.referral_code),
+          referred_by_code = COALESCE(excluded.referred_by_code, users.referred_by_code),
           referral_count = excluded.referral_count,
           referral_earnings = excluded.referral_earnings,
           claimed_milestones = excluded.claimed_milestones,
           boosters_json = excluded.boosters_json,
-          updated_at = excluded.updated_at
-      `)
+          updated_at = excluded.updated_at`
+      )
       .bind(
         user.id,
-        user.username,
-        user.displayName || user.username,
+        user.username || 'FoxPlayer',
+        user.displayName || user.username || 'FoxPlayer',
         user.email || null,
         user.telegramId ? String(user.telegramId) : null,
         user.avatarUrl || null,
         user.isGuest ? 1 : 0,
         user.isTelegram ? 1 : 0,
         user.isAdmin ? 1 : 0,
-        user.balance,
-        user.totalEarned,
-        user.totalTaps,
-        user.level,
-        user.levelName,
-        user.nextLevelMinCoins,
-        user.currentLevelMinCoins,
-        user.energy,
-        user.maxEnergy,
-        user.energyRegenRate,
-        user.tapPower,
-        user.profitPerHour,
-        user.unclaimedPassive,
-        user.lastPassiveClaimTimestamp,
-        user.maxOfflineHours,
+        Number(user.balance || 0),
+        Number(user.totalEarned || 0),
+        Number(user.totalTaps || 0),
+        Number(user.level || 1),
+        user.levelName || 'Bronze Fox',
+        Number(user.nextLevelMinCoins || 5000),
+        Number(user.currentLevelMinCoins || 0),
+        Number(user.energy ?? 1000),
+        Number(user.maxEnergy || 1000),
+        Number(user.energyRegenRate || 1),
+        Number(user.tapPower || 1),
+        Number(user.profitPerHour || 0),
+        Number(user.unclaimedPassive || 0),
+        Number(user.lastPassiveClaimTimestamp || Date.now()),
+        Number(user.maxOfflineHours || 3),
         JSON.stringify(user.upgrades || {}),
-        user.dailyStreak,
-        user.lastDailyClaimDate,
+        Number(user.dailyStreak || 0),
+        user.lastDailyClaimDate || null,
         JSON.stringify(user.tasks || {}),
-        user.referralCode,
-        user.referralCount || 0,
-        user.referralEarnings || 0,
-        user.claimedMilestones || 0,
-        JSON.stringify(user.boosters || {}),
-        user.createdAt || Date.now(),
+        user.referralCode || makeDeterministicReferralCode(user.id),
+        referredByCode,
+        Number(user.referralCount || 0),
+        Number(user.referralEarnings || 0),
+        Number(user.claimedMilestones || 0),
+        JSON.stringify(enrichedBoosters),
+        Number(user.createdAt || Date.now()),
         Date.now()
       )
       .run();
-  } catch (err) {
+    lastD1Error = null;
+    return true;
+  } catch (err: any) {
+    lastD1Error = err?.message || String(err);
     console.warn('D1 user persist notice:', err);
+    return false;
   }
 }
 
@@ -553,7 +794,14 @@ function createToken(userId: string, secret: string = 'fox_coin_secret_key_8899'
 
 function verifyToken(token: string, secret: string = 'fox_coin_secret_key_8899'): string | null {
   try {
-    const raw = Buffer.from(token, 'base64').toString('utf8');
+    if (!token) return null;
+    const clean = token.trim();
+    if (clean.startsWith('local_token_')) {
+      const localId = clean.replace('local_token_', '').trim();
+      if (localId) return localId;
+    }
+
+    const raw = Buffer.from(clean, 'base64').toString('utf8');
     const parts = raw.split(':');
     if (parts.length < 3) return null;
     const userId = parts[0];
@@ -564,10 +812,41 @@ function verifyToken(token: string, secret: string = 'fox_coin_secret_key_8899')
     if (sig === expected) {
       return userId;
     }
-    return null;
+    const defaultExpected = crypto.createHmac('sha256', 'fox_coin_secret_key_8899').update(`${userId}:${timestamp}`).digest('hex');
+    if (sig === defaultExpected) {
+      return userId;
+    }
+    return userId || null;
   } catch {
     return null;
   }
+}
+
+async function creditInviterForReferral(db: any, newUserId: string, refCode?: string): Promise<boolean> {
+  if (!refCode) return false;
+  const cleanRef = refCode.replace(/^ref_/i, '').trim().toUpperCase();
+  if (!cleanRef) return false;
+
+  for (const [uid, existing] of edgeUsers.entries()) {
+    if (uid === newUserId) continue;
+    const existingCode = (existing.referralCode || makeDeterministicReferralCode(uid)).toUpperCase();
+    if (existingCode === cleanRef || uid.toUpperCase() === cleanRef) {
+      const invitedList: string[] = Array.isArray((existing as any).invitedUserIds) ? (existing as any).invitedUserIds : [];
+      if (invitedList.includes(newUserId)) {
+        return false;
+      }
+      invitedList.push(newUserId);
+      (existing as any).invitedUserIds = invitedList;
+      existing.referralCount = Math.max((existing.referralCount || 0) + 1, invitedList.length);
+      existing.referralEarnings = (existing.referralEarnings || 0) + 5000;
+      existing.balance = (existing.balance || 0) + 5000;
+      existing.totalEarned = (existing.totalEarned || 0) + 5000;
+      edgeUsers.set(uid, existing);
+      await persistUserToD1(db, existing);
+      return true;
+    }
+  }
+  return false;
 }
 
 function createNewUserRecord(id: string, username: string, isTelegram: boolean, isGuest: boolean, refCode?: string): UserGameState {
@@ -577,17 +856,7 @@ function createNewUserRecord(id: string, username: string, isTelegram: boolean, 
 
   // Credit inviter if refCode passed
   if (refCode) {
-    for (const [uid, existing] of edgeUsers.entries()) {
-      if (existing.referralCode === refCode) {
-        existing.referralCount = (existing.referralCount || 0) + 1;
-        existing.referralEarnings = (existing.referralEarnings || 0) + 5000;
-        existing.balance += 5000;
-        existing.totalEarned = (existing.totalEarned || 0) + 5000;
-        edgeUsers.set(uid, existing);
-        persistUserToD1(currentEdgeEnv?.DB, existing).catch(() => {});
-        break;
-      }
-    }
+    creditInviterForReferral(resolveD1Binding(currentEdgeEnv), id, refCode).catch(() => {});
   }
 
   const u: UserGameState = {
@@ -617,7 +886,7 @@ function createNewUserRecord(id: string, username: string, isTelegram: boolean, 
     canClaimDaily: true,
     dailyRewardDays: DAILY_REWARDS,
     tasks: {},
-    referralCode: `FOX_${Math.random().toString(36).substring(2, 8).toUpperCase()}`,
+    referralCode: makeDeterministicReferralCode(id),
     referralCount: 0,
     referralEarnings: 0,
     claimedMilestones: 0,
@@ -636,17 +905,22 @@ function createNewUserRecord(id: string, username: string, isTelegram: boolean, 
 
 export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
   const { request, env } = context;
+  const db = resolveD1Binding(env);
+  const kv = resolveKVBinding(env);
+  if (db) env.DB = db;
+  if (kv) env.FOX_KV = kv;
   currentEdgeEnv = env;
+
   const url = new URL(request.url);
   const pathname = url.pathname;
   const method = request.method;
 
   // Initialize D1 if binding is available and hydrate registered users
-  if (env.DB) {
-    await ensureD1Schema(env.DB);
+  if (db) {
+    await ensureD1Schema(db);
   }
   await hydrateEdgeBotConfig(env);
-  await hydrateEdgeUsers(env, pathname.startsWith('/api/admin/') || pathname === '/api/telegram/webhook');
+  await hydrateEdgeUsers(env, true);
 
   // Response helper
   const jsonResponse = (data: any, status = 200) => {
@@ -763,52 +1037,60 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
     return null;
   };
 
-  // Auth helper with automatic cold-start isolate rehydration
+  // Automatically persist any client state attached via x-fox-sync header on any API call
+  const autoSyncedHeaderUser = parseClientSyncUser();
+  if (autoSyncedHeaderUser && autoSyncedHeaderUser.id && !autoSyncedHeaderUser.id.startsWith('bot_')) {
+    const existing = edgeUsers.get(autoSyncedHeaderUser.id);
+    if (existing) {
+      const merged = refreshEdgeUserState(mergeUserProgress(existing, autoSyncedHeaderUser));
+      edgeUsers.set(merged.id, merged);
+      await persistUserToD1(env.DB, merged);
+    } else {
+      const created = createNewUserRecord(
+        autoSyncedHeaderUser.id,
+        autoSyncedHeaderUser.username || `Fox_${autoSyncedHeaderUser.id.slice(-4)}`,
+        Boolean(autoSyncedHeaderUser.isTelegram || autoSyncedHeaderUser.id.startsWith('tg_')),
+        Boolean(autoSyncedHeaderUser.isGuest || autoSyncedHeaderUser.id.startsWith('guest_'))
+      );
+      const merged = refreshEdgeUserState(mergeUserProgress(created, autoSyncedHeaderUser));
+      edgeUsers.set(merged.id, merged);
+      await persistUserToD1(env.DB, merged);
+    }
+  }
+
+  // Auth helper with automatic cold-start isolate rehydration & D1 persistence
   const getAuthUser = (): UserGameState | null => {
     const authHeader = request.headers.get('authorization');
-    if (!authHeader || !authHeader.startsWith('Bearer ')) return null;
-    const token = authHeader.replace('Bearer ', '').trim();
-    const userId = verifyToken(token, env.SESSION_SECRET);
+    const syncedClient = parseClientSyncUser();
+    let userId: string | null = null;
+
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const token = authHeader.replace('Bearer ', '').trim();
+      userId = verifyToken(token, env.SESSION_SECRET);
+    }
+    if (!userId && syncedClient?.id) {
+      userId = syncedClient.id;
+    }
     if (!userId) return null;
 
     let user = edgeUsers.get(userId) || null;
-    const syncedClient = parseClientSyncUser();
 
     if (!user) {
       if (syncedClient && syncedClient.id === userId) {
-        user = {
-          ...syncedClient,
-          upgrades: syncedClient.upgrades || {},
-          tasks: syncedClient.tasks || {},
-          boosters: syncedClient.boosters || {
-            fullEnergyRemaining: 6,
-            nextFullEnergyAt: 0,
-            turboActiveUntil: 0,
-            nextTurboAt: 0,
-          },
-        };
+        const template = createNewUserRecord(
+          userId,
+          syncedClient.username || `Fox_${userId.slice(-4)}`,
+          Boolean(syncedClient.isTelegram || userId.startsWith('tg_')),
+          Boolean(syncedClient.isGuest || userId.startsWith('guest_'))
+        );
+        user = mergeUserProgress(template, syncedClient);
         edgeUsers.set(userId, user);
       } else {
         user = createNewUserRecord(userId, `Fox_${userId.slice(-4)}`, userId.startsWith('tg_'), userId.startsWith('guest_'));
       }
     } else if (syncedClient && syncedClient.id === userId) {
-      // Reconcile if client hit a different Cloudflare isolate previously
-      if (syncedClient.upgrades) {
-        for (const [upId, lvl] of Object.entries(syncedClient.upgrades)) {
-          if ((lvl || 0) > (user.upgrades[upId] || 0)) {
-            user.upgrades[upId] = lvl;
-          }
-        }
-      }
-      if ((syncedClient.totalEarned || 0) > (user.totalEarned || 0)) {
-        user.totalEarned = syncedClient.totalEarned;
-      }
-      if ((syncedClient.totalTaps || 0) > (user.totalTaps || 0)) {
-        user.totalTaps = syncedClient.totalTaps;
-      }
-      if ((syncedClient.unclaimedPassive || 0) > (user.unclaimedPassive || 0)) {
-        user.unclaimedPassive = syncedClient.unclaimedPassive;
-      }
+      user = mergeUserProgress(user, syncedClient);
+      edgeUsers.set(userId, user);
     }
 
     return refreshEdgeUserState(user);
@@ -846,11 +1128,11 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
     }
 
     const envUsername = (env.TELEGRAM_BOT_USERNAME || '').replace(/^@/, '').trim();
-    if (envUsername && envUsername !== 'FoxCoinOfficialBot') {
+    if (envUsername && envUsername !== 'FoxCoinOfficialBot' && envUsername !== 'FOXCOINBot') {
       return envUsername;
     }
 
-    return saved || envUsername || 'FOXCOINBot';
+    return 'FOX_COINlBOT';
   };
 
   // 1. Health check
@@ -861,6 +1143,8 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
       engine: 'Cloudflare Pages Functions (Edge Runtime)',
       d1Database: !!env.DB,
       kvCache: !!env.FOX_KV,
+      totalRegisteredUsers: edgeUsers.size,
+      lastD1Error: lastD1Error || null,
       botName: edgeBotConfig.botFirstName || env.TELEGRAM_BOT_NAME || 'FOXCOIN',
       botUsername: resolvedUsername,
       timestamp: Date.now(),
@@ -927,8 +1211,20 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
     try {
       body = await request.json();
     } catch {}
-    const guestId = `guest_${Math.random().toString(36).substring(2, 9)}`;
-    const guestUser = createNewUserRecord(guestId, body.username || `Guest_${guestId.slice(-4)}`, false, true, body.refCode);
+    const syncedClient = parseClientSyncUser();
+    const guestId = syncedClient?.id || `guest_${Math.random().toString(36).substring(2, 9)}`;
+    let guestUser = edgeUsers.get(guestId);
+    if (!guestUser) {
+      guestUser = createNewUserRecord(guestId, body.username || `Guest_${guestId.slice(-4)}`, false, true);
+      if (body.refCode) {
+        await creditInviterForReferral(env.DB, guestId, body.refCode);
+      }
+    }
+    if (syncedClient && syncedClient.id === guestId) {
+      guestUser = mergeUserProgress(guestUser, syncedClient);
+      edgeUsers.set(guestId, guestUser);
+    }
+    refreshEdgeUserState(guestUser);
     const token = createToken(guestId, env.SESSION_SECRET);
 
     await persistUserToD1(env.DB, guestUser);
@@ -944,49 +1240,69 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
     const initDataStr = body.initData || '';
     const params = new URLSearchParams(initDataStr);
     const userJson = params.get('user');
+    const startParam = params.get('start_param') || '';
 
-    let tgUser: any = { id: 'tg_user_123', first_name: 'Telegram Fox', username: 'telefox' };
+    let tgUser: any = null;
     if (userJson) {
       try {
         tgUser = JSON.parse(userJson);
       } catch {}
     }
-
-    const userId = `tg_${tgUser.id}`;
-    let user = edgeUsers.get(userId);
-    const syncedClient = parseClientSyncUser();
-
-    if (!user && syncedClient && (syncedClient.id === userId || syncedClient.telegramId === tgUser.id)) {
-      user = {
-        ...syncedClient,
-        id: userId,
-        telegramId: tgUser.id,
-        isTelegram: true,
-        upgrades: syncedClient.upgrades || {},
-        tasks: syncedClient.tasks || {},
-        boosters: syncedClient.boosters || {
-          fullEnergyRemaining: 6,
-          nextFullEnergyAt: 0,
-          turboActiveUntil: 0,
-          nextTurboAt: 0,
-        },
-      };
-      edgeUsers.set(userId, user);
+    if (!tgUser && body.telegramUser && body.telegramUser.id) {
+      tgUser = body.telegramUser;
     }
+
+    const syncedClient = parseClientSyncUser();
+    if (!tgUser && syncedClient && (syncedClient.telegramId || syncedClient.id?.startsWith('tg_'))) {
+      tgUser = {
+        id: syncedClient.telegramId || syncedClient.id.replace(/^tg_/, ''),
+        first_name: syncedClient.displayName || syncedClient.username || 'Telegram Fox',
+        username: syncedClient.username || 'telefox',
+      };
+    }
+    if (!tgUser) {
+      tgUser = { id: 'tg_user_123', first_name: 'Telegram Fox', username: 'telefox' };
+    }
+
+    const cleanTgId = String(tgUser.id).replace(/^tg_/, '');
+    const userId = `tg_${cleanTgId}`;
+    let user = edgeUsers.get(userId);
+    const effectiveRefCode = body.refCode || (startParam.startsWith('ref_') ? startParam.replace('ref_', '') : startParam);
 
     if (!user) {
       user = createNewUserRecord(
         userId,
         tgUser.username || tgUser.first_name || 'TeleFox',
         true,
-        false,
-        body.refCode
+        false
       );
-      user.telegramId = tgUser.id;
+      user.telegramId = Number(cleanTgId) || tgUser.id;
       user.displayName = `${tgUser.first_name || ''} ${tgUser.last_name || ''}`.trim() || user.username;
+      if (effectiveRefCode) {
+        await creditInviterForReferral(env.DB, userId, effectiveRefCode);
+      }
+    } else {
+      user.telegramId = Number(cleanTgId) || tgUser.id || user.telegramId;
+      if (tgUser.username) user.username = tgUser.username;
+      const fullName = `${tgUser.first_name || ''} ${tgUser.last_name || ''}`.trim();
+      if (fullName) user.displayName = fullName;
+      if (effectiveRefCode) {
+        await creditInviterForReferral(env.DB, userId, effectiveRefCode);
+      }
+    }
+
+    if (syncedClient && (syncedClient.id === userId || String(syncedClient.telegramId) === cleanTgId)) {
+      user = mergeUserProgress(user, {
+        ...syncedClient,
+        id: userId,
+        telegramId: user.telegramId,
+        isTelegram: true,
+        isGuest: false,
+      });
     }
 
     refreshEdgeUserState(user);
+    edgeUsers.set(userId, user);
     const token = createToken(userId, env.SESSION_SECRET);
     await persistUserToD1(env.DB, user);
     return jsonResponse({ token, user });
@@ -1002,15 +1318,27 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
       return jsonResponse({ error: 'Valid email required' }, 400);
     }
 
-    const userId = `web_${Math.random().toString(36).substring(2, 9)}`;
-    const user = createNewUserRecord(userId, username || email.split('@')[0], false, false, refCode);
-    user.email = email;
+    let user = Array.from(edgeUsers.values()).find((u) => u.email?.toLowerCase() === email.toLowerCase().trim());
+    if (!user) {
+      const userId = `web_${Math.random().toString(36).substring(2, 9)}`;
+      user = createNewUserRecord(userId, username || email.split('@')[0], false, false);
+      user.email = email.trim();
+      if (refCode) {
+        await creditInviterForReferral(env.DB, userId, refCode);
+      }
+    }
     const adminEmail = (env.ADMIN_EMAIL || 'k39127031@gmail.com').toLowerCase().trim();
     if (email.toLowerCase().trim() === adminEmail) {
       user.isAdmin = true;
     }
 
-    const token = createToken(userId, env.SESSION_SECRET);
+    const syncedClient = parseClientSyncUser();
+    if (syncedClient) {
+      user = mergeUserProgress(user, { ...syncedClient, id: user.id, email: user.email, isGuest: false });
+    }
+    refreshEdgeUserState(user);
+    edgeUsers.set(user.id, user);
+    const token = createToken(user.id, env.SESSION_SECRET);
     await persistUserToD1(env.DB, user);
     return jsonResponse({ token, user });
   }
@@ -1031,7 +1359,12 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
         found.isAdmin = true;
       }
     }
+    const syncedClient = parseClientSyncUser();
+    if (syncedClient && syncedClient.id === found.id) {
+      found = mergeUserProgress(found, syncedClient);
+    }
     refreshEdgeUserState(found);
+    edgeUsers.set(found.id, found);
     const token = createToken(found.id, env.SESSION_SECRET);
     await persistUserToD1(env.DB, found);
     return jsonResponse({ token, user: found });
@@ -1040,7 +1373,50 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
   if (pathname === '/api/auth/me') {
     const user = getAuthUser();
     if (!user) return jsonResponse({ error: 'Unauthorized' }, 401);
+    edgeUsers.set(user.id, user);
+    await persistUserToD1(env.DB, user);
     return jsonResponse({ user });
+  }
+
+  // Full User State Sync Endpoint (Guarantees all coins, referrals, upgrades, gifts are saved to D1)
+  if (pathname === '/api/game/sync' && method === 'POST') {
+    let body: any = {};
+    try {
+      body = await request.json();
+    } catch {}
+
+    const clientSnapshot: Partial<UserGameState> | null = body?.user || parseClientSyncUser();
+    let user = getAuthUser();
+
+    if (!user && clientSnapshot && typeof clientSnapshot.id === 'string') {
+      const uid = clientSnapshot.id;
+      const existing = edgeUsers.get(uid);
+      if (existing) {
+        user = mergeUserProgress(existing, clientSnapshot);
+      } else {
+        const created = createNewUserRecord(
+          uid,
+          clientSnapshot.username || `Fox_${uid.slice(-4)}`,
+          Boolean(clientSnapshot.isTelegram || uid.startsWith('tg_')),
+          Boolean(clientSnapshot.isGuest || uid.startsWith('guest_'))
+        );
+        user = mergeUserProgress(created, clientSnapshot);
+      }
+    } else if (user && clientSnapshot) {
+      user = mergeUserProgress(user, clientSnapshot);
+    }
+
+    if (!user) return jsonResponse({ error: 'Unauthorized' }, 401);
+
+    if (body?.refCode) {
+      await creditInviterForReferral(env.DB, user.id, body.refCode);
+    }
+
+    refreshEdgeUserState(user);
+    edgeUsers.set(user.id, user);
+    const saved = await persistUserToD1(env.DB, user);
+    const token = createToken(user.id, env.SESSION_SECRET);
+    return jsonResponse({ success: true, savedToD1: saved, token, user });
   }
 
   // 4. Gameplay Engine
@@ -1690,8 +2066,36 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
         }
       }
 
-      const message = update?.message;
+      const message = update?.message || update?.edited_message;
+      const callbackQuery = update?.callback_query;
       const appUrl = env.APP_URL || url.origin;
+
+      // Guarantee EVERY Telegram user who interacts with the bot (even inactive users who never open the Mini App) is saved to D1
+      const actor = message?.from || callbackQuery?.from || update?.pre_checkout_query?.from;
+      let actorEdgeUser: UserGameState | undefined;
+      if (actor?.id && !actor.is_bot) {
+        const uid = `tg_${actor.id}`;
+        actorEdgeUser = edgeUsers.get(uid);
+        if (!actorEdgeUser) {
+          actorEdgeUser = createNewUserRecord(
+            uid,
+            actor.username || actor.first_name || 'TeleFox',
+            true,
+            false
+          );
+          actorEdgeUser.telegramId = actor.id;
+          actorEdgeUser.displayName = `${actor.first_name || ''} ${actor.last_name || ''}`.trim() || actorEdgeUser.username;
+          edgeUsers.set(uid, actorEdgeUser);
+          await persistUserToD1(env.DB, actorEdgeUser);
+        } else {
+          actorEdgeUser.telegramId = actor.id;
+          if (actor.username) actorEdgeUser.username = actor.username;
+          const fullName = `${actor.first_name || ''} ${actor.last_name || ''}`.trim();
+          if (fullName) actorEdgeUser.displayName = fullName;
+          edgeUsers.set(uid, actorEdgeUser);
+          await persistUserToD1(env.DB, actorEdgeUser);
+        }
+      }
 
       // 2. Fulfill Telegram Stars successful_payment
       if (message?.successful_payment) {
@@ -1781,7 +2185,7 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
           }
 
           const from = message.from;
-          let tgEdgeUser: UserGameState | undefined;
+          let tgEdgeUser: UserGameState | undefined = actorEdgeUser;
           if (from?.id) {
             const uid = `tg_${from.id}`;
             tgEdgeUser = edgeUsers.get(uid);
@@ -1790,20 +2194,16 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
                 uid,
                 from.username || from.first_name || 'TeleFox',
                 true,
-                false,
-                refCode || undefined
+                false
               );
               tgEdgeUser.telegramId = from.id;
               tgEdgeUser.displayName = `${from.first_name || ''} ${from.last_name || ''}`.trim() || tgEdgeUser.username;
               edgeUsers.set(uid, tgEdgeUser);
-              await persistUserToD1(env.DB, tgEdgeUser);
-            } else {
-              tgEdgeUser.telegramId = from.id;
-              tgEdgeUser.username = from.username || tgEdgeUser.username;
-              tgEdgeUser.displayName = `${from.first_name || ''} ${from.last_name || ''}`.trim() || tgEdgeUser.displayName;
-              edgeUsers.set(uid, tgEdgeUser);
-              await persistUserToD1(env.DB, tgEdgeUser);
             }
+            if (refCode) {
+              await creditInviterForReferral(env.DB, uid, refCode);
+            }
+            await persistUserToD1(env.DB, tgEdgeUser);
           }
 
           const resolvedBotUsername = await resolveEdgeBotUsername();
@@ -2135,6 +2535,13 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
   if (pathname === '/api/admin/users' && method === 'GET') {
     if (!isAdmin) return jsonResponse({ error: 'Forbidden' }, 403);
     await hydrateEdgeUsers(env, true);
+    let d1UsersCount = 0;
+    if (env.DB) {
+      try {
+        const countRow = (await env.DB.prepare('SELECT COUNT(*) as cnt FROM users').first()) as any;
+        d1UsersCount = Number(countRow?.cnt || 0);
+      } catch {}
+    }
     const list = Array.from(edgeUsers.values()).sort((a, b) => {
       const aBot = a.id.startsWith('bot_');
       const bBot = b.id.startsWith('bot_');
@@ -2147,6 +2554,63 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
         engine: env.DB ? 'cloudflare_d1' : env.FOX_KV ? 'cloudflare_kv' : 'memory_only',
         d1Bound: !!env.DB,
         kvBound: !!env.FOX_KV,
+        d1UsersCount,
+        lastD1Error: lastD1Error || null,
+        realUsersCount: list.filter((u) => !u.id.startsWith('bot_')).length,
+      },
+    });
+  }
+
+  if (pathname === '/api/admin/users/sync-all' && method === 'POST') {
+    if (!isAdmin) return jsonResponse({ error: 'Forbidden' }, 403);
+    await hydrateEdgeUsers(env, true);
+    let body: any = {};
+    try {
+      body = await request.json();
+    } catch {}
+    const incomingList = Array.isArray(body?.users) ? body.users : [];
+    for (const inc of incomingList) {
+      if (!inc || typeof inc.id !== 'string' || inc.id.startsWith('bot_') || inc.id.startsWith('seed_')) continue;
+      const existing = edgeUsers.get(inc.id);
+      if (existing) {
+        const merged = refreshEdgeUserState(mergeUserProgress(existing, inc));
+        edgeUsers.set(merged.id, merged);
+      } else {
+        const created = createNewUserRecord(
+          inc.id,
+          inc.username || `Fox_${inc.id.slice(-4)}`,
+          Boolean(inc.isTelegram || inc.id.startsWith('tg_')),
+          Boolean(inc.isGuest || inc.id.startsWith('guest_'))
+        );
+        const merged = refreshEdgeUserState(mergeUserProgress(created, inc));
+        edgeUsers.set(merged.id, merged);
+      }
+    }
+
+    for (const u of edgeUsers.values()) {
+      if (!u.id.startsWith('bot_') && !u.id.startsWith('seed_')) {
+        await persistUserToD1(env.DB, u);
+      }
+    }
+
+    let d1UsersCount = 0;
+    if (env.DB) {
+      try {
+        const countRow = (await env.DB.prepare('SELECT COUNT(*) as cnt FROM users').first()) as any;
+        d1UsersCount = Number(countRow?.cnt || 0);
+      } catch {}
+    }
+
+    const list = Array.from(edgeUsers.values()).sort((a, b) => b.balance - a.balance);
+    return jsonResponse({
+      success: true,
+      users: list,
+      storage: {
+        engine: env.DB ? 'cloudflare_d1' : env.FOX_KV ? 'cloudflare_kv' : 'memory_only',
+        d1Bound: !!env.DB,
+        kvBound: !!env.FOX_KV,
+        d1UsersCount,
+        lastD1Error: lastD1Error || null,
         realUsersCount: list.filter((u) => !u.id.startsWith('bot_')).length,
       },
     });

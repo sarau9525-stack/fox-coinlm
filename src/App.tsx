@@ -159,16 +159,27 @@ export default function App() {
           const initData = TelegramService.getInitData();
           const authRes = await api.authTelegram(initData, effectiveRef);
           updateGameState(authRes.user);
+          api.syncUserToServer(authRes.user, effectiveRef).then((synced) => {
+            if (synced) updateGameState(synced);
+          }).catch(() => {});
           return;
         }
 
-        // 4. Standalone web check existing token
-        if (api.getToken()) {
+        // 4. Standalone web check existing token or local user snapshot
+        if (api.getToken() || localStorage.getItem('foxcoin_local_user_v1')) {
           try {
             const meRes = await api.getMe();
             updateGameState(meRes.user);
+            api.syncUserToServer(meRes.user, effectiveRef).then((synced) => {
+              if (synced) updateGameState(synced);
+            }).catch(() => {});
             return;
           } catch {
+            const synced = await api.syncUserToServer(undefined, effectiveRef);
+            if (synced) {
+              updateGameState(synced);
+              return;
+            }
             api.setToken(null);
           }
         }
@@ -200,6 +211,33 @@ export default function App() {
         };
       });
     });
+
+    // Periodic & lifecycle sync to guarantee Cloudflare D1 database always has latest coins, referrals & upgrades
+    const syncInterval = setInterval(() => {
+      if (!api.hasPendingTaps()) {
+        api.syncUserToServer().then((synced) => {
+          if (synced && !api.hasPendingTaps()) {
+            updateGameState(synced);
+          }
+        }).catch(() => {});
+      } else {
+        api.flushTaps().catch(() => {});
+      }
+    }, 15000);
+
+    const handleVisibilityOrHide = () => {
+      api.flushTaps().catch(() => {});
+      api.syncUserToServer().catch(() => {});
+    };
+
+    window.addEventListener('visibilitychange', handleVisibilityOrHide);
+    window.addEventListener('pagehide', handleVisibilityOrHide);
+
+    return () => {
+      clearInterval(syncInterval);
+      window.removeEventListener('visibilitychange', handleVisibilityOrHide);
+      window.removeEventListener('pagehide', handleVisibilityOrHide);
+    };
   }, [updateGameState]);
 
   // Offline passive income check on load and whenever unclaimedPassive updates

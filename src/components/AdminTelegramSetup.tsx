@@ -97,7 +97,10 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
   // Admin Users & Balance Management states
   const [allUsers, setAllUsers] = useState<UserGameState[]>([]);
   const [isLoadingUsers, setIsLoadingUsers] = useState<boolean>(false);
+  const [isSyncingAllDb, setIsSyncingAllDb] = useState<boolean>(false);
   const [userSearch, setUserSearch] = useState<string>('');
+  const [userActivityFilter, setUserActivityFilter] = useState<'all' | 'active' | 'inactive' | 'referrals'>('all');
+  const [copiedUserRef, setCopiedUserRef] = useState<string | null>(null);
   const [selectedUserId, setSelectedUserId] = useState<string | null>(user?.id || null);
   const [adjustAmount, setAdjustAmount] = useState<string>('10000');
   const [adjustBalanceType, setAdjustBalanceType] = useState<'main' | 'referral'>('main');
@@ -107,6 +110,8 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
     engine: string;
     d1Bound: boolean;
     kvBound: boolean;
+    d1UsersCount?: number;
+    lastD1Error?: string | null;
     realUsersCount: number;
   } | null>(null);
   const [showD1Guide, setShowD1Guide] = useState<boolean>(false);
@@ -169,6 +174,34 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
       console.error('Failed to load users:', err);
     } finally {
       setIsLoadingUsers(false);
+    }
+  };
+
+  const handleForceSyncAllUsers = async () => {
+    try {
+      setIsSyncingAllDb(true);
+      setUserFeedback(null);
+      const candidates = [...allUsers];
+      if (user && !candidates.some((u) => u.id === user.id)) {
+        candidates.unshift(user);
+      }
+      const res = await api.syncAllAdminUsers(candidates, adminSecret || '123456');
+      setAllUsers(res.users || []);
+      if (res.storage) {
+        setStorageStatus(res.storage);
+      }
+      sound.playSuccess();
+      setUserFeedback({
+        type: 'success',
+        message: `✅ اطلاعات کامل ${res.users?.length || 0} کاربر (فعال و غیرفعال، سکه‌ها، دعوتی‌ها و ارتقاها) با موفقیت در دیتابیس ذخیره شد.`,
+      });
+    } catch (err: any) {
+      setUserFeedback({
+        type: 'error',
+        message: err?.message || 'خطا در همگام‌سازی دیتابیس',
+      });
+    } finally {
+      setIsSyncingAllDb(false);
     }
   };
 
@@ -874,38 +907,64 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
               </div>
             )}
 
-            {/* TAB 0: USERS & TOKEN BALANCE MANAGEMENT */}
+            {/* TAB 0: USERS, DATABASE SYNC & PLAYER PERFORMANCE */}
             {activeTab === 'users' && (
               <div className="space-y-3.5 animate-fade-in">
                 {/* Summary Stats Bar */}
-                <div className="grid grid-cols-3 gap-2">
-                  <div className="p-2.5 rounded-2xl bg-slate-900/90 border border-slate-800 text-center">
-                    <span className="text-[10px] text-slate-400 block">Registered Users</span>
-                    <span className="text-sm font-black text-white">
-                      {allUsers.filter((u) => !u.id.startsWith('bot_')).length}{' '}
-                      <span className="text-[10px] text-slate-500 font-normal">({allUsers.length} total)</span>
-                    </span>
-                  </div>
-                  <div className="p-2.5 rounded-2xl bg-slate-900/90 border border-slate-800 text-center">
-                    <span className="text-[10px] text-slate-400 block">Total FOX Supply</span>
-                    <span className="text-xs font-black text-amber-400">
-                      {Math.floor(allUsers.reduce((acc, u) => acc + (u.balance || 0), 0)).toLocaleString('en-US')}
-                    </span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => loadUsers()}
-                    disabled={isLoadingUsers}
-                    className="p-2.5 rounded-2xl bg-slate-900/90 hover:bg-slate-800 border border-slate-800 flex flex-col items-center justify-center gap-0.5 text-sky-400 transition cursor-pointer"
-                  >
-                    <RefreshCw className={`w-3.5 h-3.5 ${isLoadingUsers ? 'animate-spin' : ''}`} />
-                    <span className="text-[10px] font-bold">Refresh List</span>
-                  </button>
-                </div>
+                {(() => {
+                  const realUsers = allUsers.filter((u) => !u.id.startsWith('bot_'));
+                  const activeCount = realUsers.filter(
+                    (u) =>
+                      (u.totalTaps || 0) > 0 ||
+                      (u.profitPerHour || 0) > 0 ||
+                      Object.keys(u.upgrades || {}).length > 0 ||
+                      (u.balance || 0) > 5000
+                  ).length;
+                  const inactiveCount = Math.max(0, realUsers.length - activeCount);
+                  const totalInvites = realUsers.reduce((acc, u) => acc + (u.referralCount || 0), 0);
+                  const totalTapsAll = realUsers.reduce((acc, u) => acc + (u.totalTaps || 0), 0);
 
-                {/* Cloudflare D1 Database Status & Setup Guide */}
+                  return (
+                    <div className="grid grid-cols-4 gap-1.5">
+                      <div className="p-2 rounded-2xl bg-slate-900/90 border border-slate-800 text-center">
+                        <span className="text-[9px] text-slate-400 block">کل کاربران</span>
+                        <span className="text-xs font-black text-white block">{realUsers.length} نفر</span>
+                        <span className="text-[8px] text-emerald-400 font-bold">
+                          {activeCount} فعال / {inactiveCount} غیرفعال
+                        </span>
+                      </div>
+                      <div className="p-2 rounded-2xl bg-slate-900/90 border border-slate-800 text-center">
+                        <span className="text-[9px] text-slate-400 block">کل سکه‌های FOX</span>
+                        <span className="text-xs font-black text-amber-400 block">
+                          {Math.floor(realUsers.reduce((acc, u) => acc + (u.balance || 0), 0)).toLocaleString('en-US')}
+                        </span>
+                        <span className="text-[8px] text-slate-400">
+                          {totalTapsAll.toLocaleString('en-US')} کل تپ‌ها
+                        </span>
+                      </div>
+                      <div className="p-2 rounded-2xl bg-slate-900/90 border border-slate-800 text-center">
+                        <span className="text-[9px] text-slate-400 block">کل دعوت‌ها</span>
+                        <span className="text-xs font-black text-emerald-400 block">
+                          {totalInvites.toLocaleString('en-US')} دعوت
+                        </span>
+                        <span className="text-[8px] text-slate-400">@FOX_COINlBOT</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => loadUsers()}
+                        disabled={isLoadingUsers}
+                        className="p-2 rounded-2xl bg-slate-900/90 hover:bg-slate-800 border border-slate-800 flex flex-col items-center justify-center gap-0.5 text-sky-400 transition cursor-pointer"
+                      >
+                        <RefreshCw className={`w-3.5 h-3.5 ${isLoadingUsers ? 'animate-spin' : ''}`} />
+                        <span className="text-[9px] font-bold">بروزرسانی</span>
+                      </button>
+                    </div>
+                  );
+                })()}
+
+                {/* Cloudflare D1 Database Status & 1-Click Force Save */}
                 <div
-                  className={`p-3 rounded-2xl border ${
+                  className={`p-3 rounded-2xl border space-y-2.5 ${
                     storageStatus?.d1Bound || storageStatus?.kvBound
                       ? 'bg-emerald-500/10 border-emerald-500/30'
                       : 'bg-sky-500/10 border-sky-500/30'
@@ -921,14 +980,14 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                       <div>
                         <span className="text-xs font-black text-white block">
                           {storageStatus?.d1Bound
-                            ? '✅ دیتابیس Cloudflare D1 متصل و فعال است (DB)'
+                            ? `✅ دیتابیس فعال است (${storageStatus.d1UsersCount ?? allUsers.length} کاربر ذخیره شده)`
                             : storageStatus?.kvBound
                             ? '✅ حافظه Cloudflare KV متصل و فعال است (FOX_KV)'
                             : '☁️ دیتابیس کاربران کلادفلر (Cloudflare D1 Database)'}
                         </span>
                         <span className="text-[10px] text-slate-300 block">
                           {storageStatus?.d1Bound || storageStatus?.kvBound
-                            ? 'تمام کاربران ربات و مینی‌اپ به صورت دائمی در کلادفلر ذخیره می‌شوند.'
+                            ? 'اطلاعات همه کاربران (فعال و غیرفعال، سکه‌ها، رفرال‌ها و کارت‌ها) به صورت دائمی ذخیره می‌شوند.'
                             : 'جداول SQL به صورت خودکار ساخته می‌شوند؛ کافیست D1 را با نام DB متصل کنید.'}
                         </span>
                       </div>
@@ -938,34 +997,40 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                       onClick={() => setShowD1Guide(!showD1Guide)}
                       className="px-2.5 py-1.5 rounded-xl bg-slate-900/90 hover:bg-slate-800 border border-slate-700 text-[10px] font-black text-amber-300 shrink-0 cursor-pointer"
                     >
-                      {showD1Guide ? 'بستن راهنما' : 'راهنمای اتصال D1'}
+                      {showD1Guide ? 'بستن راهنما' : 'راهنمای D1'}
                     </button>
                   </div>
 
+                  {/* 1-Click Force Sync All Users Button */}
+                  <button
+                    type="button"
+                    onClick={handleForceSyncAllUsers}
+                    disabled={isSyncingAllDb}
+                    className="w-full py-2 px-3 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-black text-xs flex items-center justify-center gap-1.5 shadow-md transition active:scale-95 cursor-pointer disabled:opacity-60"
+                  >
+                    <Save className={`w-3.5 h-3.5 ${isSyncingAllDb ? 'animate-bounce' : ''}`} />
+                    <span>
+                      {isSyncingAllDb
+                        ? 'در حال ذخیره همه کاربران در دیتابیس...'
+                        : 'ذخیره و همگام‌سازی فوری همه کاربران در دیتابیس (Save All to DB)'}
+                    </span>
+                  </button>
+
+                  {storageStatus?.lastD1Error && (
+                    <div className="p-2 rounded-lg bg-rose-500/20 border border-rose-500/30 text-[10px] text-rose-200 font-mono">
+                      D1 Status: {storageStatus.lastD1Error}
+                    </div>
+                  )}
+
                   {showD1Guide && (
-                    <div className="mt-3 pt-2.5 border-t border-slate-800/80 text-[11px] text-slate-200 space-y-1.5 leading-relaxed" dir="rtl">
-                      <p className="font-bold text-amber-300">مراحل ساخت و اتصال دیتابیس دائمی کاربران در Cloudflare (رایگان):</p>
+                    <div className="pt-2.5 border-t border-slate-800/80 text-[11px] text-slate-200 space-y-1.5 leading-relaxed" dir="rtl">
+                      <p className="font-bold text-amber-300">نحوه بررسی و اتصال دیتابیس D1 در کلادفلر:</p>
                       <ol className="list-decimal list-inside space-y-1 text-slate-300">
                         <li>
-                          <b>گام اول (رفع ارور Static Assets):</b> ابتدا از تب <b>GitHub</b> در همین پنل ادمین، نسخه جدید پروژه را روی گیت‌هاب آپلود کنید تا فایل جدید{' '}
-                          <code className="text-emerald-300 bg-slate-950 px-1 rounded">wrangler.toml</code> (شامل اسکریپت سرور <code className="text-sky-300 bg-slate-950 px-1 rounded">main = &quot;functions/api/[[route]].ts&quot;</code>) روی کلادفلر بیلد شود.
+                          از تب <b>GitHub</b> نسخه جدید را روی گیت‌هاب آپلود کنید تا جداول دیتابیس در کلادفلر به صورت خودکار ساخته شوند.
                         </li>
                         <li>
-                          وارد پنل <b>Cloudflare Dashboard</b> شوید و از منوی سمت چپ به بخش{' '}
-                          <code className="text-sky-300 bg-slate-950 px-1 rounded">Workers &amp; Pages</code> &larr;{' '}
-                          <code className="text-sky-300 bg-slate-950 px-1 rounded">D1 SQL Database</code> بروید و یک دیتابیس به نام{' '}
-                          <code className="text-emerald-300 bg-slate-950 px-1 rounded">foxcoin-db</code> بسازید.
-                        </li>
-                        <li>
-                          بعد از اینکه دیپلوی جدید در کلادفلر کامل شد، وارد پروژه خود در <b>Workers &amp; Pages</b> شوید و به تب{' '}
-                          <code className="text-sky-300 bg-slate-950 px-1 rounded">Settings</code> &larr;{' '}
-                          <code className="text-sky-300 bg-slate-950 px-1 rounded">Bindings</code> بروید.
-                        </li>
-                        <li>
-                          روی <b>Add</b> &larr; <b>D1 database</b> بزنید:
-                          <br />• در کادر <b>Variable name</b> دقیقاً عبارت{' '}
-                          <code className="text-amber-300 font-black bg-slate-950 px-1.5 py-0.5 rounded">DB</code> را بنویسید.
-                          <br />• در کادر <b>D1 database</b> دیتابیس <code className="text-emerald-300 bg-slate-950 px-1 rounded">foxcoin-db</code> را انتخاب و <b>Save</b> کنید.
+                          در پنل کلادفلر در بخش <b>Workers &amp; Pages</b> &larr; پروژه خود &larr; <b>Settings</b> &larr; <b>Bindings</b> اطمینان حاصل کنید دیتابیس D1 با نام متغیر <code className="text-amber-300 font-black bg-slate-950 px-1.5 py-0.5 rounded">DB</code> متصل باشد.
                         </li>
                       </ol>
                     </div>
@@ -990,31 +1055,191 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                   </div>
                 )}
 
-                {/* Selected User Token Give / Take Controller */}
+                {/* SELECTED USER PERFORMANCE & TOKEN MANAGEMENT DASHBOARD */}
                 {(() => {
                   const targetUser = allUsers.find((u) => u.id === selectedUserId) || allUsers[0];
                   if (!targetUser) return null;
+
+                  const upgradeEntries = Object.entries(targetUser.upgrades || {}).filter(([, lvl]) => Number(lvl) > 0);
+                  const totalUpgradeLevels = upgradeEntries.reduce((sum, [, lvl]) => sum + (Number(lvl) || 0), 0);
+                  const ownedGiftsCount = upgradeEntries.filter(([upId]) => {
+                    const def = adminUpgrades.find((d) => d.id === upId);
+                    return def?.category === 'gift' || upId.startsWith('gift_');
+                  }).length;
+                  const completedTasksCount = Object.values(targetUser.tasks || {}).filter(
+                    (t: any) => t?.claimed || t?.completed
+                  ).length;
+                  const isUserActive =
+                    (targetUser.totalTaps || 0) > 0 ||
+                    (targetUser.profitPerHour || 0) > 0 ||
+                    upgradeEntries.length > 0 ||
+                    (targetUser.balance || 0) > 5000;
+                  const lastActiveTs =
+                    (targetUser as any).updatedAt || targetUser.lastPassiveClaimTimestamp || targetUser.createdAt;
+                  const botHandle = (config?.telegramBotUsername || 'FOX_COINlBOT').replace(/^@/, '').trim() || 'FOX_COINlBOT';
+                  const userReferralLink = `https://t.me/${botHandle}?start=ref_${targetUser.referralCode || ''}`;
+
                   return (
-                    <div className="p-4 rounded-2xl bg-gradient-to-br from-amber-500/15 via-slate-900 to-slate-900 border border-amber-500/40 space-y-3 shadow-lg">
-                      <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
-                        <div>
-                          <span className="text-[10px] uppercase tracking-wider text-amber-400 font-black block">
-                            Selected Player for Token Action
-                          </span>
-                          <div className="flex items-center gap-1.5 mt-0.5">
-                            <span className="font-black text-sm text-white">
+                    <div className="p-4 rounded-2xl bg-gradient-to-br from-amber-500/15 via-slate-900 to-slate-900 border border-amber-500/40 space-y-3.5 shadow-lg">
+                      {/* Header: User Identity & Activity Status */}
+                      <div className="flex items-start justify-between border-b border-slate-800 pb-2.5 gap-2">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="text-[10px] uppercase tracking-wider text-amber-400 font-black">
+                              📊 عملکرد و مدیریت کاربر
+                            </span>
+                            <span
+                              className={`px-2 py-0.5 rounded-full text-[9px] font-black border ${
+                                isUserActive
+                                  ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                                  : 'bg-slate-800 text-slate-300 border-slate-700'
+                              }`}
+                            >
+                              {isUserActive ? '🟢 فعال در مینی‌اپ' : '⚪ غیرفعال (فقط استارت ربات)'}
+                            </span>
+                            {targetUser.hasJoinedChannel && (
+                              <span className="px-1.5 py-0.5 rounded-full bg-sky-500/20 text-sky-300 border border-sky-500/30 text-[9px] font-bold">
+                                📢 عضو کانال
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-1.5 mt-1">
+                            <span className="font-black text-sm text-white truncate">
                               {targetUser.displayName || targetUser.username}
                             </span>
-                            <span className="text-[10px] font-mono text-slate-400">({targetUser.id})</span>
+                            <span className="text-[10px] font-mono text-slate-400">(@{targetUser.username})</span>
+                          </div>
+                          <div className="text-[10px] font-mono text-slate-400 mt-0.5">
+                            ID: {targetUser.id} {targetUser.telegramId ? `• TG ID: ${targetUser.telegramId}` : ''}
                           </div>
                         </div>
-                        <div className="text-right">
+                        <div className="text-right shrink-0">
                           <div className="text-xs font-black text-amber-300">
-                            {Math.floor(targetUser.balance).toLocaleString('en-US')} FOX
+                            {Math.floor(targetUser.balance || 0).toLocaleString('en-US')} FOX
                           </div>
                           <div className="text-[10px] text-emerald-400 font-bold">
-                            Ref: {Math.floor(targetUser.referralEarnings || 0).toLocaleString('en-US')} FOX
+                            لول {targetUser.level || 1} ({targetUser.levelName || 'Bronze Fox'})
                           </div>
+                        </div>
+                      </div>
+
+                      {/* Detailed User Performance Grid (عملکرد کامل کاربر) */}
+                      <div className="space-y-2" dir="rtl">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] font-black text-amber-300">
+                            گزارش ریز عملکرد کاربر در بازی و ربات:
+                          </span>
+                          <span className="text-[9px] text-slate-400">
+                            آخرین فعالیت:{' '}
+                            {lastActiveTs ? new Date(lastActiveTs).toLocaleDateString('fa-IR') : 'ثبت نشده'}
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-3 gap-1.5 text-center">
+                          <div className="p-2 rounded-xl bg-slate-950/90 border border-slate-800">
+                            <span className="text-[9px] text-slate-400 block">موجودی فعلی</span>
+                            <span className="text-xs font-black text-amber-400 block">
+                              {Math.floor(targetUser.balance || 0).toLocaleString('en-US')}
+                            </span>
+                            <span className="text-[8px] text-slate-500">
+                              کل کسب‌شده: {Math.floor(targetUser.totalEarned || 0).toLocaleString('en-US')}
+                            </span>
+                          </div>
+
+                          <div className="p-2 rounded-xl bg-slate-950/90 border border-slate-800">
+                            <span className="text-[9px] text-slate-400 block">سود ساعتی (پروفیت)</span>
+                            <span className="text-xs font-black text-sky-400 block">
+                              +{Math.floor(targetUser.profitPerHour || 0).toLocaleString('en-US')}/hr
+                            </span>
+                            <span className="text-[8px] text-slate-500">
+                              آفلاین: {Math.floor(targetUser.unclaimedPassive || 0).toLocaleString('en-US')} FOX
+                            </span>
+                          </div>
+
+                          <div className="p-2 rounded-xl bg-slate-950/90 border border-slate-800">
+                            <span className="text-[9px] text-slate-400 block">تعداد کل تپ‌ها</span>
+                            <span className="text-xs font-black text-purple-400 block">
+                              {Math.floor(targetUser.totalTaps || 0).toLocaleString('en-US')} بار
+                            </span>
+                            <span className="text-[8px] text-slate-500">
+                              قدرت تپ: +{targetUser.tapPower || 1} | انرژی: {Math.floor(targetUser.energy || 0)}/{targetUser.maxEnergy || 1000}
+                            </span>
+                          </div>
+
+                          <div className="p-2 rounded-xl bg-slate-950/90 border border-slate-800">
+                            <span className="text-[9px] text-slate-400 block">تعداد دعوتی‌ها (رفرال)</span>
+                            <span className="text-xs font-black text-emerald-400 block">
+                              {targetUser.referralCount || 0} نفر
+                            </span>
+                            <span className="text-[8px] text-slate-500">
+                              پاداش ۱۰تایی: {targetUser.claimedMilestones || 0} بار
+                            </span>
+                          </div>
+
+                          <div className="p-2 rounded-xl bg-slate-950/90 border border-slate-800">
+                            <span className="text-[9px] text-slate-400 block">درآمد رفرال (قابل ترید)</span>
+                            <span className="text-xs font-black text-emerald-300 block">
+                              {Math.floor(targetUser.referralEarnings || 0).toLocaleString('en-US')} FOX
+                            </span>
+                            <span className="text-[8px] text-emerald-500 font-bold">
+                              ≈ ${((targetUser.referralEarnings || 0) * 0.001).toFixed(2)} USD
+                            </span>
+                          </div>
+
+                          <div className="p-2 rounded-xl bg-slate-950/90 border border-slate-800">
+                            <span className="text-[9px] text-slate-400 block">کارت‌ها و تسک‌ها</span>
+                            <span className="text-xs font-black text-orange-400 block">
+                              {upgradeEntries.length} کارت ({totalUpgradeLevels} لول)
+                            </span>
+                            <span className="text-[8px] text-slate-500">
+                              {ownedGiftsCount} گیفت • {completedTasksCount} تسک • استریک {targetUser.dailyStreak || 0}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* User's Purchased Upgrades & Gifts List */}
+                        {upgradeEntries.length > 0 && (
+                          <div className="p-2.5 rounded-xl bg-slate-950/70 border border-slate-800/90">
+                            <span className="text-[10px] font-bold text-slate-300 block mb-1.5">
+                              🃏 کارت‌ها و گیفت‌های خریداری‌شده توسط این کاربر ({upgradeEntries.length} مورد):
+                            </span>
+                            <div className="flex flex-wrap gap-1.5">
+                              {upgradeEntries.map(([upId, lvl]) => {
+                                const def = adminUpgrades.find((d) => d.id === upId);
+                                return (
+                                  <span
+                                    key={upId}
+                                    className="px-2 py-0.5 rounded-lg bg-slate-900 border border-slate-700 text-[10px] text-amber-200 font-bold"
+                                  >
+                                    {def?.name || upId}: <b className="text-emerald-400">Lvl {lvl}</b>
+                                  </span>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* User's Direct Referral Link with FOX_COINlBOT */}
+                        <div className="p-2 rounded-xl bg-slate-950/80 border border-slate-800 flex items-center justify-between gap-2" dir="ltr">
+                          <div className="min-w-0 flex-1">
+                            <span className="text-[9px] text-slate-400 block">
+                              Referral Link (@{botHandle} • Code: {targetUser.referralCode || 'N/A'}):
+                            </span>
+                            <span className="text-[10px] font-mono text-sky-300 truncate block">
+                              {userReferralLink}
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard.writeText(userReferralLink).catch(() => {});
+                              setCopiedUserRef(targetUser.id);
+                              setTimeout(() => setCopiedUserRef(null), 2000);
+                            }}
+                            className="px-2.5 py-1.5 rounded-lg bg-sky-500/20 hover:bg-sky-500/30 border border-sky-500/40 text-sky-300 text-[10px] font-black shrink-0 cursor-pointer"
+                          >
+                            {copiedUserRef === targetUser.id ? 'Copied ✓' : 'Copy Link'}
+                          </button>
                         </div>
                       </div>
 
@@ -1029,7 +1254,7 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                               : 'text-slate-400 hover:text-white'
                           }`}
                         >
-                          🪙 Main FOX Balance
+                          🪙 موجودی اصلی (Main FOX)
                         </button>
                         <button
                           type="button"
@@ -1040,14 +1265,14 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                               : 'text-slate-400 hover:text-white'
                           }`}
                         >
-                          🎁 Referral FOX (Tradeable)
+                          🎁 موجودی رفرال (Referral FOX)
                         </button>
                       </div>
 
                       {/* Quick Presets */}
                       <div>
                         <span className="text-[10px] text-slate-400 font-bold block mb-1.5">
-                          Quick Give / Take Presets:
+                          افزایش / کاهش سریع سکه کاربر:
                         </span>
                         <div className="grid grid-cols-3 gap-1.5 text-[11px] font-black">
                           <button
@@ -1096,7 +1321,7 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                             onClick={() => handleAdjustUserTokens(targetUser.id, 'set', 0)}
                             className="py-1.5 rounded-lg bg-slate-800 hover:bg-rose-950 border border-slate-700 text-slate-300 hover:text-rose-300 transition active:scale-95 cursor-pointer"
                           >
-                            Reset to 0
+                            صفر کردن (0)
                           </button>
                         </div>
                       </div>
@@ -1123,7 +1348,7 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                             className="py-2.5 px-2 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs rounded-xl flex items-center justify-center gap-1 shadow transition active:scale-95 cursor-pointer disabled:opacity-50"
                           >
                             <PlusCircle className="w-3.5 h-3.5" />
-                            <span>Give FOX</span>
+                            <span>افزایش سکه</span>
                           </button>
                           <button
                             type="button"
@@ -1132,7 +1357,7 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                             className="py-2.5 px-2 bg-rose-600 hover:bg-rose-500 text-white font-black text-xs rounded-xl flex items-center justify-center gap-1 shadow transition active:scale-95 cursor-pointer disabled:opacity-50"
                           >
                             <MinusCircle className="w-3.5 h-3.5" />
-                            <span>Take FOX</span>
+                            <span>کسر سکه</span>
                           </button>
                           <button
                             type="button"
@@ -1140,7 +1365,7 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                             onClick={() => handleAdjustUserTokens(targetUser.id, 'set')}
                             className="py-2.5 px-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs rounded-xl flex items-center justify-center gap-1 shadow transition active:scale-95 cursor-pointer disabled:opacity-50"
                           >
-                            <span>Set Exact</span>
+                            <span>تنظیم دقیق</span>
                           </button>
                         </div>
                       </div>
@@ -1148,71 +1373,142 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                   );
                 })()}
 
+                {/* Activity Filter Tabs (همه / فعال / غیرفعال / دارای رفرال) */}
+                <div className="grid grid-cols-4 gap-1 bg-slate-900/90 p-1 rounded-xl border border-slate-800 text-[10px] font-bold">
+                  {[
+                    { id: 'all', label: 'همه کاربران' },
+                    { id: 'active', label: '🟢 فعال‌ها' },
+                    { id: 'inactive', label: '⚪ غیرفعال‌ها' },
+                    { id: 'referrals', label: '🎁 دارای دعوتی' },
+                  ].map((f) => (
+                    <button
+                      key={f.id}
+                      type="button"
+                      onClick={() => setUserActivityFilter(f.id as any)}
+                      className={`py-1.5 rounded-lg transition cursor-pointer ${
+                        userActivityFilter === f.id
+                          ? 'bg-amber-500 text-slate-950 font-black'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
+
                 {/* Search Input */}
                 <div className="relative">
                   <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                   <input
                     type="text"
-                    placeholder="Search user by name, username, ID, or email..."
+                    placeholder="جستجوی کاربر با نام، یوزرنیم، آیدی تلگرام یا کد رفرال..."
                     value={userSearch}
                     onChange={(e) => setUserSearch(e.target.value)}
                     className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-amber-400"
                   />
                 </div>
 
-                {/* All Users List */}
-                <div className="space-y-2 max-h-[340px] overflow-y-auto pr-1">
+                {/* All Users List with Full Performance Badges */}
+                <div className="space-y-2 max-h-[380px] overflow-y-auto pr-1">
                   {allUsers
                     .filter((u) => {
+                      const upCount = Object.values(u.upgrades || {}).filter((lvl) => Number(lvl) > 0).length;
+                      const isActive =
+                        (u.totalTaps || 0) > 0 ||
+                        (u.profitPerHour || 0) > 0 ||
+                        upCount > 0 ||
+                        (u.balance || 0) > 5000;
+
+                      if (userActivityFilter === 'active' && !isActive) return false;
+                      if (userActivityFilter === 'inactive' && isActive) return false;
+                      if (userActivityFilter === 'referrals' && !(u.referralCount && u.referralCount > 0)) return false;
+
                       if (!userSearch.trim()) return true;
                       const q = userSearch.toLowerCase();
                       return (
                         (u.username || '').toLowerCase().includes(q) ||
                         (u.displayName || '').toLowerCase().includes(q) ||
                         (u.id || '').toLowerCase().includes(q) ||
+                        String(u.telegramId || '').toLowerCase().includes(q) ||
+                        (u.referralCode || '').toLowerCase().includes(q) ||
                         (u.email || '').toLowerCase().includes(q)
                       );
                     })
-                    .map((u) => {
+                    .map((u, idx) => {
                       const isSelected = u.id === (selectedUserId || allUsers[0]?.id);
                       const isCurrentPlayer = u.id === user?.id;
+                      const upCount = Object.values(u.upgrades || {}).filter((lvl) => Number(lvl) > 0).length;
+                      const isActive =
+                        (u.totalTaps || 0) > 0 ||
+                        (u.profitPerHour || 0) > 0 ||
+                        upCount > 0 ||
+                        (u.balance || 0) > 5000;
+
                       return (
                         <div
                           key={u.id}
                           onClick={() => setSelectedUserId(u.id)}
-                          className={`p-3 rounded-2xl border transition cursor-pointer flex items-center justify-between gap-2 ${
+                          className={`p-3 rounded-2xl border transition cursor-pointer space-y-1.5 ${
                             isSelected
                               ? 'bg-amber-500/15 border-amber-500/60 shadow-md'
                               : 'bg-slate-900/80 border-slate-800 hover:border-slate-700'
                           }`}
                         >
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-1.5">
-                              <span className="font-extrabold text-xs text-white truncate">
-                                {u.displayName || u.username}
-                              </span>
-                              {isCurrentPlayer && (
-                                <span className="px-1.5 py-0.2 bg-sky-500/20 text-sky-300 border border-sky-500/30 text-[9px] font-black rounded">
-                                  YOU
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className="text-[10px] font-black text-amber-400">#{idx + 1}</span>
+                                <span className="font-extrabold text-xs text-white truncate">
+                                  {u.displayName || u.username}
                                 </span>
-                              )}
-                              {u.isTelegram && (
-                                <span className="px-1.5 py-0.2 bg-blue-500/20 text-blue-300 text-[9px] font-bold rounded">
-                                  TG
+                                {isCurrentPlayer && (
+                                  <span className="px-1.5 py-0.2 bg-sky-500/20 text-sky-300 border border-sky-500/30 text-[9px] font-black rounded">
+                                    YOU
+                                  </span>
+                                )}
+                                {u.isTelegram && (
+                                  <span className="px-1.5 py-0.2 bg-blue-500/20 text-blue-300 text-[9px] font-bold rounded">
+                                    TG
+                                  </span>
+                                )}
+                                <span
+                                  className={`px-1.5 py-0.2 rounded text-[8px] font-bold ${
+                                    isActive
+                                      ? 'bg-emerald-500/20 text-emerald-300'
+                                      : 'bg-slate-800 text-slate-400'
+                                  }`}
+                                >
+                                  {isActive ? 'فعال' : 'غیرفعال'}
                                 </span>
-                              )}
+                              </div>
+                              <div className="text-[10px] text-slate-400 font-mono truncate">
+                                @{u.username} • {u.id} • Lvl {u.level} ({u.levelName})
+                              </div>
                             </div>
-                            <div className="text-[10px] text-slate-400 font-mono truncate">
-                              @{u.username} • {u.id} • Lvl {u.level}
+
+                            <div className="text-right shrink-0">
+                              <div className="text-xs font-black text-amber-400">
+                                {Math.floor(u.balance || 0).toLocaleString('en-US')} FOX
+                              </div>
+                              <div className="text-[10px] text-emerald-400 font-semibold">
+                                دعوت: {u.referralCount || 0} نفر ({Math.floor(u.referralEarnings || 0).toLocaleString('en-US')} FOX)
+                              </div>
                             </div>
                           </div>
 
-                          <div className="text-right shrink-0">
-                            <div className="text-xs font-black text-amber-400">
-                              {Math.floor(u.balance).toLocaleString('en-US')} FOX
+                          {/* Compact Performance Row for Every User */}
+                          <div className="grid grid-cols-4 gap-1 pt-1 border-t border-slate-800/80 text-[9px] text-slate-300 text-center">
+                            <div className="bg-slate-950/60 rounded px-1 py-0.5">
+                              ⚡ سود/ساعت: <b className="text-sky-300">+{Math.floor(u.profitPerHour || 0).toLocaleString('en-US')}</b>
                             </div>
-                            <div className="text-[10px] text-emerald-400 font-semibold">
-                              Ref: {Math.floor(u.referralEarnings || 0).toLocaleString('en-US')}
+                            <div className="bg-slate-950/60 rounded px-1 py-0.5">
+                              👆 تپ‌ها: <b className="text-purple-300">{Math.floor(u.totalTaps || 0).toLocaleString('en-US')}</b>
+                            </div>
+                            <div className="bg-slate-950/60 rounded px-1 py-0.5">
+                              🃏 کارت‌ها: <b className="text-orange-300">{upCount}</b>
+                            </div>
+                            <div className="bg-slate-950/60 rounded px-1 py-0.5">
+                              🔥 استریک: <b className="text-amber-300">{u.dailyStreak || 0} روز</b>
                             </div>
                           </div>
                         </div>

@@ -2,9 +2,14 @@ name = "fox-coin"
 main = "functions/api/[[route]].ts"
 compatibility_date = "2024-09-23"
 compatibility_flags = ["nodejs_compat"]
+keep_vars = true
 
 [assets]
 directory = "./dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
 run_worker_first = ["/api/*"]
+
+[vars]
+TELEGRAM_BOT_USERNAME = "FOX_COINlBOT"
+
