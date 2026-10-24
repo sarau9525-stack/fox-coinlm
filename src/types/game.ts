@@ -47,6 +47,20 @@ export interface LuckyWheelPrize {
   rarity: 'common' | 'rare' | 'epic' | 'jackpot';
 }
 
+export interface InvitedFriendInfo {
+  id: string;
+  username: string;
+  displayName: string;
+  level: number;
+  levelName: string;
+  balance: number;
+  profitPerHour: number;
+  isTelegram: boolean;
+  rewardEarned: number;
+  joinedAt: number;
+  isActive?: boolean;
+}
+
 export interface UserGameState {
   id: string;
   username: string;
@@ -86,9 +100,12 @@ export interface UserGameState {
   tasks: Record<string, { progress: number; completed: boolean; claimed: boolean }>;
 
   referralCode: string;
+  referredByCode?: string;
   referralCount: number;
   referralEarnings: number;
   claimedMilestones?: number; // Count of 10-friend milestones claimed (10,000 FOX per milestone)
+  invitedUserIds?: string[];
+  invitedFriends?: InvitedFriendInfo[];
 
   hasJoinedChannel?: boolean;
   channelVerifiedAt?: number;

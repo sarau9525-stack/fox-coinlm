@@ -1219,6 +1219,75 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                           </div>
                         )}
 
+                        {/* User's Invited Friends List (زیرمجموعه‌های دعوت‌شده توسط این کاربر) */}
+                        {(() => {
+                          const targetCode = (targetUser.referralCode || '').toUpperCase();
+                          const targetInvitedIds = new Set<string>(
+                            Array.isArray(targetUser.invitedUserIds) ? targetUser.invitedUserIds : []
+                          );
+                          const invitedList =
+                            Array.isArray(targetUser.invitedFriends) && targetUser.invitedFriends.length > 0
+                              ? targetUser.invitedFriends
+                              : allUsers
+                                  .filter(
+                                    (u) =>
+                                      u.id !== targetUser.id &&
+                                      !u.id.startsWith('bot_') &&
+                                      (targetInvitedIds.has(u.id) ||
+                                        (targetCode && (u.referredByCode || '').toUpperCase() === targetCode))
+                                  )
+                                  .map((u) => ({
+                                    id: u.id,
+                                    username: u.username,
+                                    displayName: u.displayName || u.username,
+                                    level: u.level || 1,
+                                    levelName: u.levelName || 'Bronze Fox',
+                                    balance: Math.floor(u.balance || 0),
+                                    profitPerHour: Math.floor(u.profitPerHour || 0),
+                                    isTelegram: Boolean(u.isTelegram),
+                                    rewardEarned: 5000,
+                                    joinedAt: u.createdAt || Date.now(),
+                                  }));
+
+                          return (
+                            <div className="p-2.5 rounded-xl bg-slate-950/75 border border-emerald-500/30 space-y-1.5">
+                              <div className="flex items-center justify-between">
+                                <span className="text-[10px] font-black text-emerald-300">
+                                  👥 لیست دعوت‌شده‌های این کاربر ({invitedList.length} نفر ثبت‌شده):
+                                </span>
+                                {targetUser.referredByCode && (
+                                  <span className="text-[9px] font-mono text-amber-300 bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/30">
+                                    دعوت‌شده با کد: {targetUser.referredByCode}
+                                  </span>
+                                )}
+                              </div>
+                              {invitedList.length > 0 ? (
+                                <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto">
+                                  {invitedList.map((inv, idx) => (
+                                    <button
+                                      key={inv.id || idx}
+                                      type="button"
+                                      onClick={() => setSelectedUserId(inv.id)}
+                                      className="px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-[10px] text-slate-200 flex items-center gap-1 transition cursor-pointer"
+                                    >
+                                      <span className="text-amber-400 font-black">#{idx + 1}</span>
+                                      <span className="font-bold">{inv.displayName || inv.username}</span>
+                                      <span className="text-slate-400 font-mono">(@{inv.username})</span>
+                                      <span className="text-emerald-400 font-bold">
+                                        • {Math.floor(inv.balance || 0).toLocaleString('en-US')} FOX
+                                      </span>
+                                    </button>
+                                  ))}
+                                </div>
+                              ) : (
+                                <span className="text-[10px] text-slate-400 block">
+                                  هنوز هیچ کاربری با لینک دعوت این شخص ثبت‌نام نکرده است.
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })()}
+
                         {/* User's Direct Referral Link with FOX_COINlBOT */}
                         <div className="p-2 rounded-xl bg-slate-950/80 border border-slate-800 flex items-center justify-between gap-2" dir="ltr">
                           <div className="min-w-0 flex-1">

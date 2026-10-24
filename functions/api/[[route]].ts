@@ -18,6 +18,7 @@ import {
 } from '../../server/gameConfig.js';
 import {
   UserGameState,
+  InvitedFriendInfo,
   LeaderboardEntry,
   TradeOrder,
   UpgradeDefinition,
@@ -328,6 +329,14 @@ function mapD1RowToUser(r: any): UserGameState {
   const todayStr = new Date().toISOString().split('T')[0];
   const lastDaily = r.last_daily_claim_date ? String(r.last_daily_claim_date) : null;
   const userId = String(r.id);
+  const referredByCode = r.referred_by_code
+    ? String(r.referred_by_code)
+    : boosters?.referredByCode
+    ? String(boosters.referredByCode)
+    : undefined;
+  const invitedUserIds: string[] = Array.isArray(boosters?.invitedUserIds)
+    ? Array.from(new Set(boosters.invitedUserIds.map(String)))
+    : [];
 
   const u: UserGameState = {
     id: userId,
@@ -361,19 +370,22 @@ function mapD1RowToUser(r: any): UserGameState {
     dailyRewardDays: DAILY_REWARDS,
     tasks,
     referralCode: String(r.referral_code || makeDeterministicReferralCode(userId)),
-    referralCount: Number(r.referral_count || 0),
-    referralEarnings: Number(r.referral_earnings || 0),
+    referredByCode,
+    referralCount: Math.max(Number(r.referral_count || 0), invitedUserIds.length),
+    referralEarnings: Math.max(Number(r.referral_earnings || 0), invitedUserIds.length * 5000),
     claimedMilestones: Number(r.claimed_milestones || 0),
+    invitedUserIds,
     hasJoinedChannel: Boolean(boosters?.hasJoinedChannel),
     channelVerifiedAt: boosters?.channelVerifiedAt ? Number(boosters.channelVerifiedAt) : undefined,
-    boosters,
+    boosters: {
+      ...boosters,
+      referredByCode,
+      invitedUserIds,
+    },
     createdAt: Number(r.created_at || Date.now()),
   };
   if (boosters?.lastEnergyTimestamp) {
     (u as any).lastEnergyTimestamp = Number(boosters.lastEnergyTimestamp);
-  }
-  if (r.referred_by_code && !boosters.referredByCode) {
-    (u.boosters as any).referredByCode = String(r.referred_by_code);
   }
   return u;
 }
@@ -416,8 +428,19 @@ function mergeUserProgress(base: UserGameState, incoming?: Partial<UserGameState
   };
   const incBoosters: any = incoming.boosters || {};
   const invitedUserIds = Array.from(
-    new Set([...(Array.isArray(baseBoosters.invitedUserIds) ? baseBoosters.invitedUserIds : []), ...(Array.isArray(incBoosters.invitedUserIds) ? incBoosters.invitedUserIds : [])])
+    new Set([
+      ...(Array.isArray(base.invitedUserIds) ? base.invitedUserIds : []),
+      ...(Array.isArray(incoming.invitedUserIds) ? incoming.invitedUserIds : []),
+      ...(Array.isArray(baseBoosters.invitedUserIds) ? baseBoosters.invitedUserIds : []),
+      ...(Array.isArray(incBoosters.invitedUserIds) ? incBoosters.invitedUserIds : []),
+    ])
   );
+  const referredByCode =
+    base.referredByCode ||
+    incoming.referredByCode ||
+    baseBoosters.referredByCode ||
+    incBoosters.referredByCode ||
+    undefined;
 
   const mergedBoosters: any = {
     ...baseBoosters,
@@ -434,7 +457,7 @@ function mergeUserProgress(base: UserGameState, incoming?: Partial<UserGameState
       Number(baseBoosters.turboActiveUntil || 0),
       Number(incBoosters.turboActiveUntil || 0)
     ),
-    referredByCode: baseBoosters.referredByCode || incBoosters.referredByCode || undefined,
+    referredByCode,
     invitedUserIds,
     hasJoinedChannel: Boolean(base.hasJoinedChannel || incoming.hasJoinedChannel || baseBoosters.hasJoinedChannel || incBoosters.hasJoinedChannel),
     channelVerifiedAt:
@@ -491,9 +514,11 @@ function mergeUserProgress(base: UserGameState, incoming?: Partial<UserGameState
     lastDailyClaimDate: incoming.lastDailyClaimDate || base.lastDailyClaimDate || null,
     tasks: mergedTasks,
     referralCode: base.referralCode || incoming.referralCode || makeDeterministicReferralCode(base.id),
+    referredByCode,
     referralCount: effectiveReferralCount,
     referralEarnings: effectiveReferralEarnings,
     claimedMilestones: Math.max(Number(base.claimedMilestones || 0), Number(incoming.claimedMilestones || 0)),
+    invitedUserIds,
     hasJoinedChannel: mergedBoosters.hasJoinedChannel,
     channelVerifiedAt: mergedBoosters.channelVerifiedAt,
     boosters: mergedBoosters,
@@ -575,8 +600,18 @@ async function persistUserToD1(db: any, user: UserGameState): Promise<boolean> {
   const effectiveKv = resolveKVBinding(currentEdgeEnv);
 
   // Store extended metadata inside boosters_json so every field is preserved in SQLite
+  const invitedUserIds = Array.from(
+    new Set([
+      ...(Array.isArray(user.invitedUserIds) ? user.invitedUserIds : []),
+      ...(Array.isArray((user as any).invitedUserIds) ? (user as any).invitedUserIds : []),
+      ...(Array.isArray((user.boosters as any)?.invitedUserIds) ? (user.boosters as any).invitedUserIds : []),
+    ])
+  );
+  const referredByCode = user.referredByCode || (user.boosters as any)?.referredByCode || null;
   const enrichedBoosters = {
     ...(user.boosters || {}),
+    referredByCode: referredByCode || undefined,
+    invitedUserIds,
     hasJoinedChannel: Boolean(user.hasJoinedChannel),
     channelVerifiedAt: user.channelVerifiedAt || undefined,
     lastEnergyTimestamp: (user as any).lastEnergyTimestamp || Date.now(),
@@ -598,7 +633,6 @@ async function persistUserToD1(db: any, user: UserGameState): Promise<boolean> {
   if (!effectiveDb) return false;
   try {
     await ensureD1Schema(effectiveDb);
-    const referredByCode = (user.boosters as any)?.referredByCode || null;
     await effectiveDb
       .prepare(
         `INSERT INTO users (
@@ -822,25 +856,119 @@ function verifyToken(token: string, secret: string = 'fox_coin_secret_key_8899')
   }
 }
 
+function buildInvitedFriendsForUser(inviter: UserGameState): InvitedFriendInfo[] {
+  if (!inviter || !inviter.id) return [];
+  const inviterCode = (inviter.referralCode || makeDeterministicReferralCode(inviter.id)).toUpperCase();
+  const knownInvitedIds = new Set<string>([
+    ...(Array.isArray(inviter.invitedUserIds) ? inviter.invitedUserIds : []),
+    ...(Array.isArray((inviter as any).invitedUserIds) ? (inviter as any).invitedUserIds : []),
+    ...(Array.isArray((inviter.boosters as any)?.invitedUserIds) ? (inviter.boosters as any).invitedUserIds : []),
+  ]);
+
+  const friends: InvitedFriendInfo[] = [];
+  for (const [uid, candidate] of edgeUsers.entries()) {
+    if (!candidate || uid === inviter.id || uid.startsWith('bot_') || uid.startsWith('seed_')) continue;
+    const candRefBy = (candidate.referredByCode || (candidate.boosters as any)?.referredByCode || '').toUpperCase();
+    if (knownInvitedIds.has(uid) || (candRefBy && candRefBy === inviterCode)) {
+      knownInvitedIds.add(uid);
+      if (!candidate.referredByCode) {
+        candidate.referredByCode = inviter.referralCode;
+        if (candidate.boosters) (candidate.boosters as any).referredByCode = inviter.referralCode;
+      }
+      const isActive =
+        (candidate.totalTaps || 0) > 0 ||
+        (candidate.profitPerHour || 0) > 0 ||
+        Object.keys(candidate.upgrades || {}).length > 0 ||
+        (candidate.balance || 0) > 5000;
+
+      friends.push({
+        id: candidate.id,
+        username: candidate.username || 'FoxPlayer',
+        displayName: candidate.displayName || candidate.username || 'FoxPlayer',
+        level: candidate.level || 1,
+        levelName: candidate.levelName || 'Bronze Fox',
+        balance: Math.floor(candidate.balance || 0),
+        profitPerHour: Math.floor(candidate.profitPerHour || 0),
+        isTelegram: Boolean(candidate.isTelegram),
+        rewardEarned: 5000,
+        joinedAt: candidate.createdAt || Date.now(),
+        isActive,
+      });
+    }
+  }
+
+  friends.sort((a, b) => (b.joinedAt || 0) - (a.joinedAt || 0));
+  const mergedIds = Array.from(knownInvitedIds);
+  inviter.invitedUserIds = mergedIds;
+  if (inviter.boosters) {
+    (inviter.boosters as any).invitedUserIds = mergedIds;
+  }
+  inviter.invitedFriends = friends;
+  if (friends.length > (inviter.referralCount || 0)) {
+    inviter.referralCount = friends.length;
+  }
+  if ((inviter.referralCount || 0) * 5000 > (inviter.referralEarnings || 0)) {
+    inviter.referralEarnings = (inviter.referralCount || 0) * 5000;
+  }
+  return friends;
+}
+
 async function creditInviterForReferral(db: any, newUserId: string, refCode?: string): Promise<boolean> {
-  if (!refCode) return false;
+  if (!refCode || !newUserId) return false;
   const cleanRef = refCode.replace(/^ref_/i, '').trim().toUpperCase();
   if (!cleanRef) return false;
 
+  const newUser = edgeUsers.get(newUserId);
+  if (newUser?.referredByCode) {
+    return false;
+  }
+
   for (const [uid, existing] of edgeUsers.entries()) {
-    if (uid === newUserId) continue;
+    if (uid === newUserId || uid.startsWith('bot_') || uid.startsWith('seed_')) continue;
     const existingCode = (existing.referralCode || makeDeterministicReferralCode(uid)).toUpperCase();
     if (existingCode === cleanRef || uid.toUpperCase() === cleanRef) {
-      const invitedList: string[] = Array.isArray((existing as any).invitedUserIds) ? (existing as any).invitedUserIds : [];
+      const invitedList = Array.from(
+        new Set([
+          ...(Array.isArray(existing.invitedUserIds) ? existing.invitedUserIds : []),
+          ...(Array.isArray((existing as any).invitedUserIds) ? (existing as any).invitedUserIds : []),
+          ...(Array.isArray((existing.boosters as any)?.invitedUserIds) ? (existing.boosters as any).invitedUserIds : []),
+        ])
+      );
       if (invitedList.includes(newUserId)) {
+        if (newUser && !newUser.referredByCode) {
+          newUser.referredByCode = existing.referralCode;
+          if (newUser.boosters) (newUser.boosters as any).referredByCode = existing.referralCode;
+          await persistUserToD1(db, newUser);
+        }
+        buildInvitedFriendsForUser(existing);
         return false;
       }
+
       invitedList.push(newUserId);
-      (existing as any).invitedUserIds = invitedList;
+      existing.invitedUserIds = invitedList;
+      if (existing.boosters) {
+        (existing.boosters as any).invitedUserIds = invitedList;
+      }
       existing.referralCount = Math.max((existing.referralCount || 0) + 1, invitedList.length);
-      existing.referralEarnings = (existing.referralEarnings || 0) + 5000;
+      existing.referralEarnings = Math.max((existing.referralEarnings || 0) + 5000, existing.referralCount * 5000);
       existing.balance = (existing.balance || 0) + 5000;
       existing.totalEarned = (existing.totalEarned || 0) + 5000;
+
+      if (newUser) {
+        newUser.referredByCode = existing.referralCode;
+        if (newUser.boosters) {
+          (newUser.boosters as any).referredByCode = existing.referralCode;
+          if (!(newUser.boosters as any).welcomeRefBonusClaimed) {
+            (newUser.boosters as any).welcomeRefBonusClaimed = true;
+            newUser.balance = (newUser.balance || 5000) + 5000;
+            newUser.totalEarned = (newUser.totalEarned || 5000) + 5000;
+          }
+        }
+        edgeUsers.set(newUserId, newUser);
+        await persistUserToD1(db, newUser);
+      }
+
+      buildInvitedFriendsForUser(existing);
       edgeUsers.set(uid, existing);
       await persistUserToD1(db, existing);
       return true;
@@ -853,11 +981,6 @@ function createNewUserRecord(id: string, username: string, isTelegram: boolean, 
   const now = Date.now();
   const level1 = PLAYER_LEVELS[0];
   const level2 = PLAYER_LEVELS[1] || level1;
-
-  // Credit inviter if refCode passed
-  if (refCode) {
-    creditInviterForReferral(resolveD1Binding(currentEdgeEnv), id, refCode).catch(() => {});
-  }
 
   const u: UserGameState = {
     id,
@@ -1018,6 +1141,7 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
     const todayStr = new Date(now).toISOString().split('T')[0];
     user.canClaimDaily = user.lastDailyClaimDate !== todayStr;
 
+    buildInvitedFriendsForUser(user);
     reconcileUserLevel(user, edgeUpgrades);
 
     return user;
@@ -1837,6 +1961,25 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
     return jsonResponse({ user, prize, prizeIndex });
   }
 
+  // Get Current User's Invited Friends List (Real-time from D1 / Edge)
+  if (pathname === '/api/friends/list' && method === 'GET') {
+    await hydrateEdgeUsers(env, true);
+    const user = getAuthUser();
+    if (!user) return jsonResponse({ error: 'Unauthorized' }, 401);
+
+    const friends = buildInvitedFriendsForUser(user);
+    refreshEdgeUserState(user);
+    edgeUsers.set(user.id, user);
+    await persistUserToD1(env.DB, user);
+
+    return jsonResponse({
+      friends,
+      referralCount: user.referralCount || friends.length,
+      referralEarnings: user.referralEarnings || friends.length * 5000,
+      user,
+    });
+  }
+
   // 10-Friends Milestone Claim: 10 friends = 10,000 FOX ($10 USD)
   if (pathname === '/api/friends/claim-milestone' && method === 'POST') {
     const user = getAuthUser();
@@ -2542,12 +2685,14 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
         d1UsersCount = Number(countRow?.cnt || 0);
       } catch {}
     }
-    const list = Array.from(edgeUsers.values()).sort((a, b) => {
-      const aBot = a.id.startsWith('bot_');
-      const bBot = b.id.startsWith('bot_');
-      if (aBot !== bBot) return aBot ? 1 : -1;
-      return b.balance - a.balance;
-    });
+    const list = Array.from(edgeUsers.values())
+      .map((u) => refreshEdgeUserState(u))
+      .sort((a, b) => {
+        const aBot = a.id.startsWith('bot_');
+        const bBot = b.id.startsWith('bot_');
+        if (aBot !== bBot) return aBot ? 1 : -1;
+        return b.balance - a.balance;
+      });
     return jsonResponse({
       users: list,
       storage: {

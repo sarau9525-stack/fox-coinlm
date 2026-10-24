@@ -261,6 +261,9 @@ app.post('/api/auth/telegram', (req, res) => {
       isTelegram: true,
       referredByCode: effectiveRefCode,
     });
+  } else if (effectiveRefCode && !user.referredByCode) {
+    db.creditReferralByCode(user.id, effectiveRefCode);
+    user = db.getUserById(user.id) || user;
   }
 
   const token = createToken(user.id);
@@ -637,6 +640,21 @@ app.get('/api/game/leaderboard', requireAuth, (req: AuthenticatedRequest, res) =
   const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 50;
   const data = db.getLeaderboard(limit, req.userId);
   res.json(data);
+});
+
+// Get Current User's Invited Friends List
+app.get('/api/friends/list', requireAuth, (req: AuthenticatedRequest, res) => {
+  const user = db.getUserById(req.userId!);
+  if (!user) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+  const friends = db.getInvitedFriends(req.userId!);
+  res.json({
+    friends,
+    referralCount: user.referralCount || friends.length,
+    referralEarnings: user.referralEarnings || friends.length * 5000,
+    user,
+  });
 });
 
 // Claim 10-Friend Milestone Reward (+10,000 FOX / $10 USD)

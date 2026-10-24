@@ -528,6 +528,9 @@ export async function processTelegramWebhookUpdate(
         isTelegram: true,
         referredByCode: refCode || undefined,
       });
+    } else if (tgDbUser && refCode && !tgDbUser.referredByCode) {
+      db.creditReferralByCode(tgDbUser.id, refCode);
+      tgDbUser = db.getUserById(tgDbUser.id) || tgDbUser;
     }
 
     let botUsername = db.getBotConfig().botUsername?.replace(/^@/, '').trim();

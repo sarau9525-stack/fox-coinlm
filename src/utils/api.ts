@@ -1,4 +1,4 @@
-import { UserGameState, LeaderboardEntry, UpgradeDefinition, TaskDefinition, DailyRewardDay, TradeOrder, LuckyWheelPrize } from '../types/game.js';
+import { UserGameState, InvitedFriendInfo, LeaderboardEntry, UpgradeDefinition, TaskDefinition, DailyRewardDay, TradeOrder, LuckyWheelPrize } from '../types/game.js';
 import { UPGRADES, PLAYER_LEVELS, TASKS, DAILY_REWARDS, GAME_CONSTANTS, LUCKY_WHEEL_PRIZES, pickLuckyWheelPrize, reconcileUserLevel, getUpgradeXpBonus, sanitizeWheelPrize, sanitizeUpgrade } from '../../server/gameConfig.js';
 import { TelegramService, TelegramInvoiceStatus } from './telegram.js';
 
@@ -1323,6 +1323,44 @@ class ApiService {
     }
   }
 
+  public async getInvitedFriends(): Promise<{
+    friends: InvitedFriendInfo[];
+    referralCount: number;
+    referralEarnings: number;
+    user?: UserGameState;
+  }> {
+    try {
+      const res = await this.request<{
+        friends: InvitedFriendInfo[];
+        referralCount: number;
+        referralEarnings: number;
+        user?: UserGameState;
+      }>('/api/friends/list');
+      if (res.user) {
+        const merged = this.reconcileWithLocalOffline(res.user);
+        merged.invitedFriends = res.friends || merged.invitedFriends || [];
+        this.saveLocalUser(merged);
+        if (this.onStateUpdated && !this.hasPendingTaps()) {
+          this.onStateUpdated(merged);
+        }
+      }
+      return {
+        friends: res.friends || [],
+        referralCount: res.referralCount ?? (res.friends?.length || 0),
+        referralEarnings: res.referralEarnings ?? (res.friends?.length || 0) * 5000,
+        user: res.user,
+      };
+    } catch {
+      const localUser = this.getLocalUser();
+      return {
+        friends: localUser.invitedFriends || [],
+        referralCount: localUser.referralCount || 0,
+        referralEarnings: localUser.referralEarnings || 0,
+        user: localUser,
+      };
+    }
+  }
+
   public async claimMilestone(): Promise<{ user: UserGameState; claimedCount: number; bonus: number }> {
     try {
       const res = await this.request<{ user: UserGameState; claimedCount: number; bonus: number }>('/api/friends/claim-milestone', {
@@ -1494,7 +1532,7 @@ class ApiService {
           maskedToken: parsed.maskedToken || null,
           webhookUrl: parsed.webhookUrl || `${origin}/api/telegram/webhook`,
           suggestedWebhookUrl: `${origin}/api/telegram/webhook`,
-          botUsername: parsed.botUsername || 'FOXCOINBot',
+          botUsername: parsed.botUsername || 'FOX_COINlBOT',
           botFirstName: parsed.botFirstName || 'FOXCOIN',
           isConfigured: Boolean(parsed.isConfigured),
           lastWebhookSetupDate: parsed.lastWebhookSetupDate,

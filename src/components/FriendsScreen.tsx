@@ -13,8 +13,9 @@ import {
   CheckCircle2,
   Trophy,
   Target,
+  RefreshCw,
 } from 'lucide-react';
-import { UserGameState } from '../types/game.js';
+import { UserGameState, InvitedFriendInfo } from '../types/game.js';
 import { TelegramService } from '../utils/telegram.js';
 import { sound } from '../utils/audio.js';
 import { foxGoldCoinImg } from '../assets/assets.js';
@@ -116,6 +117,33 @@ export const FriendsScreen: React.FC<FriendsScreenProps> = ({
   const [botInput, setBotInput] = useState<string>('');
   const [isSavingBot, setIsSavingBot] = useState<boolean>(false);
   const [botSaveMessage, setBotSaveMessage] = useState<string | null>(null);
+  const [invitedFriends, setInvitedFriends] = useState<InvitedFriendInfo[]>(
+    () => user.invitedFriends || []
+  );
+  const [isLoadingFriends, setIsLoadingFriends] = useState<boolean>(false);
+
+  const loadInvitedFriends = React.useCallback(async () => {
+    try {
+      setIsLoadingFriends(true);
+      const res = await api.getInvitedFriends();
+      if (Array.isArray(res.friends)) {
+        setInvitedFriends(res.friends);
+      }
+    } catch {
+      if (user.invitedFriends) {
+        setInvitedFriends(user.invitedFriends);
+      }
+    } finally {
+      setIsLoadingFriends(false);
+    }
+  }, [user.invitedFriends]);
+
+  React.useEffect(() => {
+    if (Array.isArray(user.invitedFriends) && user.invitedFriends.length > 0) {
+      setInvitedFriends(user.invitedFriends);
+    }
+    loadInvitedFriends();
+  }, [user.id, user.referralCount, loadInvitedFriends]);
 
   React.useEffect(() => {
     let mounted = true;
@@ -199,7 +227,7 @@ export const FriendsScreen: React.FC<FriendsScreenProps> = ({
   );
 
   // Generate deep link matching active Telegram bot
-  const cleanBot = (activeBotUsername || botUsername || 'FOXCOINBot').replace(/^@/, '').trim();
+  const cleanBot = (activeBotUsername || botUsername || 'FOX_COINlBOT').replace(/^@/, '').trim() || 'FOX_COINlBOT';
   const tgDeepLink = `https://t.me/${cleanBot}?start=ref_${user.referralCode}`;
 
   const shareText = `🦊 Join FOXCOIN with me! Tap to earn FOX, trade for real USDT on the exchange, and get a +5,000 FOX starter gift! 💰🔥`;
@@ -445,6 +473,115 @@ export const FriendsScreen: React.FC<FriendsScreenProps> = ({
             </div>
           </div>
         </div>
+      </div>
+
+      {/* YOUR INVITED FRIENDS LIST (لیست دعوتی‌های ثبت‌شده شما) */}
+      <div className="w-full bg-slate-900/95 border border-emerald-500/40 rounded-3xl p-4 mb-5 shadow-xl">
+        <div className="flex items-center justify-between gap-2 mb-3">
+          <div className="flex items-center gap-2">
+            <div className="w-9 h-9 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center shrink-0">
+              <Users className="w-4 h-4 text-emerald-400" />
+            </div>
+            <div>
+              <h4 className="text-sm font-black text-white flex items-center gap-1.5">
+                <span>لیست دعوت‌شده‌های شما (Your Referrals)</span>
+              </h4>
+              <p className="text-[11px] text-slate-400">
+                کاربرانی که با لینک شما در <span className="text-amber-300 font-mono">@{cleanBot}</span> ثبت شده‌اند
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              sound.playTap();
+              loadInvitedFriends();
+            }}
+            disabled={isLoadingFriends}
+            className="px-2.5 py-1.5 rounded-xl bg-slate-800/90 hover:bg-slate-700 border border-slate-700 text-xs font-bold text-emerald-300 flex items-center gap-1.5 transition active:scale-95 cursor-pointer shrink-0"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isLoadingFriends ? 'animate-spin' : ''}`} />
+            <span>{invitedFriends.length || currentCount} نفر</span>
+          </button>
+        </div>
+
+        {invitedFriends.length > 0 ? (
+          <div className="space-y-2 max-h-72 overflow-y-auto pr-0.5">
+            {invitedFriends.map((friend, idx) => (
+              <div
+                key={friend.id || idx}
+                className="p-3 rounded-2xl bg-slate-950/90 border border-slate-800/90 flex items-center justify-between gap-2.5"
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-amber-500/20 to-emerald-500/20 border border-amber-500/30 flex items-center justify-center font-black text-xs text-amber-300 shrink-0">
+                    #{idx + 1}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="font-black text-xs text-white truncate">
+                        {friend.displayName || friend.username}
+                      </span>
+                      <span className="text-[10px] font-mono text-slate-400 truncate">
+                        @{friend.username}
+                      </span>
+                      <span
+                        className={`px-1.5 py-0.5 rounded-md text-[9px] font-bold ${
+                          friend.isActive
+                            ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
+                            : 'bg-slate-800 text-slate-400'
+                        }`}
+                      >
+                        {friend.isActive ? '🟢 فعال' : '⚪ ثبت‌شده'}
+                      </span>
+                    </div>
+                    <div className="text-[10px] text-slate-400 mt-0.5 flex items-center gap-2 flex-wrap">
+                      <span>
+                        Lvl {friend.level || 1} ({friend.levelName || 'Bronze Fox'})
+                      </span>
+                      <span>•</span>
+                      <span className="text-amber-300 font-bold tabular-nums">
+                        {Math.floor(friend.balance || 0).toLocaleString('en-US')} FOX
+                      </span>
+                      {friend.joinedAt ? (
+                        <>
+                          <span>•</span>
+                          <span>{new Date(friend.joinedAt).toLocaleDateString('fa-IR')}</span>
+                        </>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="text-right shrink-0">
+                  <div className="flex items-center justify-end gap-1 text-xs font-black text-emerald-400 tabular-nums bg-emerald-500/10 border border-emerald-500/30 px-2 py-1 rounded-xl">
+                    <img src={foxGoldCoinImg} alt="FOX" className="w-3.5 h-3.5" />
+                    <span>+{(friend.rewardEarned || 5000).toLocaleString('en-US')}</span>
+                  </div>
+                  <span className="text-[9px] text-slate-400 font-semibold block mt-0.5">
+                    پاداش دعوت ثبت شد
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="p-4 rounded-2xl bg-slate-950/80 border border-slate-800/90 text-center space-y-2" dir="rtl">
+            <p className="text-xs font-bold text-slate-200">
+              {currentCount > 0
+                ? `شما تاکنون ${currentCount} دعوت ثبت‌شده دارید. برای همگام‌سازی جزئیات روی دکمه بروزرسانی بالا بزنید.`
+                : 'هنوز دوستی با لینک دعوت شما وارد ربات نشده است.'}
+            </p>
+            <p className="text-[11px] text-slate-400 leading-relaxed">
+              به محض اینکه دوستانتان از طریق لینک اختصاصی شما وارد ربات{' '}
+              <span className="text-amber-300 font-mono font-bold" dir="ltr">
+                @{cleanBot}
+              </span>{' '}
+              شوند و استارت بزنند، نام و مشخصات آن‌ها به صورت خودکار در این لیست برای شما ثبت و نمایش داده می‌شود و{' '}
+              <b className="text-emerald-400">+5,000 FOX</b> دریافت می‌کنید!
+            </p>
+          </div>
+        )}
       </div>
 
       {/* TIERED MILESTONE PROGRESS ROADMAP */}

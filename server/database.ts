@@ -3,6 +3,7 @@ import path from 'path';
 import crypto from 'crypto';
 import {
   UserGameState,
+  InvitedFriendInfo,
   LeaderboardEntry,
   PlayerLevel,
   UpgradeDefinition,
@@ -266,7 +267,16 @@ class DatabaseStore {
     const todayStr = new Date(now).toISOString().split('T')[0];
     user.canClaimDaily = user.lastDailyClaimDate !== todayStr;
 
-    // 4. Update Level (including upgrade progression value)
+    // 4. Reconcile invited friends list
+    user.invitedFriends = this.getInvitedFriends(user.id);
+    if (user.invitedFriends.length > (user.referralCount || 0)) {
+      user.referralCount = user.invitedFriends.length;
+    }
+    if ((user.referralCount || 0) * GAME_CONSTANTS.REFERRAL_INVITER_BONUS > (user.referralEarnings || 0)) {
+      user.referralEarnings = (user.referralCount || 0) * GAME_CONSTANTS.REFERRAL_INVITER_BONUS;
+    }
+
+    // 5. Update Level (including upgrade progression value)
     reconcileUserLevel(user, this.getUpgrades());
 
     if (user.level >= 2) {
@@ -277,6 +287,91 @@ class DatabaseStore {
     }
 
     return user;
+  }
+
+  public getInvitedFriends(userId: string): InvitedFriendInfo[] {
+    const inviter = this.data.users[userId];
+    if (!inviter) return [];
+    const inviterCode = (inviter.referralCode || '').toUpperCase();
+    const knownIds = new Set<string>(Array.isArray(inviter.invitedUserIds) ? inviter.invitedUserIds : []);
+
+    const friends: InvitedFriendInfo[] = [];
+    for (const [uid, candidate] of Object.entries(this.data.users)) {
+      if (!candidate || uid === userId || uid.startsWith('bot_') || uid.startsWith('seed_')) continue;
+      const candRefBy = (candidate.referredByCode || (candidate.boosters as any)?.referredByCode || '').toUpperCase();
+      if (knownIds.has(uid) || (inviterCode && candRefBy === inviterCode)) {
+        knownIds.add(uid);
+        if (!candidate.referredByCode && inviter.referralCode) {
+          candidate.referredByCode = inviter.referralCode;
+        }
+        const isActive =
+          (candidate.totalTaps || 0) > 0 ||
+          (candidate.profitPerHour || 0) > 0 ||
+          Object.keys(candidate.upgrades || {}).length > 0 ||
+          (candidate.balance || 0) > 5000;
+
+        friends.push({
+          id: candidate.id,
+          username: candidate.username || 'FoxPlayer',
+          displayName: candidate.displayName || candidate.username || 'FoxPlayer',
+          level: candidate.level || 1,
+          levelName: candidate.levelName || 'Bronze Fox',
+          balance: Math.floor(candidate.balance || 0),
+          profitPerHour: Math.floor(candidate.profitPerHour || 0),
+          isTelegram: Boolean(candidate.isTelegram),
+          rewardEarned: GAME_CONSTANTS.REFERRAL_INVITER_BONUS,
+          joinedAt: candidate.createdAt || Date.now(),
+          isActive,
+        });
+      }
+    }
+
+    friends.sort((a, b) => (b.joinedAt || 0) - (a.joinedAt || 0));
+    inviter.invitedUserIds = Array.from(knownIds);
+    return friends;
+  }
+
+  public creditReferralByCode(newUserId: string, rawRefCode?: string): boolean {
+    if (!rawRefCode || !newUserId) return false;
+    const cleanRef = rawRefCode.replace(/^ref_/i, '').trim().toUpperCase();
+    if (!cleanRef) return false;
+
+    const newUser = this.data.users[newUserId];
+    if (!newUser || newUser.referredByCode) return false;
+
+    let inviter: UserGameState | undefined;
+    const mappedInviterId = this.data.referralCodeToUserId[cleanRef];
+    if (mappedInviterId && this.data.users[mappedInviterId]) {
+      inviter = this.data.users[mappedInviterId];
+    } else {
+      inviter = Object.values(this.data.users).find(
+        (u) => u && u.id !== newUserId && (u.referralCode?.toUpperCase() === cleanRef || u.id.toUpperCase() === cleanRef)
+      );
+    }
+
+    if (!inviter || inviter.id === newUser.id) return false;
+
+    const invitedIds = new Set<string>(Array.isArray(inviter.invitedUserIds) ? inviter.invitedUserIds : []);
+    if (invitedIds.has(newUser.id)) return false;
+
+    invitedIds.add(newUser.id);
+    inviter.invitedUserIds = Array.from(invitedIds);
+    inviter.balance += GAME_CONSTANTS.REFERRAL_INVITER_BONUS;
+    inviter.totalEarned += GAME_CONSTANTS.REFERRAL_INVITER_BONUS;
+    inviter.referralCount = Math.max((inviter.referralCount || 0) + 1, inviter.invitedUserIds.length);
+    inviter.referralEarnings = Math.max(
+      (inviter.referralEarnings || 0) + GAME_CONSTANTS.REFERRAL_INVITER_BONUS,
+      inviter.referralCount * GAME_CONSTANTS.REFERRAL_INVITER_BONUS
+    );
+    this.addAuditLog(inviter.id, 'referral', GAME_CONSTANTS.REFERRAL_INVITER_BONUS, inviter.balance, `Referral bonus for ${newUser.username}`);
+
+    newUser.referredByCode = inviter.referralCode;
+    newUser.balance += GAME_CONSTANTS.REFERRAL_INVITEE_BONUS;
+    newUser.totalEarned += GAME_CONSTANTS.REFERRAL_INVITEE_BONUS;
+    this.addAuditLog(newUser.id, 'referral', GAME_CONSTANTS.REFERRAL_INVITEE_BONUS, newUser.balance, `Welcome referral bonus via ${inviter.referralCode}`);
+
+    inviter.invitedFriends = this.getInvitedFriends(inviter.id);
+    return true;
   }
 
   // Create or get user
@@ -352,25 +447,6 @@ class DatabaseStore {
 
     (newUser as any).lastEnergyTimestamp = now;
 
-    // Handle referral code if valid
-    if (params.referredByCode && this.data.referralCodeToUserId[params.referredByCode]) {
-      const inviterId = this.data.referralCodeToUserId[params.referredByCode];
-      const inviter = this.data.users[inviterId];
-      if (inviter && inviter.id !== newUser.id) {
-        // Award Inviter
-        inviter.balance += GAME_CONSTANTS.REFERRAL_INVITER_BONUS;
-        inviter.totalEarned += GAME_CONSTANTS.REFERRAL_INVITER_BONUS;
-        inviter.referralCount += 1;
-        inviter.referralEarnings += GAME_CONSTANTS.REFERRAL_INVITER_BONUS;
-        this.addAuditLog(inviter.id, 'referral', GAME_CONSTANTS.REFERRAL_INVITER_BONUS, inviter.balance, `Referral bonus for ${newUser.username}`);
-
-        // Award Invitee
-        newUser.balance += GAME_CONSTANTS.REFERRAL_INVITEE_BONUS;
-        newUser.totalEarned += GAME_CONSTANTS.REFERRAL_INVITEE_BONUS;
-        this.addAuditLog(newUser.id, 'referral', GAME_CONSTANTS.REFERRAL_INVITEE_BONUS, newUser.balance, `Welcome referral bonus via ${params.referredByCode}`);
-      }
-    }
-
     this.data.users[id] = newUser;
     this.data.referralCodeToUserId[refCode] = id;
     if (params.telegramId) {
@@ -378,6 +454,11 @@ class DatabaseStore {
     }
     if (params.email) {
       this.data.emailToUserId[params.email.toLowerCase()] = id;
+    }
+
+    // Handle referral code if valid
+    if (params.referredByCode) {
+      this.creditReferralByCode(id, params.referredByCode);
     }
 
     this.save();
@@ -444,7 +525,8 @@ class DatabaseStore {
       });
 
       if (incoming.id && incoming.id !== created.id) {
-        delete this.data.users[created.id];
+        const oldId = created.id;
+        delete this.data.users[oldId];
         created.id = incoming.id;
         this.data.users[created.id] = created;
         if (created.referralCode) {
@@ -456,8 +538,17 @@ class DatabaseStore {
         if (created.email) {
           this.data.emailToUserId[created.email.toLowerCase()] = created.id;
         }
+        for (const u of Object.values(this.data.users)) {
+          if (Array.isArray(u.invitedUserIds) && u.invitedUserIds.includes(oldId)) {
+            u.invitedUserIds = u.invitedUserIds.map((x) => (x === oldId ? created.id : x));
+          }
+        }
       }
       existing = created;
+    }
+
+    if (referredByCode && !existing.referredByCode) {
+      this.creditReferralByCode(existing.id, referredByCode);
     }
 
     if (incoming.username && !incoming.username.startsWith('Fox_')) existing.username = incoming.username;
