@@ -39,11 +39,13 @@ const LOCAL_BOT_KEY = 'foxcoin_local_bot_v1';
 const LOCAL_UPGRADES_KEY = 'foxcoin_local_upgrades_v4';
 const LOCAL_WHEEL_KEY = 'foxcoin_local_wheel_v4';
 const LOCAL_FAKE_LB_KEY = 'foxcoin_fake_leaderboard_v1';
+const LOCAL_LOCKED_SECTIONS_KEY = 'foxcoin_locked_sections_v1';
 
 export interface GameConfig {
   upgrades: UpgradeDefinition[];
   wheelPrizes?: LuckyWheelPrize[];
   fakeLeaderboardMembers?: FakeLeaderboardMember[];
+  lockedSections?: Record<string, boolean>;
   levels: Array<{ level: number; name: string; minCoins: number; badge: string }>;
   tasks: TaskDefinition[];
   dailyRewards: DailyRewardDay[];
@@ -520,6 +522,38 @@ class ApiService {
     } catch {}
   }
 
+  public getLocalLockedSections(): Record<string, boolean> {
+    if (typeof window !== 'undefined') {
+      try {
+        const raw = localStorage.getItem(LOCAL_LOCKED_SECTIONS_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed && typeof parsed === 'object') {
+            const res: Record<string, boolean> = {};
+            for (const [k, v] of Object.entries(parsed)) {
+              if (v) res[String(k)] = true;
+            }
+            return res;
+          }
+        }
+      } catch {}
+    }
+    return {};
+  }
+
+  public saveLocalLockedSections(locks: Record<string, boolean>) {
+    if (typeof window === 'undefined') return;
+    try {
+      const sanitized: Record<string, boolean> = {};
+      if (locks && typeof locks === 'object') {
+        for (const [k, v] of Object.entries(locks)) {
+          if (v) sanitized[String(k)] = true;
+        }
+      }
+      localStorage.setItem(LOCAL_LOCKED_SECTIONS_KEY, JSON.stringify(sanitized));
+    } catch {}
+  }
+
   public async getConfig(): Promise<GameConfig> {
     try {
       const cfg = await this.request<GameConfig>('/api/game/config');
@@ -536,6 +570,17 @@ class ApiService {
         cfg.fakeLeaderboardMembers = this.getLocalFakeLeaderboardMembers();
       }
 
+      if (cfg.lockedSections && typeof cfg.lockedSections === 'object') {
+        const localLocks = this.getLocalLockedSections();
+        if (Object.keys(cfg.lockedSections).length > 0 || Object.keys(localLocks).length === 0) {
+          this.saveLocalLockedSections(cfg.lockedSections);
+        } else if (Object.keys(localLocks).length > 0) {
+          cfg.lockedSections = localLocks;
+        }
+      } else {
+        cfg.lockedSections = this.getLocalLockedSections();
+      }
+
       const resolvedBot = await this.resolveBotUsername(cfg.telegramBotUsername);
       if (resolvedBot) {
         cfg.telegramBotUsername = resolvedBot;
@@ -548,6 +593,7 @@ class ApiService {
           upgrades: this.getLocalUpgrades(),
           wheelPrizes: this.getLocalWheelPrizes(),
           fakeLeaderboardMembers: this.getLocalFakeLeaderboardMembers(),
+          lockedSections: this.getLocalLockedSections(),
           levels: PLAYER_LEVELS,
           tasks: TASKS,
           dailyRewards: DAILY_REWARDS,
@@ -1424,9 +1470,12 @@ class ApiService {
             const storedUsers = JSON.parse(extraRaw) as UserGameState[];
             if (Array.isArray(storedUsers)) {
               for (const u of storedUsers) {
+                if (!u || !u.id) continue;
+                if (u.isBanned) {
+                  map.delete(u.id);
+                  continue;
+                }
                 if (
-                  u &&
-                  u.id &&
                   !u.id.startsWith('bot_') &&
                   !u.id.startsWith('seed_') &&
                   !u.id.startsWith('fake_lb_') &&
@@ -1451,7 +1500,13 @@ class ApiService {
         } catch {}
       }
 
-      if (currentUser && currentUser.id && !currentUser.id.startsWith('bot_') && !currentUser.id.startsWith('fake_lb_')) {
+      if (
+        currentUser &&
+        currentUser.id &&
+        !currentUser.isBanned &&
+        !currentUser.id.startsWith('bot_') &&
+        !currentUser.id.startsWith('fake_lb_')
+      ) {
         const prev = map.get(currentUser.id);
         map.set(currentUser.id, {
           rank: prev?.rank || 1,
@@ -2382,6 +2437,164 @@ class ApiService {
       return { success: true, fakeLeaderboardMembers: localSaved };
     } catch {
       return { success: true, fakeLeaderboardMembers: localSaved };
+    }
+  }
+
+  public async getAdminLockedSections(
+    adminSecret?: string
+  ): Promise<{ success: boolean; lockedSections: Record<string, boolean> }> {
+    try {
+      const headers: Record<string, string> = {};
+      if (adminSecret) headers['x-admin-secret'] = adminSecret;
+      const res = await this.request<{ success: boolean; lockedSections: Record<string, boolean> }>(
+        '/api/admin/sections-lock',
+        { headers }
+      );
+      if (res.lockedSections && typeof res.lockedSections === 'object') {
+        const localLocks = this.getLocalLockedSections();
+        if (Object.keys(res.lockedSections).length > 0 || Object.keys(localLocks).length === 0) {
+          this.saveLocalLockedSections(res.lockedSections);
+          return { success: true, lockedSections: this.getLocalLockedSections() };
+        }
+        return await this.adminSaveLockedSections(localLocks, adminSecret);
+      }
+      return { success: true, lockedSections: this.getLocalLockedSections() };
+    } catch {
+      return { success: true, lockedSections: this.getLocalLockedSections() };
+    }
+  }
+
+  public async adminSaveLockedSections(
+    lockedSections: Record<string, boolean>,
+    adminSecret?: string
+  ): Promise<{ success: boolean; lockedSections: Record<string, boolean> }> {
+    this.saveLocalLockedSections(lockedSections);
+    const localSaved = this.getLocalLockedSections();
+    try {
+      const headers: Record<string, string> = {};
+      if (adminSecret) headers['x-admin-secret'] = adminSecret;
+      const res = await this.request<{ success: boolean; lockedSections: Record<string, boolean> }>(
+        '/api/admin/sections-lock/save',
+        {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ lockedSections: localSaved }),
+        }
+      );
+      if (res.lockedSections && typeof res.lockedSections === 'object') {
+        this.saveLocalLockedSections(res.lockedSections);
+        return { success: true, lockedSections: this.getLocalLockedSections() };
+      }
+      return { success: true, lockedSections: localSaved };
+    } catch {
+      return { success: true, lockedSections: localSaved };
+    }
+  }
+
+  public async bulkAdminUserAction(
+    params: {
+      userIds: string[];
+      action: 'ban' | 'unban' | 'reset_coins' | 'add_coins' | 'delete';
+      amount?: number;
+    },
+    adminSecret?: string
+  ): Promise<{ success: boolean; affectedCount: number; users: UserGameState[] }> {
+    const pruneFromPermLeaderboard = (removedIds: string[]) => {
+      if (typeof window === 'undefined' || removedIds.length === 0) return;
+      try {
+        const removeSet = new Set(removedIds);
+        const PERM_LB_KEY = 'foxcoin_permanent_leaderboard_v1';
+        const permRaw = localStorage.getItem(PERM_LB_KEY);
+        if (permRaw) {
+          const parsed = JSON.parse(permRaw) as LeaderboardEntry[];
+          if (Array.isArray(parsed)) {
+            const filtered = parsed
+              .filter((e) => e && !removeSet.has(e.id))
+              .map((e, idx) => ({ ...e, rank: idx + 1 }));
+            localStorage.setItem(PERM_LB_KEY, JSON.stringify(filtered));
+          }
+        }
+      } catch {}
+    };
+
+    try {
+      const headers: Record<string, string> = {};
+      if (adminSecret) headers['x-admin-secret'] = adminSecret;
+      const res = await this.request<{ success: boolean; affectedCount: number; users: UserGameState[] }>(
+        '/api/admin/users/bulk-action',
+        {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(params),
+        }
+      );
+      if (typeof window !== 'undefined' && Array.isArray(res.users)) {
+        localStorage.setItem('foxcoin_local_all_users_v1', JSON.stringify(res.users));
+      }
+      if (params.action === 'ban' || params.action === 'delete') {
+        pruneFromPermLeaderboard(params.userIds);
+      }
+      if (this.onStateUpdated && Array.isArray(res.users)) {
+        const currentLocal = this.getLocalUser();
+        const updatedMe = res.users.find((u) => u.id === currentLocal.id);
+        if (updatedMe) {
+          this.saveLocalUser(updatedMe);
+          this.onStateUpdated(updatedMe);
+        }
+      }
+      return res;
+    } catch (err) {
+      if (this.isStaticFallbackError(err)) {
+        const { users } = await this.getAdminUsers(adminSecret);
+        const targetSet = new Set(params.userIds);
+        const now = Date.now();
+        const cleanAmount = Math.max(0, Math.floor(Number(params.amount) || 0));
+        let affectedCount = 0;
+
+        const nextUsers: UserGameState[] = [];
+        for (const u of users) {
+          if (!targetSet.has(u.id)) {
+            nextUsers.push(u);
+            continue;
+          }
+          if (params.action === 'delete') {
+            affectedCount++;
+            continue;
+          }
+          if (params.action === 'ban') {
+            u.isBanned = true;
+            u.bannedAt = now;
+            affectedCount++;
+          } else if (params.action === 'unban') {
+            u.isBanned = false;
+            delete u.bannedAt;
+            affectedCount++;
+          } else if (params.action === 'reset_coins') {
+            u.balance = 0;
+            this.syncLocalUserProgress(u);
+            affectedCount++;
+          } else if (params.action === 'add_coins') {
+            u.balance = Math.max(0, (u.balance || 0) + cleanAmount);
+            u.totalEarned = Math.max(0, (u.totalEarned || 0) + cleanAmount);
+            this.syncLocalUserProgress(u);
+            affectedCount++;
+          }
+          nextUsers.push(u);
+        }
+
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('foxcoin_local_all_users_v1', JSON.stringify(nextUsers));
+        }
+        if (params.action === 'ban' || params.action === 'delete') {
+          pruneFromPermLeaderboard(params.userIds);
+        }
+        return {
+          success: true,
+          affectedCount,
+          users: nextUsers,
+        };
+      }
+      throw err;
     }
   }
 }

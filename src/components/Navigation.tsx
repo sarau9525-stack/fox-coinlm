@@ -1,5 +1,5 @@
 import React, { useMemo, useCallback } from 'react';
-import { Pickaxe, CheckSquare, Users, Trophy, ArrowLeftRight, Gift } from 'lucide-react';
+import { Pickaxe, CheckSquare, Users, Trophy, ArrowLeftRight, Gift, Lock } from 'lucide-react';
 import { sound } from '../utils/audio.js';
 import { TelegramService } from '../utils/telegram.js';
 import { foxGoldCoinImg } from '../assets/assets.js';
@@ -12,6 +12,7 @@ interface NavigationProps {
   hasDailyReward: boolean;
   hasUnclaimedPassive: boolean;
   hasActiveTrade?: boolean;
+  lockedSections?: Record<string, boolean>;
 }
 
 const TAP_ICON = (
@@ -33,18 +34,19 @@ export const Navigation: React.FC<NavigationProps> = React.memo(
     hasDailyReward,
     hasUnclaimedPassive,
     hasActiveTrade,
+    lockedSections,
   }) => {
-    const tabs = useMemo<Array<{ id: NavTab; label: string; icon: React.ReactNode; badge?: boolean }>>(
+    const tabs = useMemo<Array<{ id: NavTab; label: string; icon: React.ReactNode; badge?: boolean; isLocked?: boolean }>>(
       () => [
         { id: 'home', label: 'Tap', icon: TAP_ICON },
-        { id: 'upgrades', label: 'Mine', icon: MINE_ICON, badge: hasUnclaimedPassive },
-        { id: 'gifts', label: 'Gifts', icon: GIFTS_ICON },
-        { id: 'trade', label: 'Trade', icon: TRADE_ICON, badge: hasActiveTrade },
-        { id: 'tasks', label: 'Earn', icon: EARN_ICON, badge: hasDailyReward },
-        { id: 'friends', label: 'Friends', icon: FRIENDS_ICON },
-        { id: 'leaderboard', label: 'Rank', icon: RANK_ICON },
+        { id: 'upgrades', label: 'Mine', icon: MINE_ICON, badge: hasUnclaimedPassive, isLocked: Boolean(lockedSections?.upgrades) },
+        { id: 'gifts', label: 'Gifts', icon: GIFTS_ICON, isLocked: Boolean(lockedSections?.gifts) },
+        { id: 'trade', label: 'Trade', icon: TRADE_ICON, badge: hasActiveTrade, isLocked: Boolean(lockedSections?.trade) },
+        { id: 'tasks', label: 'Earn', icon: EARN_ICON, badge: hasDailyReward, isLocked: Boolean(lockedSections?.tasks) },
+        { id: 'friends', label: 'Friends', icon: FRIENDS_ICON, isLocked: Boolean(lockedSections?.friends) },
+        { id: 'leaderboard', label: 'Rank', icon: RANK_ICON, isLocked: Boolean(lockedSections?.leaderboard) },
       ],
-      [hasUnclaimedPassive, hasActiveTrade, hasDailyReward]
+      [hasUnclaimedPassive, hasActiveTrade, hasDailyReward, lockedSections]
     );
 
     const handleSelect = useCallback(
@@ -70,13 +72,21 @@ export const Navigation: React.FC<NavigationProps> = React.memo(
                 className={`relative flex flex-col items-center justify-center py-1.5 px-0.5 rounded-xl transition-all duration-150 cursor-pointer ${
                   isActive
                     ? 'bg-amber-500/15 text-amber-400 font-extrabold shadow-sm'
+                    : t.isLocked
+                    ? 'text-slate-500 hover:text-slate-300 font-medium opacity-80'
                     : 'text-slate-400 hover:text-slate-200 font-medium'
                 }`}
               >
                 <div className="relative">
                   {t.icon}
-                  {t.badge && (
-                    <span className="absolute -top-1 -right-1 w-2 h-2 bg-emerald-500 rounded-full animate-pulse border-2 border-[#0B0E17]" />
+                  {t.isLocked ? (
+                    <span className="absolute -top-1.5 -right-1.5 w-3.5 h-3.5 bg-rose-500/90 text-white rounded-full flex items-center justify-center border border-[#0B0E17] shadow">
+                      <Lock className="w-2 h-2" />
+                    </span>
+                  ) : (
+                    t.badge && (
+                      <span className="absolute -top-1 -right-1 w-2 h-2 bg-emerald-500 rounded-full animate-pulse border-2 border-[#0B0E17]" />
+                    )
                   )}
                 </div>
                 <span className="text-[9px] mt-1 tracking-tight truncate max-w-full">{t.label}</span>
@@ -92,6 +102,7 @@ export const Navigation: React.FC<NavigationProps> = React.memo(
     prev.hasDailyReward === next.hasDailyReward &&
     prev.hasUnclaimedPassive === next.hasUnclaimedPassive &&
     prev.hasActiveTrade === next.hasActiveTrade &&
-    prev.onChangeTab === next.onChangeTab
+    prev.onChangeTab === next.onChangeTab &&
+    prev.lockedSections === next.lockedSections
 );
 

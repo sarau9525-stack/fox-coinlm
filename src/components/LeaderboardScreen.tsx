@@ -58,11 +58,8 @@ export const LeaderboardScreen: React.FC<LeaderboardScreenProps> = ({ user }) =>
             <h3 className="text-xl font-black text-transparent bg-clip-text bg-gradient-to-r from-amber-200 via-amber-400 to-orange-400">
               Hall of Foxes
             </h3>
-            <span className="px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/30 text-[10px] font-black text-amber-300">
-              {entries.length} Players
-            </span>
           </div>
-          <p className="text-xs text-slate-400">Real player rankings from FOXCOIN Database</p>
+          <p className="text-xs text-slate-400">Top FOXCOIN Champions</p>
         </div>
         <button
           onClick={fetchLeaderboard}

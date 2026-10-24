@@ -71,6 +71,8 @@ export interface UserGameState {
   isGuest: boolean;
   isTelegram: boolean;
   isAdmin?: boolean;
+  isBanned?: boolean;
+  bannedAt?: number;
 
   balance: number;
   totalEarned: number;
@@ -156,6 +158,8 @@ export interface FakeLeaderboardMember {
   levelName: string;
   createdAt?: number;
 }
+
+export type LockedSectionsMap = Record<string, boolean>;
 
 export interface TapResponse {
   balance: number;

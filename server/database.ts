@@ -96,6 +96,7 @@ interface DatabaseSchema {
   deletedUpgradeIds?: string[];
   wheelPrizes?: LuckyWheelPrize[];
   fakeLeaderboardMembers?: FakeLeaderboardMember[];
+  lockedSections?: Record<string, boolean>;
   starsInvoices?: Record<
     string,
     {
@@ -127,6 +128,7 @@ class DatabaseStore {
     deletedUpgradeIds: [],
     wheelPrizes: [],
     fakeLeaderboardMembers: [],
+    lockedSections: {},
     starsInvoices: {},
   };
   private saveTimeout: NodeJS.Timeout | null = null;
@@ -587,6 +589,12 @@ class DatabaseStore {
     }
     if (incoming.hasJoinedChannel) {
       existing.hasJoinedChannel = true;
+    }
+    if (typeof incoming.isBanned === 'boolean') {
+      existing.isBanned = incoming.isBanned;
+    }
+    if (incoming.bannedAt) {
+      existing.bannedAt = incoming.bannedAt;
     }
 
     if (incoming.upgrades && typeof incoming.upgrades === 'object') {
@@ -1310,10 +1318,10 @@ class DatabaseStore {
     return this.data.trades.filter((t) => t.userId === userId);
   }
 
-  // Leaderboard (real registered users + display-only admin fake leaderboard members)
+  // Leaderboard (real registered users + display-only admin fake leaderboard members, excluding banned users)
   public getLeaderboard(limit = 50, currentUserId?: string): { list: LeaderboardEntry[]; playerEntry?: LeaderboardEntry } {
     const allUsers = Object.values(this.data.users)
-      .filter((u) => u && u.id && !u.id.startsWith('bot_') && !u.id.startsWith('seed_') && !u.id.startsWith('fake_lb_'))
+      .filter((u) => u && u.id && !u.isBanned && !u.id.startsWith('bot_') && !u.id.startsWith('seed_') && !u.id.startsWith('fake_lb_'))
       .map((u) => this.refreshUserState(u));
 
     const combinedEntries: Array<{
@@ -1634,6 +1642,81 @@ class DatabaseStore {
     this.data.wheelPrizes = prizes;
     this.save();
     return this.getWheelPrizes();
+  }
+
+  public getLockedSections(): Record<string, boolean> {
+    const raw = this.data.lockedSections || {};
+    const sanitized: Record<string, boolean> = {};
+    for (const [k, v] of Object.entries(raw)) {
+      if (v) sanitized[k] = true;
+    }
+    return sanitized;
+  }
+
+  public adminSaveLockedSections(locks: Record<string, boolean>): Record<string, boolean> {
+    const sanitized: Record<string, boolean> = {};
+    if (locks && typeof locks === 'object') {
+      for (const [k, v] of Object.entries(locks)) {
+        if (v) sanitized[String(k)] = true;
+      }
+    }
+    this.data.lockedSections = sanitized;
+    this.save();
+    return this.getLockedSections();
+  }
+
+  public adminBulkUserAction(params: {
+    userIds: string[];
+    action: 'ban' | 'unban' | 'reset_coins' | 'add_coins' | 'delete';
+    amount?: number;
+  }): { success: boolean; affectedCount: number; users: UserGameState[] } {
+    const ids = Array.isArray(params.userIds) ? params.userIds.map(String) : [];
+    let affectedCount = 0;
+    const now = Date.now();
+    const cleanAmount = Math.max(0, Math.floor(Number(params.amount) || 0));
+
+    for (const uid of ids) {
+      const user = this.data.users[uid];
+      if (!user) continue;
+
+      if (params.action === 'ban') {
+        user.isBanned = true;
+        user.bannedAt = now;
+        affectedCount++;
+      } else if (params.action === 'unban') {
+        user.isBanned = false;
+        delete user.bannedAt;
+        affectedCount++;
+      } else if (params.action === 'reset_coins') {
+        user.balance = 0;
+        this.refreshUserState(user, now);
+        affectedCount++;
+      } else if (params.action === 'add_coins') {
+        user.balance = Math.max(0, (user.balance || 0) + cleanAmount);
+        user.totalEarned = Math.max(0, (user.totalEarned || 0) + cleanAmount);
+        this.refreshUserState(user, now);
+        affectedCount++;
+      } else if (params.action === 'delete') {
+        if (user.referralCode && this.data.referralCodeToUserId) {
+          delete this.data.referralCodeToUserId[user.referralCode];
+        }
+        if (user.telegramId && this.data.telegramIdToUserId) {
+          delete this.data.telegramIdToUserId[String(user.telegramId)];
+        }
+        if (user.email && this.data.emailToUserId) {
+          delete this.data.emailToUserId[user.email.toLowerCase()];
+        }
+        delete this.data.users[uid];
+        affectedCount++;
+      }
+    }
+
+    this.save();
+    return {
+      success: true,
+      affectedCount,
+      users: this.getAllUsers(),
+    };
   }
 }
 

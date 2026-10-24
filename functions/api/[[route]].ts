@@ -58,6 +58,8 @@ let edgeUpgrades: UpgradeDefinition[] = [...UPGRADES];
 let edgeWheelPrizes: LuckyWheelPrize[] = [...LUCKY_WHEEL_PRIZES];
 let edgeFakeLeaderboard: FakeLeaderboardMember[] = [];
 let fakeLeaderboardHydrated = false;
+let edgeLockedSections: Record<string, boolean> = {};
+let lockedSectionsHydrated = false;
 let edgeBotConfig = {
   botToken: '',
   webhookUrl: '',
@@ -389,6 +391,8 @@ function mapD1RowToUser(r: any): UserGameState {
     isGuest: Boolean(r.is_guest),
     isTelegram: Boolean(r.is_telegram),
     isAdmin: Boolean(r.is_admin),
+    isBanned: Boolean(boosters?.isBanned),
+    bannedAt: boosters?.bannedAt ? Number(boosters.bannedAt) : undefined,
     balance: Number(r.balance || 0),
     totalEarned: Number(r.total_earned || 0),
     totalTaps: Number(r.total_taps || 0),
@@ -543,6 +547,8 @@ function mergeUserProgress(base: UserGameState, incoming?: Partial<UserGameState
     telegramId: base.telegramId || incoming.telegramId,
     avatarUrl: base.avatarUrl || incoming.avatarUrl,
     isAdmin: Boolean(base.isAdmin || incoming.isAdmin),
+    isBanned: typeof incoming.isBanned === 'boolean' ? incoming.isBanned : Boolean(base.isBanned),
+    bannedAt: incoming.bannedAt || base.bannedAt,
     balance: effectiveBalance,
     totalEarned: Math.max(baseTotalEarned, incTotalEarned, effectiveBalance),
     totalTaps: Math.max(Number(base.totalTaps || 0), Number(incoming.totalTaps || 0)),
@@ -571,7 +577,9 @@ function mergeUserProgress(base: UserGameState, incoming?: Partial<UserGameState
 
 const EDGE_CACHE_USERS_URL = 'https://foxcoin-edge-storage.internal/users-map-v3';
 const EDGE_CACHE_FAKE_LB_URL = 'https://foxcoin-edge-storage.internal/fake-leaderboard-v1';
+const EDGE_CACHE_LOCKED_SECTIONS_URL = 'https://foxcoin-edge-storage.internal/locked-sections-v1';
 const D1_FAKE_LB_CONFIG_ID = '__config_fake_leaderboard__';
+const D1_LOCKED_SECTIONS_CONFIG_ID = '__config_locked_sections__';
 
 function sanitizeFakeLeaderboardList(rawList: any[]): FakeLeaderboardMember[] {
   if (!Array.isArray(rawList)) return [];
@@ -705,6 +713,114 @@ async function persistEdgeFakeLeaderboard(
   }
 
   return edgeFakeLeaderboard;
+}
+
+function sanitizeLockedSections(raw: any): Record<string, boolean> {
+  const res: Record<string, boolean> = {};
+  if (raw && typeof raw === 'object') {
+    for (const [k, v] of Object.entries(raw)) {
+      if (v) res[String(k)] = true;
+    }
+  }
+  return res;
+}
+
+async function hydrateEdgeLockedSections(env: CloudflareEnv): Promise<Record<string, boolean>> {
+  const edgeCache = getGlobalEdgeCache();
+  const kv = resolveKVBinding(env);
+  const db = resolveD1Binding(env);
+
+  if (db) {
+    try {
+      await ensureD1Schema(db);
+      const row = await db
+        .prepare('SELECT user_json FROM foxcoin_users_kv WHERE id = ?')
+        .bind(D1_LOCKED_SECTIONS_CONFIG_ID)
+        .first();
+      if (row && row.user_json) {
+        const parsed = JSON.parse(String(row.user_json));
+        edgeLockedSections = sanitizeLockedSections(parsed);
+        lockedSectionsHydrated = true;
+        return edgeLockedSections;
+      }
+    } catch {}
+  }
+
+  if (kv) {
+    try {
+      const rawKv = await kv.get('foxcoin_locked_sections_v1');
+      if (rawKv) {
+        const parsed = JSON.parse(rawKv);
+        edgeLockedSections = sanitizeLockedSections(parsed);
+        lockedSectionsHydrated = true;
+        return edgeLockedSections;
+      }
+    } catch {}
+  }
+
+  if (edgeCache) {
+    try {
+      const cachedRes = await edgeCache.match(EDGE_CACHE_LOCKED_SECTIONS_URL);
+      if (cachedRes && cachedRes.ok) {
+        const parsed = await cachedRes.json();
+        edgeLockedSections = sanitizeLockedSections(parsed);
+        lockedSectionsHydrated = true;
+        return edgeLockedSections;
+      }
+    } catch {}
+  }
+
+  lockedSectionsHydrated = true;
+  return edgeLockedSections;
+}
+
+async function persistEdgeLockedSections(
+  env: CloudflareEnv,
+  locks: Record<string, boolean>
+): Promise<Record<string, boolean>> {
+  const sanitized = sanitizeLockedSections(locks);
+  edgeLockedSections = sanitized;
+  lockedSectionsHydrated = true;
+
+  const jsonPayload = JSON.stringify(sanitized);
+  const edgeCache = getGlobalEdgeCache();
+  if (edgeCache) {
+    try {
+      const res = new Response(jsonPayload, {
+        headers: {
+          'Content-Type': 'application/json',
+          'Cache-Control': 'public, max-age=31536000, s-maxage=31536000',
+        },
+      });
+      await edgeCache.put(EDGE_CACHE_LOCKED_SECTIONS_URL, res);
+    } catch {}
+  }
+
+  const kv = resolveKVBinding(env);
+  if (kv) {
+    try {
+      await kv.put('foxcoin_locked_sections_v1', jsonPayload);
+    } catch {}
+  }
+
+  const db = resolveD1Binding(env);
+  if (db) {
+    try {
+      await ensureD1Schema(db);
+      await db
+        .prepare(
+          `INSERT INTO foxcoin_users_kv (id, user_json, balance, updated_at)
+           VALUES (?, ?, 0, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             user_json = excluded.user_json,
+             updated_at = excluded.updated_at`
+        )
+        .bind(D1_LOCKED_SECTIONS_CONFIG_ID, jsonPayload, Date.now())
+        .run();
+    } catch {}
+  }
+
+  return edgeLockedSections;
 }
 
 function getGlobalEdgeCache(): any {
@@ -931,6 +1047,8 @@ async function persistUserToD1(db: any, user: UserGameState): Promise<boolean> {
     invitedUserIds,
     hasJoinedChannel: Boolean(user.hasJoinedChannel),
     channelVerifiedAt: user.channelVerifiedAt || undefined,
+    isBanned: Boolean(user.isBanned),
+    bannedAt: user.bannedAt || undefined,
     lastEnergyTimestamp: (user as any).lastEnergyTimestamp || Date.now(),
   };
   user.boosters = enrichedBoosters;
@@ -1650,11 +1768,15 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
     if (!fakeLeaderboardHydrated) {
       await hydrateEdgeFakeLeaderboard(env);
     }
+    if (!lockedSectionsHydrated) {
+      await hydrateEdgeLockedSections(env);
+    }
     const telegramBotUsername = await resolveEdgeBotUsername();
     return jsonResponse({
       upgrades: edgeUpgrades,
       wheelPrizes: edgeWheelPrizes,
       fakeLeaderboardMembers: edgeFakeLeaderboard,
+      lockedSections: edgeLockedSections,
       levels: PLAYER_LEVELS,
       tasks: TASKS,
       dailyRewards: DAILY_REWARDS,
@@ -2544,6 +2666,7 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
         (u) =>
           u &&
           u.id &&
+          !u.isBanned &&
           !u.id.startsWith('bot_') &&
           !u.id.startsWith('seed_') &&
           !u.id.startsWith('fake_lb_') &&
@@ -3391,6 +3514,97 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
     const members = Array.isArray(body?.members) ? body.members : [];
     const saved = await persistEdgeFakeLeaderboard(env, members);
     return jsonResponse({ success: true, fakeLeaderboardMembers: saved });
+  }
+
+  // Admin: Get & Save Locked Sections
+  if (pathname === '/api/admin/sections-lock' && method === 'GET') {
+    if (!isAdmin) return jsonResponse({ error: 'Forbidden' }, 403);
+    const locks = await hydrateEdgeLockedSections(env);
+    return jsonResponse({ success: true, lockedSections: locks });
+  }
+
+  if (pathname === '/api/admin/sections-lock/save' && method === 'POST') {
+    if (!isAdmin) return jsonResponse({ error: 'Forbidden' }, 403);
+    let body: any = {};
+    try {
+      body = await request.json();
+    } catch {}
+    const saved = await persistEdgeLockedSections(env, body?.lockedSections || {});
+    return jsonResponse({ success: true, lockedSections: saved });
+  }
+
+  // Admin: Bulk User Actions (Ban Selected, Unban Selected, Reset Coins, Add Coins, Delete Selected)
+  if (pathname === '/api/admin/users/bulk-action' && method === 'POST') {
+    if (!isAdmin) return jsonResponse({ error: 'Forbidden' }, 403);
+    await hydrateEdgeUsers(env, true);
+    let body: any = {};
+    try {
+      body = await request.json();
+    } catch {}
+    const userIds: string[] = Array.isArray(body?.userIds) ? body.userIds.map(String) : [];
+    const action: string = String(body?.action || '');
+    const cleanAmount = Math.max(0, Math.floor(Number(body?.amount) || 0));
+
+    if (userIds.length === 0) {
+      return jsonResponse({ error: 'At least one user ID must be selected' }, 400);
+    }
+    if (!['ban', 'unban', 'reset_coins', 'add_coins', 'delete'].includes(action)) {
+      return jsonResponse({ error: 'Invalid bulk action' }, 400);
+    }
+
+    let affectedCount = 0;
+    const now = Date.now();
+    const effectiveDb = resolveD1Binding(env);
+
+    for (const uid of userIds) {
+      const target = edgeUsers.get(uid);
+      if (!target) continue;
+
+      if (action === 'ban') {
+        target.isBanned = true;
+        target.bannedAt = now;
+        edgeUsers.set(uid, target);
+        await persistUserToD1(effectiveDb, target);
+        affectedCount++;
+      } else if (action === 'unban') {
+        target.isBanned = false;
+        delete target.bannedAt;
+        edgeUsers.set(uid, target);
+        await persistUserToD1(effectiveDb, target);
+        affectedCount++;
+      } else if (action === 'reset_coins') {
+        target.balance = 0;
+        refreshEdgeUserState(target, now);
+        edgeUsers.set(uid, target);
+        await persistUserToD1(effectiveDb, target);
+        affectedCount++;
+      } else if (action === 'add_coins') {
+        target.balance = Math.max(0, (target.balance || 0) + cleanAmount);
+        target.totalEarned = Math.max(0, (target.totalEarned || 0) + cleanAmount);
+        refreshEdgeUserState(target, now);
+        edgeUsers.set(uid, target);
+        await persistUserToD1(effectiveDb, target);
+        affectedCount++;
+      } else if (action === 'delete') {
+        edgeUsers.delete(uid);
+        if (effectiveDb) {
+          await effectiveDb.prepare('DELETE FROM users WHERE id = ?').bind(uid).run().catch(() => {});
+          await effectiveDb.prepare('DELETE FROM foxcoin_users_kv WHERE id = ?').bind(uid).run().catch(() => {});
+        }
+        affectedCount++;
+      }
+    }
+
+    await persistToEdgeCache();
+    const list = Array.from(edgeUsers.values())
+      .map((u) => refreshEdgeUserState(u))
+      .sort((a, b) => b.balance - a.balance);
+
+    return jsonResponse({
+      success: true,
+      affectedCount,
+      users: list,
+    });
   }
 
   // 8. Fallback for undefined edge API routes

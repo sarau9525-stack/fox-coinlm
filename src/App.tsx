@@ -21,7 +21,7 @@ import { SettingsModal } from './components/modals/SettingsModal.js';
 import { AuthModal } from './components/modals/AuthModal.js';
 import { AdminTelegramSetup, AdminTabType } from './components/AdminTelegramSetup.js';
 import { MandatoryChannelGate } from './components/MandatoryChannelGate.js';
-import { Smartphone, Monitor, Sparkles } from 'lucide-react';
+import { Smartphone, Monitor, Sparkles, Lock, ShieldAlert } from 'lucide-react';
 
 export default function App() {
   const [user, setUser] = useState<UserGameState | null>(null);
@@ -87,6 +87,7 @@ export default function App() {
           prev.canClaimDaily === reconciled.canClaimDaily &&
           prev.unclaimedPassive === reconciled.unclaimedPassive &&
           prev.isAdmin === reconciled.isAdmin &&
+          Boolean(prev.isBanned) === Boolean(reconciled.isBanned) &&
           prev.isGuest === reconciled.isGuest &&
           prev.boosters === reconciled.boosters &&
           prev.upgrades === reconciled.upgrades &&
@@ -568,74 +569,134 @@ export default function App() {
 
         {/* Main Content Pages */}
         <main className="flex-1 flex flex-col">
-          {user && activeTab === 'home' && (
-            <TapScreen
-              user={user}
-              onTap={handleTap}
-              onOpenBoost={handleOpenBoost}
-              onOpenWheel={handleOpenWheel}
-              equippedGiftId={equippedGiftId}
-              onOpenGifts={handleOpenGifts}
-              offlineEarnings={offlineEarningsAmount}
-              onOpenOfflineModal={handleOpenOfflineModal}
-            />
-          )}
+          {user && user.isBanned && !isEffectiveAdmin ? (
+            <div className="flex-1 flex flex-col items-center justify-center px-6 pb-28 pt-10 text-center">
+              <div className="w-20 h-20 rounded-3xl bg-rose-500/15 border-2 border-rose-500/40 flex items-center justify-center text-rose-400 mb-4 shadow-xl shadow-rose-500/10">
+                <ShieldAlert className="w-10 h-10" />
+              </div>
+              <h3 className="text-xl font-black text-rose-400">Account Suspended</h3>
+              <p className="text-xs text-slate-300 mt-2 max-w-xs leading-relaxed">
+                This account has been suspended by the administrator due to policy or anti-bot verification rules.
+              </p>
+              <p className="text-[11px] text-slate-400 mt-1" dir="rtl">
+                حساب کاربری شما توسط مدیریت مسدود شده است.
+              </p>
+            </div>
+          ) : user && activeTab !== 'home' && config?.lockedSections?.[activeTab] ? (
+            <div className="flex-1 flex flex-col items-center justify-center px-6 pb-28 pt-10 text-center animate-fade-in">
+              <div className="w-20 h-20 rounded-3xl bg-amber-500/15 border-2 border-amber-500/40 flex items-center justify-center text-amber-400 mb-4 shadow-xl shadow-amber-500/10">
+                <Lock className="w-10 h-10" />
+              </div>
+              <h3 className="text-lg font-black text-amber-300">
+                {activeTab === 'leaderboard'
+                  ? 'Rank Section Locked'
+                  : activeTab === 'trade'
+                  ? 'Trade Section Locked'
+                  : activeTab === 'gifts'
+                  ? 'Gifts Section Locked'
+                  : activeTab === 'upgrades'
+                  ? 'Mine Section Locked'
+                  : activeTab === 'tasks'
+                  ? 'Tasks Section Locked'
+                  : 'Friends Section Locked'}
+              </h3>
+              <p className="text-xs font-bold text-slate-200 mt-2 max-w-xs leading-relaxed" dir="rtl">
+                این بخش موقتاً توسط مدیریت قفل شده است و به‌زودی بازگشایی خواهد شد.
+              </p>
+              <p className="text-[11px] text-slate-400 mt-1 max-w-xs">
+                This section is temporarily locked by the administrator and will open soon.
+              </p>
+              <div className="flex items-center gap-2 mt-5">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('home')}
+                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-black text-xs shadow-lg transition active:scale-95 cursor-pointer"
+                >
+                  Back to Tap 🦊
+                </button>
+                {isEffectiveAdmin && (
+                  <button
+                    type="button"
+                    onClick={() => handleOpenAdminSetup('locks')}
+                    className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-amber-500/40 text-amber-300 font-black text-xs transition cursor-pointer"
+                  >
+                    مدیریت قفل‌ها ⚙️
+                  </button>
+                )}
+              </div>
+            </div>
+          ) : (
+            <>
+              {user && activeTab === 'home' && (
+                <TapScreen
+                  user={user}
+                  onTap={handleTap}
+                  onOpenBoost={handleOpenBoost}
+                  onOpenWheel={handleOpenWheel}
+                  equippedGiftId={equippedGiftId}
+                  onOpenGifts={handleOpenGifts}
+                  offlineEarnings={offlineEarningsAmount}
+                  onOpenOfflineModal={handleOpenOfflineModal}
+                />
+              )}
 
-          {user && activeTab === 'upgrades' && config && (
-            <UpgradesScreen
-              user={user}
-              upgrades={config.upgrades}
-              onPurchase={handlePurchaseUpgrade}
-              offlineEarnings={offlineEarningsAmount}
-              onClaimOffline={handleClaimPassive}
-            />
-          )}
+              {user && activeTab === 'upgrades' && config && (
+                <UpgradesScreen
+                  user={user}
+                  upgrades={config.upgrades}
+                  onPurchase={handlePurchaseUpgrade}
+                  offlineEarnings={offlineEarningsAmount}
+                  onClaimOffline={handleClaimPassive}
+                />
+              )}
 
-          {user && activeTab === 'gifts' && config && (
-            <GiftsScreen
-              user={user}
-              upgrades={config.upgrades}
-              botUsername={config?.telegramBotUsername || 'FOXCOINBot'}
-              equippedGiftId={equippedGiftId}
-              onEquipGift={handleEquipGift}
-              onPurchaseGift={handlePurchaseUpgrade}
-            />
-          )}
+              {user && activeTab === 'gifts' && config && (
+                <GiftsScreen
+                  user={user}
+                  upgrades={config.upgrades}
+                  botUsername={config?.telegramBotUsername || 'FOXCOINBot'}
+                  equippedGiftId={equippedGiftId}
+                  onEquipGift={handleEquipGift}
+                  onPurchaseGift={handlePurchaseUpgrade}
+                />
+              )}
 
-          {user && activeTab === 'trade' && (
-            <TradeScreen
-              user={user}
-              onTradeComplete={updateGameState}
-              onFriendsTab={handleOpenFriends}
-            />
-          )}
+              {user && activeTab === 'trade' && (
+                <TradeScreen
+                  user={user}
+                  onTradeComplete={updateGameState}
+                  onFriendsTab={handleOpenFriends}
+                />
+              )}
 
-          {user && activeTab === 'tasks' && config && (
-            <TasksScreen
-              user={user}
-              tasks={config.tasks}
-              onClaimTask={handleClaimTask}
-              onOpenWheel={handleOpenWheel}
-            />
-          )}
+              {user && activeTab === 'tasks' && config && (
+                <TasksScreen
+                  user={user}
+                  tasks={config.tasks}
+                  onClaimTask={handleClaimTask}
+                  onOpenWheel={handleOpenWheel}
+                />
+              )}
 
-          {user && activeTab === 'friends' && (
-            <FriendsScreen
-              user={user}
-              botUsername={config?.telegramBotUsername || 'FOXCOINBot'}
-              onTradeTab={handleOpenTrade}
-              onBotUsernameUpdated={(nextBotUsername) => {
-                setConfig((prev) =>
-                  prev && prev.telegramBotUsername !== nextBotUsername
-                    ? { ...prev, telegramBotUsername: nextBotUsername }
-                    : prev
-                );
-              }}
-            />
-          )}
+              {user && activeTab === 'friends' && (
+                <FriendsScreen
+                  user={user}
+                  botUsername={config?.telegramBotUsername || 'FOXCOINBot'}
+                  onTradeTab={handleOpenTrade}
+                  onBotUsernameUpdated={(nextBotUsername) => {
+                    setConfig((prev) =>
+                      prev && prev.telegramBotUsername !== nextBotUsername
+                        ? { ...prev, telegramBotUsername: nextBotUsername }
+                        : prev
+                    );
+                  }}
+                />
+              )}
 
-          {user && activeTab === 'leaderboard' && (
-            <LeaderboardScreen user={user} />
+              {user && activeTab === 'leaderboard' && (
+                <LeaderboardScreen user={user} />
+              )}
+            </>
           )}
         </main>
 
@@ -646,6 +707,7 @@ export default function App() {
             onChangeTab={setActiveTab}
             hasDailyReward={user.canClaimDaily}
             hasUnclaimedPassive={Math.max(user.unclaimedPassive || 0, offlineEarningsAmount) > 0}
+            lockedSections={config?.lockedSections}
           />
         )}
 

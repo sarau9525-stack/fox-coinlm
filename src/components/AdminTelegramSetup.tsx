@@ -5,6 +5,11 @@ import {
   Bot,
   Globe,
   Lock,
+  Unlock,
+  Ban,
+  CheckSquare,
+  Square,
+  ChevronDown,
   Eye,
   EyeOff,
   CheckCircle2,
@@ -51,7 +56,58 @@ import {
 import { UPGRADES, LUCKY_WHEEL_PRIZES, PLAYER_LEVELS } from '../../server/gameConfig.js';
 import { sound } from '../utils/audio.js';
 
-export type AdminTabType = 'users' | 'fake_rank' | 'cards' | 'gifts' | 'wheel' | 'webhook' | 'github';
+export type AdminTabType = 'users' | 'fake_rank' | 'locks' | 'cards' | 'gifts' | 'wheel' | 'webhook' | 'github';
+
+const LOCKABLE_APP_SECTIONS: Array<{
+  id: string;
+  titleFa: string;
+  titleEn: string;
+  descFa: string;
+  icon: string;
+}> = [
+  {
+    id: 'leaderboard',
+    titleFa: 'بخش رنک و لیدربورد (Rank / Hall of Foxes)',
+    titleEn: 'Rank & Leaderboard',
+    descFa: 'در صورت قفل شدن، هیچ کاربری نمی‌تواند جدول رتبه‌بندی (Rank) را مشاهده کند.',
+    icon: '🏆',
+  },
+  {
+    id: 'trade',
+    titleFa: 'بخش ترید و تبدیل توکن (Trade)',
+    titleEn: 'Trade & Swap',
+    descFa: 'قفل کردن موقت بخش خرید، فروش و تبدیل توکن‌های FOX.',
+    icon: '📈',
+  },
+  {
+    id: 'gifts',
+    titleFa: 'بخش گیفت‌های تلگرام (Fox Gifts)',
+    titleEn: 'Telegram Stars Gifts',
+    descFa: 'قفل کردن فروشگاه گیفت‌های استارز تلگرام.',
+    icon: '🎁',
+  },
+  {
+    id: 'upgrades',
+    titleFa: 'بخش ماین و کارت‌های ارتقا (Mine / Cards)',
+    titleEn: 'Mine & Upgrade Cards',
+    descFa: 'قفل کردن خرید و ارتقای کارت‌های سود ساعتی.',
+    icon: '⛏️',
+  },
+  {
+    id: 'tasks',
+    titleFa: 'بخش تسک‌ها و ماموریت‌ها (Earn / Tasks)',
+    titleEn: 'Tasks & Rewards',
+    descFa: 'قفل کردن صفحه ماموریت‌ها، پاداش روزانه و گردونه شانس.',
+    icon: '🎯',
+  },
+  {
+    id: 'friends',
+    titleFa: 'بخش دعوت دوستان (Friends / Referrals)',
+    titleEn: 'Invite Friends',
+    descFa: 'قفل کردن صفحه زیرمجموعه‌گیری و لینک رفرال.',
+    icon: '👥',
+  },
+];
 
 const REALISTIC_FAKE_PROFILES: Array<{ displayName: string; username: string }> = [
   { displayName: 'Arash Crypto 🦊', username: 'arash_fox99' },
@@ -110,10 +166,10 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
   const [isCheckingAuth, setIsCheckingAuth] = useState<boolean>(false);
   const [authError, setAuthError] = useState<string | null>(null);
 
-  // Tab: 'users' | 'cards' | 'gifts' | 'wheel' | 'webhook' | 'github'
+  // Tab: 'users' | 'fake_rank' | 'locks' | 'cards' | 'gifts' | 'wheel' | 'webhook' | 'github'
   const [activeTab, setActiveTab] = useState<AdminTabType>(initialTab);
 
-  // Cards, Gifts, Lucky Wheel & Fake Rank Admin State
+  // Cards, Gifts, Lucky Wheel, Fake Rank & Section Locks Admin State
   const [adminUpgrades, setAdminUpgrades] = useState<UpgradeDefinition[]>(
     () => config?.upgrades || [...UPGRADES]
   );
@@ -122,6 +178,9 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
   );
   const [adminFakeMembers, setAdminFakeMembers] = useState<FakeLeaderboardMember[]>(
     () => config?.fakeLeaderboardMembers || api.getLocalFakeLeaderboardMembers()
+  );
+  const [adminLockedSections, setAdminLockedSections] = useState<Record<string, boolean>>(
+    () => config?.lockedSections || api.getLocalLockedSections()
   );
   const [editingFakeId, setEditingFakeId] = useState<string | null>(null);
   const [fakeDisplayName, setFakeDisplayName] = useState<string>('');
@@ -148,12 +207,15 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
   const [newCardIcon, setNewCardIcon] = useState<string>('🚀');
   const [cardFilterCat, setCardFilterCat] = useState<'all' | 'passive' | 'special' | 'tap'>('all');
 
-  // Admin Users & Balance Management states
+  // Admin Users, Bulk Actions & Balance Management states
   const [allUsers, setAllUsers] = useState<UserGameState[]>([]);
   const [isLoadingUsers, setIsLoadingUsers] = useState<boolean>(false);
   const [isSyncingAllDb, setIsSyncingAllDb] = useState<boolean>(false);
   const [userSearch, setUserSearch] = useState<string>('');
-  const [userActivityFilter, setUserActivityFilter] = useState<'all' | 'active' | 'inactive' | 'referrals'>('all');
+  const [userActivityFilter, setUserActivityFilter] = useState<'all' | 'active' | 'inactive' | 'referrals' | 'banned'>('all');
+  const [selectedBulkUserIds, setSelectedBulkUserIds] = useState<string[]>([]);
+  const [showBulkActionsMenu, setShowBulkActionsMenu] = useState<boolean>(false);
+  const [isExecutingBulkAction, setIsExecutingBulkAction] = useState<boolean>(false);
   const [copiedUserRef, setCopiedUserRef] = useState<string | null>(null);
   const [selectedUserId, setSelectedUserId] = useState<string | null>(user?.id || null);
   const [adjustAmount, setAdjustAmount] = useState<string>('10000');
@@ -270,6 +332,14 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
         .then((fakeRes) => {
           if (Array.isArray(fakeRes.fakeLeaderboardMembers)) {
             setAdminFakeMembers(fakeRes.fakeLeaderboardMembers);
+          }
+        })
+        .catch(() => {});
+      api
+        .getAdminLockedSections(effectiveSecret)
+        .then((lockRes) => {
+          if (lockRes.lockedSections) {
+            setAdminLockedSections(lockRes.lockedSections);
           }
         })
         .catch(() => {});
@@ -577,28 +647,198 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
     }
   };
 
-  // Sync adminUpgrades, adminWheelPrizes, and adminFakeMembers when config prop changes
+  // Sync adminUpgrades, adminWheelPrizes, adminFakeMembers, and adminLockedSections when config prop changes
   useEffect(() => {
     if (config?.upgrades) setAdminUpgrades(config.upgrades);
     if (config?.wheelPrizes) setAdminWheelPrizes(config.wheelPrizes);
     if (config?.fakeLeaderboardMembers) setAdminFakeMembers(config.fakeLeaderboardMembers);
+    if (config?.lockedSections) setAdminLockedSections(config.lockedSections);
   }, [config]);
 
   const notifyConfigUpdate = (
     nextUpgrades: UpgradeDefinition[],
     nextWheel: LuckyWheelPrize[],
-    nextFakeMembers: FakeLeaderboardMember[] = adminFakeMembers
+    nextFakeMembers: FakeLeaderboardMember[] = adminFakeMembers,
+    nextLockedSections: Record<string, boolean> = adminLockedSections
   ) => {
     setAdminUpgrades(nextUpgrades);
     setAdminWheelPrizes(nextWheel);
     setAdminFakeMembers(nextFakeMembers);
+    setAdminLockedSections(nextLockedSections);
     if (onConfigUpdated && config) {
       onConfigUpdated({
         ...config,
         upgrades: nextUpgrades,
         wheelPrizes: nextWheel,
         fakeLeaderboardMembers: nextFakeMembers,
+        lockedSections: nextLockedSections,
       });
+    }
+  };
+
+  // Section Lock / Unlock Handlers
+  const handleToggleSectionLock = async (sectionId: string, forceState?: boolean) => {
+    const nextValue = forceState !== undefined ? forceState : !adminLockedSections[sectionId];
+    const nextMap: Record<string, boolean> = {
+      ...adminLockedSections,
+      [sectionId]: nextValue,
+    };
+    try {
+      setIsSavingAdminData(true);
+      setAdminFeedback(null);
+      sound.playTap();
+      const res = await api.adminSaveLockedSections(nextMap, adminSecret || '123456');
+      notifyConfigUpdate(adminUpgrades, adminWheelPrizes, adminFakeMembers, res.lockedSections);
+      const secMeta = LOCKABLE_APP_SECTIONS.find((s) => s.id === sectionId);
+      const label = secMeta ? secMeta.titleFa : sectionId;
+      setAdminFeedback({
+        type: 'success',
+        message: nextValue
+          ? `🔒 «${label}» با موفقیت برای تمام کاربران قفل شد.`
+          : `🔓 قفل «${label}» باز شد و اکنون برای همه کاربران در دسترس است.`,
+      });
+    } catch (err: any) {
+      setAdminFeedback({
+        type: 'error',
+        message: err?.message || 'خطا در ذخیره وضعیت قفل بخش‌ها',
+      });
+    } finally {
+      setIsSavingAdminData(false);
+    }
+  };
+
+  const handleSaveAllSectionLocks = async (nextMap: Record<string, boolean>, customSuccessMsg?: string) => {
+    try {
+      setIsSavingAdminData(true);
+      setAdminFeedback(null);
+      sound.playTap();
+      const res = await api.adminSaveLockedSections(nextMap, adminSecret || '123456');
+      notifyConfigUpdate(adminUpgrades, adminWheelPrizes, adminFakeMembers, res.lockedSections);
+      setAdminFeedback({
+        type: 'success',
+        message: customSuccessMsg || '✅ وضعیت قفل بخش‌ها با موفقیت ذخیره شد.',
+      });
+    } catch (err: any) {
+      setAdminFeedback({
+        type: 'error',
+        message: err?.message || 'خطا در ذخیره قفل بخش‌ها',
+      });
+    } finally {
+      setIsSavingAdminData(false);
+    }
+  };
+
+  // Multi-User Bulk Selection & Bulk Actions Handlers
+  const toggleBulkUserSelection = (targetId: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    sound.playTap();
+    setSelectedBulkUserIds((prev) =>
+      prev.includes(targetId) ? prev.filter((id) => id !== targetId) : [...prev, targetId]
+    );
+  };
+
+  const handleSelectAllFilteredUsers = (filteredIds: string[]) => {
+    sound.playTap();
+    const allSelected =
+      filteredIds.length > 0 && filteredIds.every((id) => selectedBulkUserIds.includes(id));
+    if (allSelected) {
+      setSelectedBulkUserIds((prev) => prev.filter((id) => !filteredIds.includes(id)));
+    } else {
+      const merged = Array.from(new Set([...selectedBulkUserIds, ...filteredIds]));
+      setSelectedBulkUserIds(merged);
+    }
+  };
+
+  const handleSelectInactiveBotAccounts = () => {
+    sound.playTap();
+    const botOrInactiveIds = allUsers
+      .filter((u) => {
+        if (u.id === user?.id || u.isAdmin) return false;
+        const upCount = Object.values(u.upgrades || {}).filter((lvl) => Number(lvl) > 0).length;
+        const isActive =
+          (u.totalTaps || 0) > 0 ||
+          (u.profitPerHour || 0) > 0 ||
+          upCount > 0 ||
+          (u.balance || 0) > 5000;
+        const looksLikeBot =
+          u.id.startsWith('bot_') ||
+          u.id.startsWith('seed_') ||
+          !isActive;
+        return looksLikeBot;
+      })
+      .map((u) => u.id);
+
+    setSelectedBulkUserIds(botOrInactiveIds);
+    setUserFeedback({
+      type: 'success',
+      message:
+        botOrInactiveIds.length > 0
+          ? `🤖 تعداد ${botOrInactiveIds.length} اکانت غیرفعال / ربات انتخاب شد. اکنون می‌توانید دکمه «Ban Selected» را بزنید.`
+          : 'هیچ اکانت ربات یا غیرفعالی یافت نشد.',
+    });
+  };
+
+  const handleExecuteBulkUserAction = async (
+    action: 'ban' | 'unban' | 'reset_coins' | 'delete',
+    targetIdsOverride?: string[]
+  ) => {
+    const rawIds = targetIdsOverride || selectedBulkUserIds;
+    // Protect current admin from accidentally banning/deleting their own active session if bulk-selected
+    const targetIds = rawIds.filter((id) => {
+      if ((action === 'ban' || action === 'delete') && user && id === user.id && rawIds.length > 1) {
+        return false;
+      }
+      return true;
+    });
+
+    if (targetIds.length === 0) {
+      setUserFeedback({
+        type: 'error',
+        message: 'لطفاً ابتدا حداقل یک کاربر را از جدول انتخاب کنید (Select users first).',
+      });
+      return;
+    }
+
+    try {
+      setIsExecutingBulkAction(true);
+      setShowBulkActionsMenu(false);
+      setUserFeedback(null);
+      sound.playTap();
+
+      const res = await api.bulkAdminUserAction(
+        {
+          userIds: targetIds,
+          action,
+        },
+        adminSecret || '123456'
+      );
+
+      setAllUsers(res.users || []);
+      if (action === 'delete') {
+        setSelectedBulkUserIds([]);
+      }
+
+      const actionDesc =
+        action === 'ban'
+          ? `🚫 ${res.affectedCount} اکانت انتخاب‌شده با موفقیت مسدود (Banned) شدند و از جدول رنک و بازی خارج گردیدند.`
+          : action === 'unban'
+          ? `🔓 مسدودیت ${res.affectedCount} اکانت انتخاب‌شده رفع شد (Unbanned).`
+          : action === 'reset_coins'
+          ? `🪙 موجودی سکه ${res.affectedCount} اکانت انتخاب‌شده صفر (Reset) شد.`
+          : `🗑️ ${res.affectedCount} اکانت انتخاب‌شده به طور کامل حذف شدند.`;
+
+      sound.playSuccess();
+      setUserFeedback({
+        type: 'success',
+        message: actionDesc,
+      });
+    } catch (err: any) {
+      setUserFeedback({
+        type: 'error',
+        message: err?.message || 'خطا در اجرای عملیات گروهی (Bulk Action failed)',
+      });
+    } finally {
+      setIsExecutingBulkAction(false);
     }
   };
 
@@ -1090,8 +1330,8 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
           </div>
         ) : (
           <div className="py-4 space-y-4 flex-1">
-            {/* Top Admin Tabs: Users, Fake Rank, Cards, Gift Prices, Lucky Wheel, Bot Setup, GitHub */}
-            <div className="grid grid-cols-3 gap-1.5 bg-slate-900/90 p-1.5 rounded-2xl border border-slate-800 text-[11px] font-bold">
+            {/* Top Admin Tabs: Users, Fake Rank, Section Locks, Cards, Gift Prices, Lucky Wheel, Bot Setup, GitHub */}
+            <div className="grid grid-cols-4 gap-1.5 bg-slate-900/90 p-1.5 rounded-2xl border border-slate-800 text-[10px] font-bold">
               <button
                 type="button"
                 onClick={() => {
@@ -1121,6 +1361,23 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
               >
                 <Trophy className="w-3.5 h-3.5" />
                 <span>رنک فیک ({adminFakeMembers.length})</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveTab('locks');
+                  setAdminFeedback(null);
+                }}
+                className={`py-2 rounded-xl transition flex items-center justify-center gap-1 cursor-pointer ${
+                  activeTab === 'locks'
+                    ? 'bg-gradient-to-r from-rose-500 to-amber-500 text-slate-950 font-black shadow-md'
+                    : 'text-rose-300 hover:text-white bg-rose-500/10 border border-rose-500/25'
+                }`}
+              >
+                <Lock className="w-3.5 h-3.5" />
+                <span>
+                  قفل بخش‌ها ({Object.values(adminLockedSections).filter(Boolean).length})
+                </span>
               </button>
               <button
                 type="button"
@@ -1188,14 +1445,14 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                   setActiveTab('github');
                   setAdminFeedback(null);
                 }}
-                className={`col-span-3 py-2 rounded-xl transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                className={`py-2 rounded-xl transition flex items-center justify-center gap-1 cursor-pointer ${
                   activeTab === 'github'
                     ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-slate-950 font-black shadow-md'
                     : 'text-slate-400 hover:text-white bg-slate-950/40'
                 }`}
               >
                 <Github className="w-3.5 h-3.5" />
-                <span>GitHub & Cloudflare Deploy</span>
+                <span>GitHub</span>
               </button>
             </div>
 
@@ -1231,6 +1488,7 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                       (u.balance || 0) > 5000
                   ).length;
                   const inactiveCount = Math.max(0, realUsers.length - activeCount);
+                  const bannedCount = allUsers.filter((u) => u.isBanned).length;
                   const totalInvites = realUsers.reduce((acc, u) => acc + (u.referralCount || 0), 0);
                   const totalTapsAll = realUsers.reduce((acc, u) => acc + (u.totalTaps || 0), 0);
 
@@ -1241,6 +1499,7 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                         <span className="text-xs font-black text-white block">{realUsers.length} نفر</span>
                         <span className="text-[8px] text-emerald-400 font-bold">
                           {activeCount} فعال / {inactiveCount} غیرفعال
+                          {bannedCount > 0 ? ` / ${bannedCount} بن` : ''}
                         </span>
                       </div>
                       <div className="p-2 rounded-2xl bg-slate-900/90 border border-slate-800 text-center">
@@ -1272,27 +1531,68 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                   );
                 })()}
 
-                {/* Shortcut Banner to Fake Rank Manager */}
-                <div className="p-3 rounded-2xl bg-gradient-to-r from-amber-500/20 via-orange-500/10 to-slate-900 border border-amber-500/40 flex items-center justify-between gap-2">
-                  <div className="text-right" dir="rtl">
-                    <span className="text-xs font-black text-amber-300 flex items-center gap-1.5">
-                      <Trophy className="w-4 h-4 text-amber-400 shrink-0" />
-                      <span>مدیریت ممبرهای فیک در رنک (فقط نمایشی)</span>
-                    </span>
-                    <span className="text-[10px] text-slate-300 block mt-0.5">
-                      در حال حاضر <b className="text-amber-300">{adminFakeMembers.length} ممبر فیک نمایشی</b> در جدول رنک فعال هستند.
-                    </span>
+                {/* Shortcut Banners to Fake Rank Manager & Section Locks (قفل بخش رنک و بخش‌ها) */}
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="p-2.5 rounded-2xl bg-gradient-to-r from-amber-500/20 via-orange-500/10 to-slate-900 border border-amber-500/40 flex flex-col justify-between gap-2" dir="rtl">
+                    <div>
+                      <span className="text-[11px] font-black text-amber-300 flex items-center gap-1">
+                        <Trophy className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                        <span>ممبرهای فیک رنک</span>
+                      </span>
+                      <span className="text-[9px] text-slate-300 block mt-0.5">
+                        <b className="text-amber-300">{adminFakeMembers.length} ممبر نمایشی</b> فعال در رنک
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActiveTab('fake_rank');
+                        setAdminFeedback(null);
+                      }}
+                      className="w-full py-1.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-black text-[10px] shadow transition active:scale-95 cursor-pointer"
+                    >
+                      مدیریت رنک فیک ⬅
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setActiveTab('fake_rank');
-                      setAdminFeedback(null);
-                    }}
-                    className="px-3 py-2 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-black text-[11px] shrink-0 shadow-md transition active:scale-95 cursor-pointer"
-                  >
-                    افزودن ممبر فیک ⬅
-                  </button>
+
+                  <div className="p-2.5 rounded-2xl bg-gradient-to-r from-rose-500/20 via-amber-500/10 to-slate-900 border border-rose-500/40 flex flex-col justify-between gap-2" dir="rtl">
+                    <div>
+                      <span className="text-[11px] font-black text-rose-300 flex items-center gap-1">
+                        <Lock className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                        <span>قفل کردن بخش‌ها (رنک و...)</span>
+                      </span>
+                      <span className="text-[9px] text-slate-300 block mt-0.5">
+                        وضعیت رنک:{' '}
+                        <b className={adminLockedSections.leaderboard ? 'text-rose-400' : 'text-emerald-400'}>
+                          {adminLockedSections.leaderboard ? '🔒 قفل شده' : '🔓 باز برای همه'}
+                        </b>
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        disabled={isSavingAdminData}
+                        onClick={() => handleToggleSectionLock('leaderboard')}
+                        className={`flex-1 py-1.5 rounded-xl font-black text-[10px] transition active:scale-95 cursor-pointer ${
+                          adminLockedSections.leaderboard
+                            ? 'bg-emerald-500 hover:bg-emerald-400 text-slate-950'
+                            : 'bg-rose-500 hover:bg-rose-400 text-white'
+                        }`}
+                      >
+                        {adminLockedSections.leaderboard ? '🔓 باز کردن رنک' : '🔒 قفل رنک'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveTab('locks');
+                          setAdminFeedback(null);
+                        }}
+                        className="px-2 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 font-bold text-[10px] cursor-pointer"
+                      >
+                        همه
+                      </button>
+                    </div>
+                  </div>
                 </div>
 
                 {/* Cloudflare D1 Database Status & 1-Click Force Save */}
@@ -1484,6 +1784,11 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                             <span className="text-[10px] uppercase tracking-wider text-amber-400 font-black">
                               📊 عملکرد و مدیریت کاربر
                             </span>
+                            {targetUser.isBanned && (
+                              <span className="px-2 py-0.5 rounded-full text-[9px] font-black bg-rose-500/25 text-rose-300 border border-rose-500/50">
+                                🚫 مسدود شده (BANNED)
+                              </span>
+                            )}
                             <span
                               className={`px-2 py-0.5 rounded-full text-[9px] font-black border ${
                                 isUserActive
@@ -1509,13 +1814,30 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                             ID: {targetUser.id} {targetUser.telegramId ? `• TG ID: ${targetUser.telegramId}` : ''}
                           </div>
                         </div>
-                        <div className="text-right shrink-0">
-                          <div className="text-xs font-black text-amber-300">
-                            {Math.floor(targetUser.balance || 0).toLocaleString('en-US')} FOX
+                        <div className="text-right shrink-0 flex flex-col items-end gap-1">
+                          <div>
+                            <div className="text-xs font-black text-amber-300">
+                              {Math.floor(targetUser.balance || 0).toLocaleString('en-US')} FOX
+                            </div>
+                            <div className="text-[10px] text-emerald-400 font-bold">
+                              لول {targetUser.level || 1} ({targetUser.levelName || 'Bronze Fox'})
+                            </div>
                           </div>
-                          <div className="text-[10px] text-emerald-400 font-bold">
-                            لول {targetUser.level || 1} ({targetUser.levelName || 'Bronze Fox'})
-                          </div>
+                          <button
+                            type="button"
+                            disabled={isExecutingBulkAction}
+                            onClick={() =>
+                              handleExecuteBulkUserAction(targetUser.isBanned ? 'unban' : 'ban', [targetUser.id])
+                            }
+                            className={`px-2 py-1 rounded-lg text-[9px] font-black flex items-center gap-1 transition cursor-pointer ${
+                              targetUser.isBanned
+                                ? 'bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300'
+                                : 'bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-rose-300'
+                            }`}
+                          >
+                            <Ban className="w-3 h-3" />
+                            <span>{targetUser.isBanned ? 'رفع مسدودیت (Unban)' : 'مسدود کردن (Ban)'}</span>
+                          </button>
                         </div>
                       </div>
 
@@ -1838,13 +2160,14 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                   );
                 })()}
 
-                {/* Activity Filter Tabs (همه / فعال / غیرفعال / دارای رفرال) */}
-                <div className="grid grid-cols-4 gap-1 bg-slate-900/90 p-1 rounded-xl border border-slate-800 text-[10px] font-bold">
+                {/* Activity Filter Tabs (همه / فعال / غیرفعال / دارای رفرال / مسدود شده) */}
+                <div className="grid grid-cols-5 gap-1 bg-slate-900/90 p-1 rounded-xl border border-slate-800 text-[9px] font-bold">
                   {[
                     { id: 'all', label: 'همه کاربران' },
                     { id: 'active', label: '🟢 فعال‌ها' },
                     { id: 'inactive', label: '⚪ غیرفعال‌ها' },
-                    { id: 'referrals', label: '🎁 دارای دعوتی' },
+                    { id: 'referrals', label: '🎁 دعوتی' },
+                    { id: 'banned', label: '🚫 مسدود (Ban)' },
                   ].map((f) => (
                     <button
                       key={f.id}
@@ -1873,7 +2196,7 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                   />
                 </div>
 
-                {/* All Users List with Full Performance Badges */}
+                {/* All Users List with Bulk Actions Toolbar, Ban Selected Button & Checkboxes */}
                 {(() => {
                   const cleanQ = userSearch.trim().replace(/^@/, '').toLowerCase();
                   const filteredList = allUsers.filter((u) => {
@@ -1887,6 +2210,7 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                     if (userActivityFilter === 'active' && !isActive) return false;
                     if (userActivityFilter === 'inactive' && isActive) return false;
                     if (userActivityFilter === 'referrals' && !(u.referralCount && u.referralCount > 0)) return false;
+                    if (userActivityFilter === 'banned' && !u.isBanned) return false;
 
                     if (!cleanQ) return true;
                     return (
@@ -1899,99 +2223,377 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                     );
                   });
 
-                  if (filteredList.length === 0) {
-                    return (
-                      <div className="p-4 rounded-2xl bg-slate-900/70 border border-slate-800 text-center text-xs text-slate-400">
-                        کاربری با مشخصات «{userSearch}» یافت نشد.
-                      </div>
-                    );
-                  }
+                  const filteredIds = filteredList.map((u) => u.id);
+                  const allFilteredSelected =
+                    filteredIds.length > 0 && filteredIds.every((id) => selectedBulkUserIds.includes(id));
 
                   return (
-                    <div className="space-y-2 max-h-[380px] overflow-y-auto pr-1">
-                      {filteredList.map((u, idx) => {
-                        const isSelected = u.id === (selectedUserId || filteredList[0]?.id);
-                        const isCurrentPlayer = u.id === user?.id;
-                        const upCount = Object.values(u.upgrades || {}).filter((lvl) => Number(lvl) > 0).length;
-                        const isActive =
-                          (u.totalTaps || 0) > 0 ||
-                          (u.profitPerHour || 0) > 0 ||
-                          upCount > 0 ||
-                          (u.balance || 0) > 5000;
+                    <div className="space-y-2.5">
+                      {/* BULK ACTIONS MENU & TOOLBAR */}
+                      <div className="p-2.5 rounded-2xl bg-slate-900/95 border border-rose-500/40 space-y-2 shadow-md">
+                        <div className="flex items-center justify-between gap-1.5 flex-wrap">
+                          {/* Select All & Select Bots/Inactive */}
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <button
+                              type="button"
+                              onClick={() => handleSelectAllFilteredUsers(filteredIds)}
+                              className="px-2.5 py-1.5 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-700 text-[10px] font-black text-slate-200 flex items-center gap-1.5 transition cursor-pointer"
+                            >
+                              {allFilteredSelected ? (
+                                <CheckSquare className="w-3.5 h-3.5 text-amber-400" />
+                              ) : (
+                                <Square className="w-3.5 h-3.5 text-slate-400" />
+                              )}
+                              <span>{allFilteredSelected ? 'لغو انتخاب همه' : 'Select All'}</span>
+                            </button>
 
-                        return (
-                          <div
-                            key={u.id}
-                            onClick={() => setSelectedUserId(u.id)}
-                            className={`p-3 rounded-2xl border transition cursor-pointer space-y-1.5 ${
-                              isSelected
-                                ? 'bg-amber-500/15 border-amber-500/60 shadow-md'
-                                : 'bg-slate-900/80 border-slate-800 hover:border-slate-700'
-                            }`}
-                          >
-                            <div className="flex items-center justify-between gap-2">
-                              <div className="min-w-0 flex-1">
-                                <div className="flex items-center gap-1.5 flex-wrap">
-                                  <span className="text-[10px] font-black text-amber-400">#{idx + 1}</span>
-                                  <span className="font-extrabold text-xs text-white truncate">
-                                    {u.displayName || u.username}
-                                  </span>
-                                  {isCurrentPlayer && (
-                                    <span className="px-1.5 py-0.2 bg-sky-500/20 text-sky-300 border border-sky-500/30 text-[9px] font-black rounded">
-                                      YOU
-                                    </span>
-                                  )}
-                                  {u.isTelegram && (
-                                    <span className="px-1.5 py-0.2 bg-blue-500/20 text-blue-300 text-[9px] font-bold rounded">
-                                      TG
-                                    </span>
-                                  )}
-                                  <span
-                                    className={`px-1.5 py-0.2 rounded text-[8px] font-bold ${
-                                      isActive
-                                        ? 'bg-emerald-500/20 text-emerald-300'
-                                        : 'bg-slate-800 text-slate-400'
-                                    }`}
+                            <button
+                              type="button"
+                              onClick={handleSelectInactiveBotAccounts}
+                              className="px-2.5 py-1.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-300 text-[10px] font-black flex items-center gap-1 transition cursor-pointer"
+                              title="انتخاب خودکار اکانت‌های فیک و ربات‌های غیرفعال"
+                            >
+                              <Bot className="w-3.5 h-3.5" />
+                              <span>انتخاب ربات‌ها/فیک‌ها</span>
+                            </button>
+
+                            {selectedBulkUserIds.length > 0 && (
+                              <span className="px-2 py-0.5 rounded-lg bg-amber-500/20 border border-amber-500/40 text-amber-300 text-[10px] font-black">
+                                {selectedBulkUserIds.length} Selected
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Primary Ban Selected Button + Bulk Actions Dropdown Trigger */}
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              disabled={isExecutingBulkAction || selectedBulkUserIds.length === 0}
+                              onClick={() => handleExecuteBulkUserAction('ban')}
+                              className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-500 hover:to-red-500 text-white font-black text-[10px] flex items-center gap-1 shadow-md shadow-rose-600/20 transition active:scale-95 cursor-pointer disabled:opacity-40"
+                            >
+                              <Ban className="w-3.5 h-3.5" />
+                              <span>Ban Selected ({selectedBulkUserIds.length})</span>
+                            </button>
+
+                            <div className="relative">
+                              <button
+                                type="button"
+                                onClick={() => setShowBulkActionsMenu((prev) => !prev)}
+                                className="px-2.5 py-1.5 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-700 text-slate-200 font-black text-[10px] flex items-center gap-1 transition cursor-pointer"
+                              >
+                                <span>Bulk Actions</span>
+                                <ChevronDown className="w-3.5 h-3.5 text-amber-400" />
+                              </button>
+
+                              {showBulkActionsMenu && (
+                                <div className="absolute right-0 mt-1.5 w-52 rounded-2xl bg-slate-950 border border-slate-700 shadow-2xl p-1.5 z-30 space-y-1 text-[11px]">
+                                  <div className="px-2.5 py-1 text-[9px] font-black text-slate-400 border-b border-slate-800 flex items-center justify-between">
+                                    <span>BULK ACTIONS MENU</span>
+                                    <span className="text-amber-400">{selectedBulkUserIds.length} کاربر</span>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    disabled={isExecutingBulkAction || selectedBulkUserIds.length === 0}
+                                    onClick={() => handleExecuteBulkUserAction('ban')}
+                                    className="w-full px-2.5 py-2 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 font-black flex items-center justify-between transition cursor-pointer disabled:opacity-40"
                                   >
-                                    {isActive ? 'فعال' : 'غیرفعال'}
-                                  </span>
+                                    <span className="flex items-center gap-1.5">
+                                      <Ban className="w-3.5 h-3.5" />
+                                      <span>Ban Selected (مسدودسازی)</span>
+                                    </span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={isExecutingBulkAction || selectedBulkUserIds.length === 0}
+                                    onClick={() => handleExecuteBulkUserAction('unban')}
+                                    className="w-full px-2.5 py-2 rounded-xl hover:bg-emerald-500/15 text-emerald-300 font-bold flex items-center justify-between transition cursor-pointer disabled:opacity-40"
+                                  >
+                                    <span className="flex items-center gap-1.5">
+                                      <Unlock className="w-3.5 h-3.5" />
+                                      <span>Unban Selected (رفع بن)</span>
+                                    </span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={isExecutingBulkAction || selectedBulkUserIds.length === 0}
+                                    onClick={() => handleExecuteBulkUserAction('reset_coins')}
+                                    className="w-full px-2.5 py-2 rounded-xl hover:bg-amber-500/15 text-amber-300 font-bold flex items-center justify-between transition cursor-pointer disabled:opacity-40"
+                                  >
+                                    <span className="flex items-center gap-1.5">
+                                      <Coins className="w-3.5 h-3.5" />
+                                      <span>صفر کردن سکه انتخاب‌شده‌ها</span>
+                                    </span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={isExecutingBulkAction || selectedBulkUserIds.length === 0}
+                                    onClick={() => handleExecuteBulkUserAction('delete')}
+                                    className="w-full px-2.5 py-2 rounded-xl hover:bg-rose-500/20 text-rose-400 font-bold flex items-center justify-between transition cursor-pointer disabled:opacity-40"
+                                  >
+                                    <span className="flex items-center gap-1.5">
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                      <span>حذف کامل اکانت‌ها (Delete)</span>
+                                    </span>
+                                  </button>
+                                  {selectedBulkUserIds.length > 0 && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setSelectedBulkUserIds([]);
+                                        setShowBulkActionsMenu(false);
+                                      }}
+                                      className="w-full px-2.5 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-400 text-[10px] font-bold text-center cursor-pointer"
+                                    >
+                                      پاک کردن انتخاب‌ها
+                                    </button>
+                                  )}
                                 </div>
-                                <div className="text-[10px] text-slate-400 font-mono truncate">
-                                  @{u.username} • {u.id}{u.telegramId ? ` (TG: ${u.telegramId})` : ''} • Lvl {u.level} ({u.levelName})
-                                </div>
-                              </div>
-
-                              <div className="text-right shrink-0">
-                                <div className="text-xs font-black text-amber-400">
-                                  {Math.floor(u.balance || 0).toLocaleString('en-US')} FOX
-                                </div>
-                                <div className="text-[10px] text-emerald-400 font-semibold">
-                                  دعوت: {u.referralCount || 0} نفر ({Math.floor(u.referralEarnings || 0).toLocaleString('en-US')} FOX)
-                                </div>
-                              </div>
-                            </div>
-
-                            {/* Compact Performance Row for Every User */}
-                            <div className="grid grid-cols-4 gap-1 pt-1 border-t border-slate-800/80 text-[9px] text-slate-300 text-center">
-                              <div className="bg-slate-950/60 rounded px-1 py-0.5">
-                                ⚡ سود/ساعت: <b className="text-sky-300">+{Math.floor(u.profitPerHour || 0).toLocaleString('en-US')}</b>
-                              </div>
-                              <div className="bg-slate-950/60 rounded px-1 py-0.5">
-                                👆 تپ‌ها: <b className="text-purple-300">{Math.floor(u.totalTaps || 0).toLocaleString('en-US')}</b>
-                              </div>
-                              <div className="bg-slate-950/60 rounded px-1 py-0.5">
-                                🃏 کارت‌ها: <b className="text-orange-300">{upCount}</b>
-                              </div>
-                              <div className="bg-slate-950/60 rounded px-1 py-0.5">
-                                🔥 استریک: <b className="text-amber-300">{u.dailyStreak || 0} روز</b>
-                              </div>
+                              )}
                             </div>
                           </div>
-                        );
-                      })}
+                        </div>
+                      </div>
+
+                      {filteredList.length === 0 ? (
+                        <div className="p-4 rounded-2xl bg-slate-900/70 border border-slate-800 text-center text-xs text-slate-400">
+                          کاربری با مشخصات «{userSearch}» یافت نشد.
+                        </div>
+                      ) : (
+                        <div className="space-y-2 max-h-[380px] overflow-y-auto pr-1">
+                          {filteredList.map((u, idx) => {
+                            const isSelected = u.id === (selectedUserId || filteredList[0]?.id);
+                            const isBulkChecked = selectedBulkUserIds.includes(u.id);
+                            const isCurrentPlayer = u.id === user?.id;
+                            const upCount = Object.values(u.upgrades || {}).filter((lvl) => Number(lvl) > 0).length;
+                            const isActive =
+                              (u.totalTaps || 0) > 0 ||
+                              (u.profitPerHour || 0) > 0 ||
+                              upCount > 0 ||
+                              (u.balance || 0) > 5000;
+
+                            return (
+                              <div
+                                key={u.id}
+                                onClick={() => setSelectedUserId(u.id)}
+                                className={`p-3 rounded-2xl border transition cursor-pointer space-y-1.5 ${
+                                  u.isBanned
+                                    ? 'bg-rose-950/30 border-rose-500/50'
+                                    : isBulkChecked
+                                    ? 'bg-amber-500/20 border-amber-400 shadow-md'
+                                    : isSelected
+                                    ? 'bg-amber-500/15 border-amber-500/60 shadow-md'
+                                    : 'bg-slate-900/80 border-slate-800 hover:border-slate-700'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <div className="flex items-center gap-2 min-w-0 flex-1">
+                                    {/* Multi-select Checkbox for Bulk Operations */}
+                                    <button
+                                      type="button"
+                                      onClick={(e) => toggleBulkUserSelection(u.id, e)}
+                                      className="p-1 rounded-lg hover:bg-slate-800 text-amber-400 shrink-0 cursor-pointer"
+                                      title="Select user for Bulk Action"
+                                    >
+                                      {isBulkChecked ? (
+                                        <CheckSquare className="w-4 h-4 text-amber-400" />
+                                      ) : (
+                                        <Square className="w-4 h-4 text-slate-500" />
+                                      )}
+                                    </button>
+
+                                    <div className="min-w-0 flex-1">
+                                      <div className="flex items-center gap-1.5 flex-wrap">
+                                        <span className="text-[10px] font-black text-amber-400">#{idx + 1}</span>
+                                        <span className="font-extrabold text-xs text-white truncate">
+                                          {u.displayName || u.username}
+                                        </span>
+                                        {u.isBanned && (
+                                          <span className="px-1.5 py-0.5 bg-rose-500/25 text-rose-300 border border-rose-500/40 text-[8px] font-black rounded">
+                                            🚫 BANNED
+                                          </span>
+                                        )}
+                                        {isCurrentPlayer && (
+                                          <span className="px-1.5 py-0.2 bg-sky-500/20 text-sky-300 border border-sky-500/30 text-[9px] font-black rounded">
+                                            YOU
+                                          </span>
+                                        )}
+                                        {u.isTelegram && (
+                                          <span className="px-1.5 py-0.2 bg-blue-500/20 text-blue-300 text-[9px] font-bold rounded">
+                                            TG
+                                          </span>
+                                        )}
+                                        <span
+                                          className={`px-1.5 py-0.2 rounded text-[8px] font-bold ${
+                                            isActive
+                                              ? 'bg-emerald-500/20 text-emerald-300'
+                                              : 'bg-slate-800 text-slate-400'
+                                          }`}
+                                        >
+                                          {isActive ? 'فعال' : 'غیرفعال'}
+                                        </span>
+                                      </div>
+                                      <div className="text-[10px] text-slate-400 font-mono truncate">
+                                        @{u.username} • {u.id}
+                                        {u.telegramId ? ` (TG: ${u.telegramId})` : ''} • Lvl {u.level} ({u.levelName})
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  <div className="text-right shrink-0">
+                                    <div className="text-xs font-black text-amber-400">
+                                      {Math.floor(u.balance || 0).toLocaleString('en-US')} FOX
+                                    </div>
+                                    <div className="text-[10px] text-emerald-400 font-semibold">
+                                      دعوت: {u.referralCount || 0} نفر ({Math.floor(u.referralEarnings || 0).toLocaleString('en-US')} FOX)
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {/* Compact Performance Row for Every User */}
+                                <div className="grid grid-cols-4 gap-1 pt-1 border-t border-slate-800/80 text-[9px] text-slate-300 text-center">
+                                  <div className="bg-slate-950/60 rounded px-1 py-0.5">
+                                    ⚡ سود/ساعت: <b className="text-sky-300">+{Math.floor(u.profitPerHour || 0).toLocaleString('en-US')}</b>
+                                  </div>
+                                  <div className="bg-slate-950/60 rounded px-1 py-0.5">
+                                    👆 تپ‌ها: <b className="text-purple-300">{Math.floor(u.totalTaps || 0).toLocaleString('en-US')}</b>
+                                  </div>
+                                  <div className="bg-slate-950/60 rounded px-1 py-0.5">
+                                    🃏 کارت‌ها: <b className="text-orange-300">{upCount}</b>
+                                  </div>
+                                  <div className="bg-slate-950/60 rounded px-1 py-0.5">
+                                    🔥 استریک: <b className="text-amber-300">{u.dailyStreak || 0} روز</b>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
                   );
                 })()}
+              </div>
+            )}
+
+            {/* TAB: SECTION LOCKS MANAGER (قفل کردن هر بخش از برنامه مثلاً بخش رنک) */}
+            {activeTab === 'locks' && (
+              <div className="space-y-4 animate-fade-in" dir="rtl">
+                <div className="p-4 rounded-2xl bg-gradient-to-br from-rose-500/20 via-slate-900 to-slate-900 border border-rose-500/40 space-y-3 shadow-lg">
+                  <div className="flex items-center justify-between">
+                    <h4 className="font-black text-xs text-rose-300 flex items-center gap-1.5">
+                      <Lock className="w-4 h-4 text-rose-400" />
+                      <span>قفل کردن بخش‌های بازی (Section Access Control)</span>
+                    </h4>
+                    <span className="px-2 py-0.5 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-300 text-[10px] font-black">
+                      اعمال آنی برای همه کاربران
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-300 leading-relaxed">
+                    از این قسمت می‌توانید هر بخش از مینی‌اپ (مثل <b>بخش رنک / لیدربورد</b>، <b>ترید</b>، <b>گیفت‌ها</b>، <b>ماین</b>، <b>تسک‌ها</b> یا <b>دعوت دوستان</b>) را با یک کلیک قفل یا باز کنید. وقتی بخشی قفل باشد، آیکون قفل 🔒 روی منوی پایین ظاهر شده و کاربران پیام «قفل بودن بخش توسط مدیریت» را مشاهده می‌کنند.
+                  </p>
+
+                  {/* Quick Bulk Lock / Unlock All Buttons */}
+                  <div className="grid grid-cols-2 gap-2 pt-1">
+                    <button
+                      type="button"
+                      disabled={isSavingAdminData}
+                      onClick={() => {
+                        const allUnlocked: Record<string, boolean> = {};
+                        LOCKABLE_APP_SECTIONS.forEach((s) => {
+                          allUnlocked[s.id] = false;
+                        });
+                        handleSaveAllSectionLocks(allUnlocked, '🔓 تمام بخش‌های برنامه برای همه کاربران باز شدند.');
+                      }}
+                      className="py-2 px-3 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 font-black text-xs flex items-center justify-center gap-1.5 transition active:scale-95 cursor-pointer disabled:opacity-50"
+                    >
+                      <Unlock className="w-3.5 h-3.5" />
+                      <span>باز کردن قفل همه بخش‌ها</span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isSavingAdminData}
+                      onClick={() => {
+                        const allLocked: Record<string, boolean> = {};
+                        LOCKABLE_APP_SECTIONS.forEach((s) => {
+                          allLocked[s.id] = true;
+                        });
+                        handleSaveAllSectionLocks(allLocked, '🔒 تمام بخش‌های فرعی برنامه قفل شدند (فقط صفحه تپ باز است).');
+                      }}
+                      className="py-2 px-3 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-rose-300 font-black text-xs flex items-center justify-center gap-1.5 transition active:scale-95 cursor-pointer disabled:opacity-50"
+                    >
+                      <Lock className="w-3.5 h-3.5" />
+                      <span>قفل کردن همه بخش‌ها</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Individual Section Lock Cards */}
+                <div className="space-y-2.5">
+                  {LOCKABLE_APP_SECTIONS.map((sec) => {
+                    const isLocked = Boolean(adminLockedSections[sec.id]);
+                    return (
+                      <div
+                        key={sec.id}
+                        className={`p-3.5 rounded-2xl border transition flex items-center justify-between gap-3 ${
+                          isLocked
+                            ? 'bg-rose-950/35 border-rose-500/50 shadow-md'
+                            : 'bg-slate-900/90 border-slate-800 hover:border-slate-700'
+                        }`}
+                      >
+                        <div className="flex items-start gap-2.5 min-w-0">
+                          <div
+                            className={`w-10 h-10 rounded-xl flex items-center justify-center text-lg shrink-0 border ${
+                              isLocked
+                                ? 'bg-rose-500/20 border-rose-500/40'
+                                : 'bg-slate-950 border-slate-800'
+                            }`}
+                          >
+                            {sec.icon}
+                          </div>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="font-black text-xs text-white">{sec.titleFa}</span>
+                              <span
+                                className={`px-2 py-0.5 rounded-full text-[9px] font-black border ${
+                                  isLocked
+                                    ? 'bg-rose-500/25 text-rose-300 border-rose-500/40'
+                                    : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                                }`}
+                              >
+                                {isLocked ? '🔒 قفل شده (Locked)' : '🔓 فعال و باز (Open)'}
+                              </span>
+                            </div>
+                            <p className="text-[10px] text-slate-400 mt-1 leading-relaxed">{sec.descFa}</p>
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          disabled={isSavingAdminData}
+                          onClick={() => handleToggleSectionLock(sec.id)}
+                          className={`px-3.5 py-2.5 rounded-xl font-black text-xs shrink-0 flex items-center gap-1.5 shadow transition active:scale-95 cursor-pointer disabled:opacity-50 ${
+                            isLocked
+                              ? 'bg-emerald-500 hover:bg-emerald-400 text-slate-950'
+                              : 'bg-rose-600 hover:bg-rose-500 text-white'
+                          }`}
+                        >
+                          {isLocked ? (
+                            <>
+                              <Unlock className="w-3.5 h-3.5" />
+                              <span>باز کردن قفل</span>
+                            </>
+                          ) : (
+                            <>
+                              <Lock className="w-3.5 h-3.5" />
+                              <span>قفل کردن بخش</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
 
@@ -2049,16 +2651,35 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
 
                   return (
                     <>
-                      {/* Top Overview Card */}
+                      {/* Top Overview Card + Quick Rank Lock Switch */}
                       <div className="p-3.5 rounded-2xl bg-gradient-to-br from-amber-500/20 via-slate-900 to-slate-900 border border-amber-500/40 space-y-2.5" dir="rtl">
-                        <div className="flex items-center justify-between">
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
                           <h4 className="font-black text-xs text-amber-300 flex items-center gap-1.5">
                             <Trophy className="w-4 h-4 text-amber-400" />
                             <span>مدیریت ممبرهای فیک در رنک (فقط نمایشی)</span>
                           </h4>
-                          <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-[10px] font-black">
-                            دائمی و بدون حذف
-                          </span>
+                          <button
+                            type="button"
+                            disabled={isSavingAdminData}
+                            onClick={() => handleToggleSectionLock('leaderboard')}
+                            className={`px-2.5 py-1 rounded-xl text-[10px] font-black flex items-center gap-1 transition cursor-pointer ${
+                              adminLockedSections.leaderboard
+                                ? 'bg-rose-500 text-white shadow'
+                                : 'bg-slate-950 hover:bg-rose-500/20 border border-rose-500/40 text-rose-300'
+                            }`}
+                          >
+                            {adminLockedSections.leaderboard ? (
+                              <>
+                                <Unlock className="w-3 h-3" />
+                                <span>بخش رنک قفل است (کلیک برای باز کردن)</span>
+                              </>
+                            ) : (
+                              <>
+                                <Lock className="w-3 h-3" />
+                                <span>قفل کردن بخش رنک</span>
+                              </>
+                            )}
+                          </button>
                         </div>
                         <p className="text-[11px] text-slate-300 leading-relaxed">
                           ممبرهایی که در این بخش اضافه می‌کنید <b>فقط نمایشی در جدول رنک (Hall of Foxes)</b> هستند و برای همه پلیرها دقیقاً مثل کاربران واقعی نمایش داده می‌شوند، اما وارد لیست کاربران واقعی نمی‌شوند.

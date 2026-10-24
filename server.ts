@@ -186,6 +186,7 @@ app.get('/api/game/config', async (req, res) => {
     upgrades: db.getUpgrades(),
     wheelPrizes: db.getWheelPrizes(),
     fakeLeaderboardMembers: db.getFakeLeaderboardMembers(),
+    lockedSections: db.getLockedSections(),
     levels: PLAYER_LEVELS,
     tasks: TASKS,
     dailyRewards: DAILY_REWARDS,
@@ -1000,6 +1001,40 @@ app.post('/api/admin/fake-leaderboard/save', requireAdmin, (req: AuthenticatedRe
     success: true,
     fakeLeaderboardMembers: saved,
   });
+});
+
+// Admin: Get & Save Locked Sections
+app.get('/api/admin/sections-lock', requireAdmin, (_req: AuthenticatedRequest, res) => {
+  res.json({
+    success: true,
+    lockedSections: db.getLockedSections(),
+  });
+});
+
+app.post('/api/admin/sections-lock/save', requireAdmin, (req: AuthenticatedRequest, res) => {
+  const lockedSections = req.body?.lockedSections || {};
+  const saved = db.adminSaveLockedSections(lockedSections);
+  res.json({
+    success: true,
+    lockedSections: saved,
+  });
+});
+
+// Admin: Bulk User Actions (Ban Selected, Unban Selected, Reset Coins, Add Coins, Delete Selected)
+app.post('/api/admin/users/bulk-action', requireAdmin, (req: AuthenticatedRequest, res) => {
+  const { userIds, action, amount } = req.body || {};
+  if (!Array.isArray(userIds) || userIds.length === 0) {
+    return res.status(400).json({ error: 'At least one user ID must be selected' });
+  }
+  if (!['ban', 'unban', 'reset_coins', 'add_coins', 'delete'].includes(action)) {
+    return res.status(400).json({ error: 'Invalid bulk action' });
+  }
+  const result = db.adminBulkUserAction({
+    userIds,
+    action,
+    amount: amount !== undefined ? Number(amount) : undefined,
+  });
+  res.json(result);
 });
 
 // Check Webhook Status with Telegram
