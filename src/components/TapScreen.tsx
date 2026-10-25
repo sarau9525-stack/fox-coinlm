@@ -1,11 +1,28 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Zap, TrendingUp, Sparkles, Flame, Gift, Shirt, Lock, Check, X } from 'lucide-react';
+import {
+  Zap,
+  TrendingUp,
+  Sparkles,
+  Flame,
+  Shirt,
+  Lock,
+  Check,
+  X,
+  Clock,
+  ChevronRight,
+  UserPlus,
+  ArrowUpCircle,
+} from 'lucide-react';
 import { UserGameState } from '../types/game.js';
 import { sound } from '../utils/audio.js';
 import { TelegramService } from '../utils/telegram.js';
 import { foxMascotImg, foxGoldCoinImg } from '../assets/assets.js';
 import { FoxGiftAvatar, getFoxGiftMetadata } from './FoxGiftAvatar.js';
 import { FoxLevelOutfit, FOX_LEVEL_OUTFITS, getLevelOutfitMeta } from './FoxLevelOutfit.js';
+import { FoxCrestIcon } from './Header.js';
+import { NavTab } from './Navigation.js';
+
+const HERO_DESIGN_ASSET = '/assets/aistudio/file_00000000fd4081f4ae9afe382ba27099_7e8f18cb.png';
 
 interface FloatingNumber {
   id: number;
@@ -15,371 +32,582 @@ interface FloatingNumber {
   isCrit: boolean;
 }
 
+interface TapRipple {
+  id: number;
+  x: number;
+  y: number;
+}
+
 interface TapScreenProps {
   user: UserGameState;
   onTap: (count: number) => void;
   onOpenBoost: () => void;
   onOpenWheel?: () => void;
+  onOpenDaily?: () => void;
+  onNavigateTab?: (tab: NavTab) => void;
+  onClaimQuickMission?: (missionId: string, reward: number) => void;
   equippedGiftId?: string | null;
   onOpenGifts?: () => void;
   offlineEarnings?: number;
   onOpenOfflineModal?: () => void;
 }
 
-export const TapScreen: React.FC<TapScreenProps> = React.memo(({
-  user,
-  onTap,
-  onOpenBoost,
-  onOpenWheel,
-  equippedGiftId,
-  onOpenGifts,
-  offlineEarnings = 0,
-  onOpenOfflineModal,
-}) => {
-  const [floatingNumbers, setFloatingNumbers] = useState<FloatingNumber[]>([]);
-  const [isPressing, setIsPressing] = useState<boolean>(false);
-  const [tilt, setTilt] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
-  const [turboRemaining, setTurboRemaining] = useState<number>(0);
-  const [customOutfitLevel, setCustomOutfitLevel] = useState<number | null>(null);
-  const [previewOutfitLevel, setPreviewOutfitLevel] = useState<number>(user.level);
-  const [showWardrobeModal, setShowWardrobeModal] = useState<boolean>(false);
-  const [levelUpBanner, setLevelUpBanner] = useState<{ level: number; titleFa: string } | null>(null);
+function formatCompactNumber(num: number): string {
+  if (num >= 1_000_000_000) {
+    const val = num / 1_000_000_000;
+    return `${val % 1 === 0 ? val.toFixed(0) : val.toFixed(1)}B`;
+  }
+  if (num >= 1_000_000) {
+    const val = num / 1_000_000;
+    return `${val % 1 === 0 ? val.toFixed(0) : val.toFixed(1)}M`;
+  }
+  if (num >= 1_000) {
+    const val = num / 1_000;
+    return `${val % 1 === 0 ? val.toFixed(0) : val.toFixed(1)}K`;
+  }
+  return num.toString();
+}
 
-  const mascotRef = useRef<HTMLDivElement>(null);
-  const nextId = useRef<number>(1);
-  const cleanupTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
-  const prevLevelRef = useRef<number>(user.level);
-
-  // Clean up any pending particle timers on unmount
-  useEffect(() => {
-    const timers = cleanupTimersRef.current;
-    return () => {
-      timers.forEach((t) => clearTimeout(t));
-      timers.clear();
-    };
-  }, []);
-
-  // Automatically detect level-ups and switch the Fox into its new level outfit
-  useEffect(() => {
-    if (user.level > prevLevelRef.current) {
-      const meta = getLevelOutfitMeta(user.level);
-      setCustomOutfitLevel(null); // Auto-wear the newly unlocked level outfit
-      setPreviewOutfitLevel(user.level);
-      setLevelUpBanner({ level: user.level, titleFa: meta.outfitTitleFa });
-      sound.playSuccess();
-      TelegramService.triggerNotificationHaptic('success');
-
-      const timer = setTimeout(() => {
-        setLevelUpBanner(null);
-      }, 4500);
-      prevLevelRef.current = user.level;
-      return () => clearTimeout(timer);
-    }
-    prevLevelRef.current = user.level;
-  }, [user.level]);
-
-  // Check turbo active countdown
-  useEffect(() => {
-    const checkTurbo = () => {
-      const now = Date.now();
-      if (user.boosters.turboActiveUntil > now) {
-        setTurboRemaining(Math.ceil((user.boosters.turboActiveUntil - now) / 1000));
-      } else {
-        setTurboRemaining(0);
+export const TapScreen: React.FC<TapScreenProps> = React.memo(
+  ({
+    user,
+    onTap,
+    onOpenBoost,
+    onOpenWheel,
+    onOpenDaily,
+    onNavigateTab,
+    onClaimQuickMission,
+    equippedGiftId,
+    onOpenGifts,
+    offlineEarnings = 0,
+    onOpenOfflineModal,
+  }) => {
+    const [floatingNumbers, setFloatingNumbers] = useState<FloatingNumber[]>([]);
+    const [tapRipples, setTapRipples] = useState<TapRipple[]>([]);
+    const [isPressing, setIsPressing] = useState<boolean>(false);
+    const [isOrbPressing, setIsOrbPressing] = useState<boolean>(false);
+    const [tilt, setTilt] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+    const [turboRemaining, setTurboRemaining] = useState<number>(0);
+    const [customOutfitLevel, setCustomOutfitLevel] = useState<number | null>(null);
+    const [previewOutfitLevel, setPreviewOutfitLevel] = useState<number>(user.level);
+    const [showWardrobeModal, setShowWardrobeModal] = useState<boolean>(false);
+    const [levelUpBanner, setLevelUpBanner] = useState<{ level: number; titleFa: string } | null>(null);
+    const [dailyCountdown, setDailyCountdown] = useState<string>('12:54:32');
+    const [claimedQuickMissions, setClaimedQuickMissions] = useState<Record<string, boolean>>(() => {
+      if (typeof window === 'undefined') return {};
+      try {
+        const todayKey = new Date().toISOString().slice(0, 10);
+        const raw = localStorage.getItem(`fox_quick_missions_${user.id}_${todayKey}`);
+        return raw ? JSON.parse(raw) : {};
+      } catch {
+        return {};
       }
-    };
-    checkTurbo();
-    const interval = setInterval(checkTurbo, 500);
-    return () => clearInterval(interval);
-  }, [user.boosters.turboActiveUntil]);
+    });
 
-  // Handle single or multi-finger pointer tap with zero delay
-  const handleTapCoordinates = useCallback(
-    (clientX: number, clientY: number) => {
-      const isTurbo = turboRemaining > 0;
-      if (!isTurbo && user.energy < 1) {
-        sound.playTap();
-        TelegramService.triggerHaptic('heavy');
+    const stageRef = useRef<HTMLDivElement>(null);
+    const nextId = useRef<number>(1);
+    const cleanupTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+    const prevLevelRef = useRef<number>(user.level);
+
+    // Clean up pending particle timers on unmount
+    useEffect(() => {
+      const timers = cleanupTimersRef.current;
+      return () => {
+        timers.forEach((t) => clearTimeout(t));
+        timers.clear();
+      };
+    }, []);
+
+    // Live countdown timer for Daily Missions header
+    useEffect(() => {
+      const updateTimer = () => {
+        const now = new Date();
+        const tomorrow = new Date(now);
+        tomorrow.setUTCHours(24, 0, 0, 0);
+        const diffSec = Math.max(0, Math.floor((tomorrow.getTime() - now.getTime()) / 1000));
+        const hrs = String(Math.floor(diffSec / 3600)).padStart(2, '0');
+        const mins = String(Math.floor((diffSec % 3600) / 60)).padStart(2, '0');
+        const secs = String(diffSec % 60).padStart(2, '0');
+        setDailyCountdown(`${hrs}:${mins}:${secs}`);
+      };
+      updateTimer();
+      const interval = setInterval(updateTimer, 1000);
+      return () => clearInterval(interval);
+    }, []);
+
+    // Automatically detect level-ups
+    useEffect(() => {
+      if (user.level > prevLevelRef.current) {
+        const meta = getLevelOutfitMeta(user.level);
+        setCustomOutfitLevel(null);
+        setPreviewOutfitLevel(user.level);
+        setLevelUpBanner({ level: user.level, titleFa: meta.outfitTitleFa });
+        sound.playSuccess();
+        TelegramService.triggerNotificationHaptic('success');
+
+        const timer = setTimeout(() => {
+          setLevelUpBanner(null);
+        }, 4500);
+        prevLevelRef.current = user.level;
+        return () => clearTimeout(timer);
+      }
+      prevLevelRef.current = user.level;
+    }, [user.level]);
+
+    // Check turbo active countdown
+    useEffect(() => {
+      const checkTurbo = () => {
+        const now = Date.now();
+        if (user.boosters.turboActiveUntil > now) {
+          setTurboRemaining(Math.ceil((user.boosters.turboActiveUntil - now) / 1000));
+        } else {
+          setTurboRemaining(0);
+        }
+      };
+      checkTurbo();
+      const interval = setInterval(checkTurbo, 500);
+      return () => clearInterval(interval);
+    }, [user.boosters.turboActiveUntil]);
+
+    // Handle single or multi-finger pointer tap with zero delay + shockwave ripple
+    const handleTapCoordinates = useCallback(
+      (clientX: number, clientY: number, localX?: number, localY?: number) => {
+        const isTurbo = turboRemaining > 0;
+        if (!isTurbo && user.energy < 1) {
+          sound.playTap();
+          TelegramService.triggerHaptic('heavy');
+          return;
+        }
+
+        const tapMultiplier = isTurbo ? 3 : 1;
+        const tapValue = user.tapPower * tapMultiplier;
+
+        sound.playCoin();
+        TelegramService.triggerHaptic(isTurbo ? 'medium' : 'light');
+
+        const id = nextId.current++;
+        const newFloating: FloatingNumber = {
+          id,
+          x: clientX,
+          y: clientY,
+          value: tapValue,
+          isCrit: isTurbo,
+        };
+
+        setFloatingNumbers((prev) => [...prev.slice(-11), newFloating]);
+
+        if (localX !== undefined && localY !== undefined) {
+          setTapRipples((prev) => [...prev.slice(-5), { id, x: localX, y: localY }]);
+        }
+
+        const timer = setTimeout(() => {
+          setFloatingNumbers((prev) => prev.filter((item) => item.id !== id));
+          setTapRipples((prev) => prev.filter((item) => item.id !== id));
+          cleanupTimersRef.current.delete(timer);
+        }, 720);
+        cleanupTimersRef.current.add(timer);
+
+        onTap(1);
+      },
+      [user.energy, user.tapPower, turboRemaining, onTap]
+    );
+
+    const handleStagePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+      // Ignore if clicking the top-left wardrobe button
+      if ((e.target as HTMLElement).closest('[data-wardrobe-btn="true"]')) {
         return;
       }
+      e.preventDefault();
+      setIsPressing(true);
 
-      const tapMultiplier = isTurbo ? 3 : 1;
-      const tapValue = user.tapPower * tapMultiplier;
+      let localX: number | undefined;
+      let localY: number | undefined;
 
-      // Haptic and audio feedback
-      sound.playCoin();
-      TelegramService.triggerHaptic(isTurbo ? 'medium' : 'light');
+      if (stageRef.current) {
+        const rect = stageRef.current.getBoundingClientRect();
+        localX = e.clientX - rect.left;
+        localY = e.clientY - rect.top;
+        const centerX = rect.left + rect.width / 2;
+        const centerY = rect.top + rect.height / 2;
+        const dx = Math.max(-1, Math.min(1, (e.clientX - centerX) / (rect.width / 2)));
+        const dy = Math.max(-1, Math.min(1, (e.clientY - centerY) / (rect.height / 2)));
+        setTilt({ x: dx * 7, y: -dy * 7 });
+      }
 
-      const id = nextId.current++;
-      const newFloating: FloatingNumber = {
-        id,
-        x: clientX,
-        y: clientY,
-        value: tapValue,
-        isCrit: isTurbo,
-      };
+      handleTapCoordinates(e.clientX, e.clientY, localX, localY);
+    };
 
-      setFloatingNumbers((prev) => [...prev.slice(-11), newFloating]);
+    const handleStagePointerUp = () => {
+      setIsPressing(false);
+      setIsOrbPressing(false);
+      setTilt({ x: 0, y: 0 });
+    };
 
-      // Independent per-particle removal so rapid tapping never blocks cleanup
-      const timer = setTimeout(() => {
-        setFloatingNumbers((prev) => prev.filter((item) => item.id !== id));
-        cleanupTimersRef.current.delete(timer);
-      }, 650);
-      cleanupTimersRef.current.add(timer);
+    const handleQuickMissionClaim = (missionId: string, reward: number) => {
+      if (claimedQuickMissions[missionId]) return;
+      const next = { ...claimedQuickMissions, [missionId]: true };
+      setClaimedQuickMissions(next);
+      try {
+        const todayKey = new Date().toISOString().slice(0, 10);
+        localStorage.setItem(`fox_quick_missions_${user.id}_${todayKey}`, JSON.stringify(next));
+      } catch {
+        // Ignore storage error
+      }
+      sound.playSuccess();
+      TelegramService.triggerNotificationHaptic('success');
+      if (onClaimQuickMission) {
+        onClaimQuickMission(missionId, reward);
+      }
+    };
 
-      // Trigger parent batched tap
-      onTap(1);
-    },
-    [user.energy, user.tapPower, turboRemaining, onTap]
-  );
+    // Level progress percentage
+    const currentLevelRange = user.nextLevelMinCoins - user.currentLevelMinCoins;
+    const currentLevelProgress = Math.max(0, user.totalEarned - user.currentLevelMinCoins);
+    const levelPercent =
+      currentLevelRange > 0
+        ? Math.min(100, Math.floor((currentLevelProgress / currentLevelRange) * 100))
+        : 100;
 
-  // Unified Pointer Events for zero-latency multi-touch + desktop click
-  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    setIsPressing(true);
-    handleTapCoordinates(e.clientX, e.clientY);
+    // Energy percentage
+    const energyPercent = Math.min(100, Math.floor((user.energy / Math.max(1, user.maxEnergy)) * 100));
+    const perSecondProfit = user.profitPerHour > 0 ? user.profitPerHour / 3600 : 0;
+    const equippedMeta = equippedGiftId ? getFoxGiftMetadata(equippedGiftId) : null;
 
-    if (mascotRef.current) {
-      const rect = mascotRef.current.getBoundingClientRect();
-      const centerX = rect.left + rect.width / 2;
-      const centerY = rect.top + rect.height / 2;
-      const dx = Math.max(-1, Math.min(1, (e.clientX - centerX) / (rect.width / 2)));
-      const dy = Math.max(-1, Math.min(1, (e.clientY - centerY) / (rect.height / 2)));
-      setTilt({ x: dx * 12, y: -dy * 12 });
-    }
-  };
+    const activeOutfitLevel =
+      customOutfitLevel && customOutfitLevel <= user.level ? customOutfitLevel : user.level;
+    const activeOutfitMeta = getLevelOutfitMeta(activeOutfitLevel);
+    const previewMeta = getLevelOutfitMeta(previewOutfitLevel);
 
-  const handlePointerUp = () => {
-    setIsPressing(false);
-    setTilt({ x: 0, y: 0 });
-  };
+    // Daily Missions progress calculation
+    const totalUpgradesCount = Object.values(user.upgrades || {}).reduce((acc, v) => acc + (v || 0), 0);
+    const hasSpunToday =
+      Date.now() - (user.boosters.lastWheelSpinTimestamp || 0) < 24 * 60 * 60 * 1000 &&
+      (user.boosters.lastWheelSpinTimestamp || 0) > 0;
 
-  // Level progress percentage
-  const currentLevelRange = user.nextLevelMinCoins - user.currentLevelMinCoins;
-  const currentLevelProgress = Math.max(0, user.totalEarned - user.currentLevelMinCoins);
-  const levelPercent =
-    currentLevelRange > 0
-      ? Math.min(100, Math.floor((currentLevelProgress / currentLevelRange) * 100))
-      : 100;
+    const dailyMissions = [
+      {
+        id: 'tap_5000',
+        title: 'Tap 5,000 times',
+        current: Math.min(5000, user.totalTaps || 0),
+        target: 5000,
+        reward: 100000,
+        icon: <FoxCrestIcon className="w-5 h-5" />,
+        onGo: () => {
+          if (stageRef.current) {
+            stageRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }
+        },
+      },
+      {
+        id: 'upgrade_1',
+        title: 'Upgrade 1 item',
+        current: Math.min(1, totalUpgradesCount),
+        target: 1,
+        reward: 150000,
+        icon: <ArrowUpCircle className="w-4 h-4 text-amber-400" />,
+        onGo: () => onNavigateTab && onNavigateTab('upgrades'),
+      },
+      {
+        id: 'invite_1',
+        title: 'Invite 1 friend',
+        current: Math.min(1, user.referralsCount || 0),
+        target: 1,
+        reward: 200000,
+        icon: <UserPlus className="w-4 h-4 text-amber-400" />,
+        onGo: () => onNavigateTab && onNavigateTab('friends'),
+      },
+      {
+        id: 'spin_wheel',
+        title: 'Spin the Lucky Wheel',
+        current: hasSpunToday ? 1 : 0,
+        target: 1,
+        reward: 100000,
+        icon: (
+          <svg viewBox="0 0 24 24" className="w-4 h-4 text-amber-400" fill="none" stroke="currentColor" strokeWidth="2">
+            <circle cx="12" cy="12" r="9" />
+            <circle cx="12" cy="12" r="2.5" fill="currentColor" />
+            <path d="M12 3v6.5M12 14.5V21M3 12h6.5M14.5 12H21M5.6 5.6l4.6 4.6M13.8 13.8l4.6 4.6M18.4 5.6l-4.6 4.6M10.2 13.8l-4.6 4.6" />
+          </svg>
+        ),
+        onGo: () => onOpenWheel && onOpenWheel(),
+      },
+    ];
 
-  // Energy percentage
-  const energyPercent = Math.min(100, Math.floor((user.energy / user.maxEnergy) * 100));
-  const perSecondProfit = user.profitPerHour > 0 ? user.profitPerHour / 3600 : 0;
-  const equippedMeta = equippedGiftId ? getFoxGiftMetadata(equippedGiftId) : null;
-
-  const activeOutfitLevel = customOutfitLevel && customOutfitLevel <= user.level ? customOutfitLevel : user.level;
-  const activeOutfitMeta = getLevelOutfitMeta(activeOutfitLevel);
-  const previewMeta = getLevelOutfitMeta(previewOutfitLevel);
-
-  return (
-    <div className="w-full max-w-md mx-auto flex flex-col items-center justify-between px-4 pb-20 select-none overflow-hidden min-h-[calc(100dvh-125px)]">
-      {/* Floating tap numbers */}
-      {floatingNumbers.map((num) => (
-        <div
-          key={num.id}
-          style={{ left: `${num.x - 20}px`, top: `${num.y - 30}px` }}
-          className={`fixed pointer-events-none z-50 font-black text-2xl tracking-wider animate-float-up will-change-transform ${
-            num.isCrit
-              ? 'text-yellow-300 drop-shadow-[0_0_12px_rgba(250,204,21,0.9)] scale-125'
-              : 'text-amber-300 drop-shadow-[0_0_8px_rgba(245,158,11,0.7)]'
-          }`}
-        >
-          +{num.value}
-          {num.isCrit && <span className="text-xs ml-1 text-orange-400">🔥3X</span>}
-        </div>
-      ))}
-
-      {/* Top 3 Stats Badges */}
-      <div className="w-full grid grid-cols-3 gap-2 mt-1 mb-3">
-        {/* Earn per tap */}
-        <div className="bg-slate-900/80 border border-slate-800/80 rounded-2xl p-2 flex flex-col items-center justify-center shadow-sm">
-          <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wide flex items-center gap-1">
-            <Sparkles className="w-3 h-3 text-amber-400" /> Tap
-          </span>
-          <span className="text-sm font-extrabold text-amber-300 mt-0.5 tabular-nums">
-            +{user.tapPower * (turboRemaining > 0 ? 3 : 1)}
-          </span>
-        </div>
-
-        {/* Level progress (clickable to view level outfits) */}
-        <button
-          onClick={() => {
-            setPreviewOutfitLevel(activeOutfitLevel);
-            setShowWardrobeModal(true);
-          }}
-          className="bg-slate-900/80 hover:bg-slate-800/90 border border-slate-800/80 hover:border-amber-500/40 rounded-2xl p-2 flex flex-col items-center justify-center shadow-sm transition cursor-pointer"
-        >
-          <span className="text-[10px] uppercase font-bold text-slate-300 tracking-wide flex items-center gap-1">
-            <Flame className="w-3 h-3 text-orange-400" /> Lvl {user.level}/10
-          </span>
-          <div className="w-full bg-slate-800 h-1.5 rounded-full mt-1.5 overflow-hidden">
-            <div
-              className="h-full bg-gradient-to-r from-orange-500 to-amber-400 rounded-full transition-all duration-300"
-              style={{ width: `${levelPercent}%` }}
-            />
-          </div>
-          <span className="text-[9px] text-amber-300/90 font-semibold mt-1 tabular-nums truncate max-w-full">
-            {activeOutfitMeta.badgeEmoji} {levelPercent}%
-          </span>
-        </button>
-
-        {/* Profit per hour */}
-        <div className="bg-slate-900/80 border border-slate-800/80 rounded-2xl p-2 flex flex-col items-center justify-center shadow-sm">
-          <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wide flex items-center gap-1">
-            <TrendingUp className="w-3 h-3 text-emerald-400" /> Per Hour
-          </span>
-          <span className="text-sm font-extrabold text-emerald-400 mt-0.5 tabular-nums">
-            +{user.profitPerHour.toLocaleString('en-US')}
-          </span>
-          {perSecondProfit > 0 && (
-            <span className="text-[9px] font-bold text-emerald-400/80 tabular-nums leading-none mt-0.5">
-              +{perSecondProfit >= 10 ? Math.floor(perSecondProfit).toLocaleString('en-US') : perSecondProfit.toFixed(2)}/sec
-            </span>
-          )}
-        </div>
-      </div>
-
-      {/* Unclaimed Offline Earnings Quick-Collect Pill */}
-      {Math.max(Math.floor(offlineEarnings || 0), Math.floor(user.unclaimedPassive || 0)) > 0 && onOpenOfflineModal && (
-        <button
-          onClick={onOpenOfflineModal}
-          className="w-full mb-2 py-2 px-3 rounded-xl bg-gradient-to-r from-amber-500/25 via-orange-500/20 to-emerald-500/25 border border-amber-400/60 flex items-center justify-between shadow-md shadow-amber-500/15 cursor-pointer hover:border-amber-300 transition active:scale-98"
-        >
-          <span className="flex items-center gap-2 text-xs font-extrabold text-amber-200">
-            <img src={foxGoldCoinImg} alt="FOX" className="w-4 h-4 animate-bounce" />
-            <span>
-              Offline Earnings: +
-              {Math.max(Math.floor(offlineEarnings || 0), Math.floor(user.unclaimedPassive || 0)).toLocaleString('en-US')}{' '}
-              FOX
-            </span>
-          </span>
-          <span className="px-2.5 py-0.5 rounded-lg bg-amber-400 text-slate-950 font-black text-[11px]">
-            Collect
-          </span>
-        </button>
-      )}
-
-      {/* Level-Up Celebration Banner */}
-      {levelUpBanner && (
-        <div className="w-full mb-2 bg-gradient-to-r from-amber-500 via-orange-500 to-yellow-500 text-slate-950 font-black text-xs py-2 px-3 rounded-xl flex items-center justify-between shadow-lg shadow-amber-500/30 animate-bounce">
-          <span className="flex items-center gap-1.5">
-            <Sparkles className="w-4 h-4 fill-slate-950" />
-            <span>Level Up! Reached Level {levelUpBanner.level} — Unlocked: {levelUpBanner.titleFa}</span>
-          </span>
-          <button onClick={() => setLevelUpBanner(null)} className="text-slate-900/80 hover:text-slate-950">
-            <X className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      )}
-
-      {/* Big Balance Display */}
-      <div className="flex flex-col items-center my-1.5 text-center">
-        <div className="flex items-center justify-center gap-2.5">
-          <div className="w-10 h-10 rounded-full overflow-hidden shadow-lg shadow-amber-500/30 ring-2 ring-amber-400/50">
-            <img src={foxGoldCoinImg} alt="FOX" className="w-full h-full object-cover animate-spin-slow" />
-          </div>
-          <span className="text-4xl sm:text-5xl font-black text-transparent bg-clip-text bg-gradient-to-b from-amber-200 via-amber-400 to-orange-500 tracking-tight drop-shadow-md tabular-nums">
-            {Math.floor(user.balance).toLocaleString('en-US')}
-          </span>
-        </div>
-        <span className="text-xs font-semibold text-slate-400 mt-1 uppercase tracking-widest">
-          FOX COINS
-        </span>
-      </div>
-
-      {/* Turbo Active Banner */}
-      {turboRemaining > 0 && (
-        <div className="w-full bg-gradient-to-r from-orange-600 to-amber-500 text-white font-extrabold text-xs py-1.5 px-3 rounded-xl flex items-center justify-center gap-2 shadow-lg shadow-orange-600/30 animate-pulse">
-          <Flame className="w-4 h-4 fill-white animate-bounce" />
-          <span>TURBO FRENZY 3X REWARD! {turboRemaining}s LEFT</span>
-        </div>
-      )}
-
-      {/* Central Interactive Fox Mascot */}
-      <div className="relative my-auto flex flex-col items-center justify-center py-2">
-        {/* Glow halo matching current level outfit */}
-        <div
-          style={{
-            background:
-              turboRemaining > 0
-                ? undefined
-                : `radial-gradient(circle, ${activeOutfitMeta.glowColor} 0%, rgba(15,23,42,0) 70%)`,
-          }}
-          className={`absolute w-72 h-72 sm:w-80 sm:h-80 rounded-full transition-all duration-500 pointer-events-none blur-3xl ${
-            turboRemaining > 0
-              ? 'bg-gradient-to-r from-orange-600/40 via-amber-500/50 to-red-600/40 scale-110'
-              : ''
-          }`}
-        />
-
-        {/* Circular Outer Golden Ring */}
-        <div
-          style={{ borderColor: `${activeOutfitMeta.accentColor}66` }}
-          className="relative p-3 rounded-full bg-gradient-to-b from-amber-400/40 via-orange-500/20 to-slate-900 border shadow-2xl shadow-orange-950/50"
-        >
+    return (
+      <div className="w-full max-w-md mx-auto flex flex-col items-center px-3 pb-24 pt-1 select-none overflow-x-hidden">
+        {/* Floating tap numbers with gold coin */}
+        {floatingNumbers.map((num) => (
           <div
-            ref={mascotRef}
-            onPointerDown={handlePointerDown}
-            onPointerUp={handlePointerUp}
-            onPointerCancel={handlePointerUp}
-            onPointerLeave={handlePointerUp}
-            style={{
-              transform: `perspective(600px) rotateX(${tilt.y}deg) rotateY(${tilt.x}deg) scale(${
-                isPressing ? 0.94 : 1
-              })`,
-              borderColor: `${activeOutfitMeta.accentColor}80`,
-            }}
-            className="w-64 h-64 sm:w-72 sm:h-72 rounded-full overflow-hidden cursor-pointer active:cursor-grabbing transition-transform duration-75 ease-out shadow-inner relative group border-4 bg-gradient-to-b from-[#151c2f] to-[#0b0e17] touch-none will-change-transform"
+            key={num.id}
+            style={{ left: `${num.x - 24}px`, top: `${num.y - 34}px` }}
+            className={`fixed pointer-events-none z-50 font-black text-2xl tracking-wider animate-float-up will-change-transform flex items-center gap-1 ${
+              num.isCrit
+                ? 'text-yellow-300 drop-shadow-[0_0_14px_rgba(250,204,21,0.95)] scale-125'
+                : 'text-amber-300 drop-shadow-[0_0_10px_rgba(245,158,11,0.85)]'
+            }`}
           >
-            {/* Base Mascot Image (Exact same Fox character across all levels) */}
-            <img
-              src={foxMascotImg}
-              alt="Fox Mascot"
-              draggable={false}
-              className="w-full h-full object-cover pointer-events-none select-none transition-transform duration-200 group-hover:scale-105"
-            />
-
-            {/* Level-Specific Tailored Outfit Overlay (Changes ONLY the Fox's clothes per level) */}
-            <div className="absolute inset-0 pointer-events-none select-none transition-transform duration-200 group-hover:scale-105">
-              <FoxLevelOutfit level={activeOutfitLevel} />
-            </div>
-
-            {/* Radial dark vignette over image for clean contrast */}
-            <div className="absolute inset-0 bg-radial-gradient from-transparent via-transparent to-[#0B0E17]/40 pointer-events-none" />
-
-            {/* Tap highlight flash */}
-            {isPressing && (
-              <div className="absolute inset-0 bg-amber-300/15 pointer-events-none transition-opacity" />
-            )}
+            <img src={foxGoldCoinImg} alt="" className="w-5 h-5 rounded-full object-cover shadow" />
+            <span>+{num.value}</span>
+            {num.isCrit && <span className="text-xs text-orange-400">🔥3X</span>}
           </div>
+        ))}
 
-          {/* Current Level Outfit Pill Badge (Top-Left of Mascot Ring) */}
+        {/* Unclaimed Offline Earnings Quick-Collect Pill */}
+        {Math.max(Math.floor(offlineEarnings || 0), Math.floor(user.unclaimedPassive || 0)) > 0 &&
+          onOpenOfflineModal && (
+            <button
+              type="button"
+              onClick={onOpenOfflineModal}
+              className="w-full mb-2 py-1.5 px-3 rounded-xl bg-gradient-to-r from-amber-500/25 via-orange-500/20 to-emerald-500/25 border border-amber-400/60 flex items-center justify-between shadow-md shadow-amber-500/15 cursor-pointer hover:border-amber-300 transition active:scale-98"
+            >
+              <span className="flex items-center gap-2 text-xs font-extrabold text-amber-200">
+                <img src={foxGoldCoinImg} alt="FOX" className="w-4 h-4 rounded-full animate-bounce" />
+                <span>
+                  Offline Profit: +
+                  {Math.max(
+                    Math.floor(offlineEarnings || 0),
+                    Math.floor(user.unclaimedPassive || 0)
+                  ).toLocaleString('en-US')}{' '}
+                  FOX
+                </span>
+              </span>
+              <span className="px-2.5 py-0.5 rounded-lg bg-amber-400 text-slate-950 font-black text-[11px]">
+                Claim
+              </span>
+            </button>
+          )}
+
+        {/* Level-Up Celebration Banner */}
+        {levelUpBanner && (
+          <div className="w-full mb-2 bg-gradient-to-r from-amber-500 via-orange-500 to-yellow-500 text-slate-950 font-black text-xs py-2 px-3 rounded-xl flex items-center justify-between shadow-lg shadow-amber-500/30 animate-bounce">
+            <span className="flex items-center gap-1.5">
+              <Sparkles className="w-4 h-4 fill-slate-950" />
+              <span>
+                Level Up! Reached Level {levelUpBanner.level} — Unlocked: {levelUpBanner.titleFa}
+              </span>
+            </span>
+            <button
+              type="button"
+              onClick={() => setLevelUpBanner(null)}
+              className="text-slate-900/80 hover:text-slate-950"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+
+        {/* Turbo Active Banner */}
+        {turboRemaining > 0 && (
+          <div className="w-full mb-2 bg-gradient-to-r from-orange-600 to-amber-500 text-white font-extrabold text-xs py-1.5 px-3 rounded-xl flex items-center justify-center gap-2 shadow-lg shadow-orange-600/30 animate-pulse">
+            <Flame className="w-4 h-4 fill-white animate-bounce" />
+            <span>TURBO FRENZY 3X REWARD! {turboRemaining}s LEFT</span>
+          </div>
+        )}
+
+        {/* =====================================================================
+            ROW 1: THREE GOLDEN-BORDERED STAT CARDS (Matches Screenshot)
+           ===================================================================== */}
+        <div className="w-full grid grid-cols-3 gap-2 mb-2.5">
+          {/* Card 1: TAP POWER */}
           <button
+            type="button"
+            onClick={onOpenBoost}
+            className="bg-gradient-to-b from-[#1A1610]/95 to-[#0D0F16]/98 border border-amber-500/45 hover:border-amber-400/80 rounded-2xl p-2 flex items-center gap-2 shadow-[0_4px_16px_rgba(0,0,0,0.5)] transition active:scale-98 cursor-pointer text-left"
+          >
+            {/* Circular golden hand-tap icon */}
+            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-gradient-to-b from-[#2A1F0D] to-[#120D06] border border-amber-400/60 flex items-center justify-center shrink-0 shadow-[0_0_10px_rgba(245,158,11,0.25)]">
+              <svg viewBox="0 0 24 24" className="w-5 h-5 text-amber-400 fill-amber-400">
+                <path d="M5 5l3 2.5L11 4l3 3.5L17 5v4H5V5zm6 6c.83 0 1.5.67 1.5 1.5v3.2l2.4 1c.7.3 1.1 1.05.95 1.8l-.55 3.3c-.2 1-.95 1.7-1.95 1.7H9.5c-.75 0-1.45-.38-1.85-1l-1.9-2.85c-.35-.5-.25-1.15.2-1.5.4-.35 1.05-.3 1.4.12l1.15 1.23V12.5c0-.83.67-1.5 1.5-1.5z" />
+              </svg>
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="text-[9px] sm:text-[10px] font-bold text-slate-300 uppercase tracking-wider truncate">
+                TAP POWER
+              </div>
+              <div className="text-sm sm:text-base font-black text-amber-300 leading-tight tabular-nums">
+                +{user.tapPower * (turboRemaining > 0 ? 3 : 1)}
+              </div>
+              <div className="text-[10px] font-extrabold text-emerald-400 flex items-center gap-0.5 leading-none mt-0.5">
+                <span>+5%</span>
+                <span>↗</span>
+              </div>
+            </div>
+          </button>
+
+          {/* Card 2: LEVEL 10/10 & ENERGY */}
+          <button
+            type="button"
             onClick={() => {
               setPreviewOutfitLevel(activeOutfitLevel);
               setShowWardrobeModal(true);
             }}
-            title="View Level Outfits"
-            className="absolute -top-2 -left-2 z-20 px-2.5 py-1 rounded-2xl bg-slate-950/95 border border-amber-400/50 shadow-xl flex items-center gap-1.5 cursor-pointer hover:scale-105 transition"
+            className="bg-gradient-to-b from-[#1A1610]/95 to-[#0D0F16]/98 border border-amber-500/45 hover:border-amber-400/80 rounded-2xl p-2 flex items-center gap-2 shadow-[0_4px_16px_rgba(0,0,0,0.5)] transition active:scale-98 cursor-pointer text-left"
           >
-            <Shirt className="w-3.5 h-3.5 text-amber-400" />
-            <div className="text-left">
-              <span className="text-[9px] font-bold text-slate-400 block leading-none">
-                Lvl {activeOutfitLevel} Outfit
-              </span>
-              <span className="text-[10px] font-black text-amber-300 leading-tight block">
-                {activeOutfitMeta.outfitTitle}
-              </span>
+            {/* Glowing golden crown shield */}
+            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-gradient-to-b from-[#2A1F0D] to-[#120D06] border border-amber-400/60 flex items-center justify-center shrink-0 shadow-[0_0_12px_rgba(245,158,11,0.3)]">
+              <svg viewBox="0 0 24 24" className="w-5 h-5 text-amber-400 fill-amber-400">
+                <path d="M12 2L4 5v6.09c0 5.05 3.41 9.76 8 10.91 4.59-1.15 8-5.86 8-10.91V5l-8-3zm-5 13v-5l2.5 2 2.5-3 2.5 3 2.5-2v5H7z" />
+              </svg>
+            </div>
+            <div className="min-w-0 flex-1 flex flex-col justify-center">
+              <div className="text-[9px] sm:text-[10px] font-bold text-slate-200 uppercase tracking-wider truncate">
+                LEVEL {user.level}/10
+              </div>
+              <div className="w-full h-2.5 bg-slate-900 border border-amber-500/35 rounded-full p-0.5 mt-1 overflow-hidden">
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-amber-500 via-yellow-400 to-amber-200 shadow-[0_0_8px_rgba(250,204,21,0.85)] transition-all duration-300"
+                  style={{ width: `${Math.max(12, levelPercent)}%` }}
+                />
+              </div>
+              <div className="text-[10px] font-extrabold text-amber-100 flex items-center gap-1 mt-1 leading-none tabular-nums">
+                <Zap className="w-3 h-3 fill-amber-400 text-amber-400 shrink-0" />
+                <span>{energyPercent}%</span>
+              </div>
             </div>
           </button>
 
-          {/* Equipped Collectible Telegram Fox Gift Companion Badge */}
+          {/* Card 3: PER HOUR */}
+          <div className="bg-gradient-to-b from-[#1A1610]/95 to-[#0D0F16]/98 border border-amber-500/45 rounded-2xl p-2 flex flex-col items-center justify-center shadow-[0_4px_16px_rgba(0,0,0,0.5)] text-center">
+            <div className="text-[9px] sm:text-[10px] font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1">
+              <TrendingUp className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+              <span>PER HOUR</span>
+            </div>
+            <div className="text-xs sm:text-sm font-black text-emerald-400 mt-0.5 tracking-tight tabular-nums truncate w-full">
+              +{user.profitPerHour.toLocaleString('en-US')}
+            </div>
+            <div className="text-[9px] sm:text-[10px] font-bold text-emerald-400/90 tabular-nums leading-none mt-1 truncate w-full">
+              +
+              {perSecondProfit >= 10
+                ? Math.floor(perSecondProfit).toLocaleString('en-US')
+                : perSecondProfit.toFixed(2)}
+              /sec
+            </div>
+          </div>
+        </div>
+
+        {/* =====================================================================
+            ROW 2: HERO ROYAL FOX EMPEROR STAGE (Matches Screenshot + Clean Animations)
+           ===================================================================== */}
+        <div
+          ref={stageRef}
+          onPointerDown={handleStagePointerDown}
+          onPointerUp={handleStagePointerUp}
+          onPointerCancel={handleStagePointerUp}
+          onPointerLeave={handleStagePointerUp}
+          style={{
+            transform: `perspective(800px) rotateX(${tilt.y}deg) rotateY(${tilt.x}deg) scale(${
+              isPressing ? 0.99 : 1
+            })`,
+          }}
+          className="w-full aspect-[1.78/1] relative rounded-2xl overflow-hidden border border-amber-500/40 shadow-[0_12px_32px_rgba(0,0,0,0.85)] mb-2.5 cursor-pointer touch-none transition-transform duration-100 ease-out will-change-transform bg-[#0C0E15]"
+        >
+          {/* Exact Royal Fox Emperor Stage Artwork from Reference Image */}
+          <img
+            src={HERO_DESIGN_ASSET}
+            alt="Royal Fox Emperor Stage"
+            draggable={false}
+            style={{
+              width: '112.4%',
+              maxWidth: 'none',
+              left: '-6.2%',
+              top: '-88.4%',
+              position: 'absolute',
+            }}
+            className="pointer-events-none select-none"
+          />
+
+          {/* Subtle Golden Aura Breathing Overlay Behind Character */}
+          <div
+            className="absolute inset-0 pointer-events-none animate-pulse-glow"
+            style={{
+              background:
+                'radial-gradient(circle at 48% 52%, rgba(251, 191, 36, 0.16) 0%, rgba(245, 158, 11, 0.04) 45%, transparent 70%)',
+            }}
+          />
+
+          {/* Animated Rising Golden Embers */}
+          <div className="absolute inset-0 pointer-events-none overflow-hidden">
+            <span
+              style={{ left: '22%', bottom: '18%', animationDelay: '0s' }}
+              className="absolute w-1.5 h-1.5 rounded-full bg-amber-300 shadow-[0_0_8px_#FCD34D] animate-ember-rise"
+            />
+            <span
+              style={{ left: '36%', bottom: '28%', animationDelay: '1.1s' }}
+              className="absolute w-2 h-2 rounded-full bg-yellow-200 shadow-[0_0_10px_#FEF08A] animate-ember-rise"
+            />
+            <span
+              style={{ left: '62%', bottom: '24%', animationDelay: '0.6s' }}
+              className="absolute w-1.5 h-1.5 rounded-full bg-amber-400 shadow-[0_0_8px_#F59E0B] animate-ember-rise"
+            />
+            <span
+              style={{ left: '48%', bottom: '14%', animationDelay: '1.9s' }}
+              className="absolute w-1.5 h-1.5 rounded-full bg-amber-200 shadow-[0_0_8px_#FDE68A] animate-ember-rise"
+            />
+          </div>
+
+          {/* Animated Floating 3D Golden Coins around the Royal Fox */}
+          <div
+            style={{ left: '29%', top: '31%', animationDelay: '0s' }}
+            className="absolute w-6 h-6 rounded-full overflow-hidden shadow-[0_0_12px_rgba(251,191,36,0.8)] pointer-events-none animate-float-coin"
+          >
+            <img src={foxGoldCoinImg} alt="" className="w-full h-full object-cover" />
+          </div>
+          <div
+            style={{ left: '61%', top: '39%', animationDelay: '1.4s' }}
+            className="absolute w-7 h-7 rounded-full overflow-hidden shadow-[0_0_14px_rgba(251,191,36,0.85)] pointer-events-none animate-float-coin"
+          >
+            <img src={foxGoldCoinImg} alt="" className="w-full h-full object-cover" />
+          </div>
+
+          {/* Expanding Golden Shockwave Ripples on Tap */}
+          {tapRipples.map((r) => (
+            <div
+              key={r.id}
+              style={{ left: `${r.x}px`, top: `${r.y}px` }}
+              className="absolute w-28 h-28 rounded-full border-2 border-amber-300/90 bg-amber-400/15 shadow-[0_0_25px_rgba(251,191,36,0.8)] pointer-events-none animate-tap-ripple"
+            />
+          ))}
+
+          {/* Tap Flash Highlight */}
+          {isPressing && (
+            <div className="absolute inset-0 bg-amber-300/10 pointer-events-none transition-opacity" />
+          )}
+
+          {/* Top-Left Live Rank / Outfit Badge ("Gold Emperor / Next level: 25M") */}
+          <button
+            type="button"
+            data-wardrobe-btn="true"
+            onClick={(e) => {
+              e.stopPropagation();
+              setPreviewOutfitLevel(activeOutfitLevel);
+              setShowWardrobeModal(true);
+            }}
+            className="absolute top-2 left-2 z-20 bg-gradient-to-r from-[#14120E] via-[#19150F] to-[#12131C] border border-amber-400/65 hover:border-amber-300 rounded-2xl px-2.5 py-1.5 flex items-center gap-2 shadow-[0_6px_20px_rgba(0,0,0,0.85)] transition active:scale-95 cursor-pointer"
+            title="Open Royal Fox Outfit Wardrobe"
+          >
+            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-gradient-to-b from-[#2E210B] to-[#110D06] border border-amber-400/70 flex items-center justify-center shrink-0 shadow-[0_0_10px_rgba(245,158,11,0.35)]">
+              <FoxCrestIcon className="w-6 h-6" />
+            </div>
+            <div className="text-left pr-1">
+              <div className="text-[11px] sm:text-xs font-extrabold text-white leading-tight">
+                {user.level >= 10 ? 'Gold Emperor' : user.levelName}
+              </div>
+              <div className="text-[10px] font-bold text-amber-300 leading-tight mt-0.5">
+                Next level: {formatCompactNumber(user.nextLevelMinCoins || 25_000_000)}
+              </div>
+            </div>
+          </button>
+
+          {/* Equipped Collectible Gift Companion Badge (Bottom-Left if equipped) */}
           {equippedGiftId && equippedMeta && (user.upgrades[equippedGiftId] || 0) > 0 && (
             <button
-              onClick={onOpenGifts}
-              title="Equipped Telegram Fox Gift"
-              className="absolute -bottom-2 -right-2 z-20 p-1 rounded-2xl bg-slate-950/95 border border-amber-400/60 shadow-xl flex items-center gap-1.5 pr-2.5 cursor-pointer hover:scale-105 transition"
+              type="button"
+              data-wardrobe-btn="true"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (onOpenGifts) onOpenGifts();
+              }}
+              className="absolute bottom-2 left-2 z-20 p-1 pr-2.5 rounded-2xl bg-slate-950/95 border border-amber-400/60 shadow-xl flex items-center gap-1.5 cursor-pointer hover:scale-105 transition"
             >
               <FoxGiftAvatar giftId={equippedGiftId} size="sm" />
               <div className="text-left">
@@ -392,239 +620,141 @@ export const TapScreen: React.FC<TapScreenProps> = React.memo(({
               </div>
             </button>
           )}
-        </div>
-      </div>
 
-      {/* Bottom Energy & Boost Bar */}
-      <div className="w-full mt-auto pt-2">
-        <div className="flex items-center justify-between mb-1.5 px-1">
-          <div className="flex items-center gap-1.5 text-xs font-bold text-amber-300">
-            <Zap className="w-4 h-4 fill-amber-400 text-amber-400" />
-            <span className="text-slate-100 font-extrabold">{user.energy}</span>
-            <span className="text-slate-500">/</span>
-            <span className="text-slate-400">{user.maxEnergy}</span>
-          </div>
-
-          <div className="flex items-center gap-1.5">
-            {onOpenWheel && (
-              <button
-                onClick={onOpenWheel}
-                className="relative flex items-center gap-1 px-2.5 py-1 bg-gradient-to-r from-emerald-500/20 to-amber-500/20 hover:from-emerald-500/30 hover:to-amber-500/30 border border-amber-400/50 text-amber-200 font-bold text-xs rounded-xl transition active:scale-95 shadow-sm cursor-pointer"
-              >
-                <span className="text-xs inline-block animate-spin-slow">🎡</span>
-                <span>Lucky Wheel</span>
-                {Date.now() - (user.boosters.lastWheelSpinTimestamp || 0) >= 24 * 60 * 60 * 1000 && (
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-                )}
-              </button>
-            )}
-
-            {onOpenGifts && (
-              <button
-                onClick={onOpenGifts}
-                className="flex items-center gap-1 px-2.5 py-1 bg-purple-500/20 hover:bg-purple-500/30 border border-purple-500/40 text-purple-300 font-bold text-xs rounded-xl transition active:scale-95 shadow-sm cursor-pointer"
-              >
-                <Gift className="w-3.5 h-3.5 text-purple-300" />
-                <span>Gifts</span>
-              </button>
-            )}
-
-            <button
-              onClick={onOpenBoost}
-              className="flex items-center gap-1 px-3 py-1 bg-gradient-to-r from-amber-500/20 to-orange-500/20 hover:from-amber-500/30 hover:to-orange-500/30 border border-amber-500/40 text-amber-300 font-bold text-xs rounded-xl transition active:scale-95 shadow-sm cursor-pointer"
-            >
-              <Zap className="w-3.5 h-3.5 fill-amber-300" />
-              <span>Boost</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Stamina bar */}
-        <div className="w-full h-3 bg-slate-900 border border-slate-800 rounded-full overflow-hidden p-0.5 shadow-inner">
+          {/* Bottom-Right Glowing Golden "TAP" Orb Button (Matches Screenshot Position & Design) */}
           <div
-            className={`h-full rounded-full transition-all duration-200 ${
-              energyPercent > 30
-                ? 'bg-gradient-to-r from-amber-500 via-orange-500 to-amber-300'
-                : 'bg-gradient-to-r from-red-500 to-orange-500'
+            onPointerDown={() => setIsOrbPressing(true)}
+            className={`absolute bottom-1.5 right-2 z-20 w-[104px] h-[104px] sm:w-[116px] sm:h-[116px] rounded-full flex items-center justify-center transition-transform duration-75 ${
+              isOrbPressing || isPressing ? 'scale-92' : 'hover:scale-103'
             }`}
-            style={{ width: `${energyPercent}%` }}
-          />
-        </div>
+          >
+            {/* Outer Golden Halo Glow */}
+            <div className="absolute -inset-2 rounded-full bg-amber-500/25 blur-md animate-pulse-glow pointer-events-none" />
 
-        <div className="flex justify-between items-center text-[10px] text-slate-500 mt-1 px-1">
-          <span>Regen: +{user.energyRegenRate}/sec</span>
-          {user.energy < user.maxEnergy && (
-            <span>
-              Full in ~{Math.ceil((user.maxEnergy - user.energy) / user.energyRegenRate)}s
-            </span>
-          )}
-        </div>
-      </div>
+            {/* Rotating Dashed Golden Magic Ring */}
+            <div className="absolute inset-0 rounded-full border-2 border-dashed border-amber-300/60 animate-spin-slow pointer-events-none" />
 
-      {/* Level Outfits Wardrobe Modal with Large 3D Live Preview */}
-      {showWardrobeModal && (
-        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-4">
-          <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-2xl flex flex-col max-h-[90dvh]">
-            <div className="p-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-950/80">
-              <div className="flex items-center gap-2">
-                <Shirt className="w-5 h-5 text-amber-400" />
-                <div>
-                  <h3 className="text-sm font-black text-white">Royal Fox Outfit Wardrobe</h3>
-                  <p className="text-[11px] text-slate-400">
-                    Tap any level to preview its exclusive 3D outfit on your Fox
-                  </p>
-                </div>
-              </div>
-              <button
-                onClick={() => setShowWardrobeModal(false)}
-                className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            {/* Large Interactive 3D Outfit Showcase */}
-            <div className="p-3 bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 border-b border-slate-800 flex items-center gap-3.5">
-              <div
-                style={{ borderColor: previewMeta.accentColor }}
-                className="relative w-32 h-32 sm:w-36 sm:h-36 rounded-2xl overflow-hidden border-2 shadow-xl shrink-0 bg-slate-950"
-              >
-                <img
-                  src={foxMascotImg}
-                  alt={previewMeta.outfitTitle}
-                  className="w-full h-full object-cover"
+            {/* Outer Solid Golden Ring */}
+            <div className="w-full h-full rounded-full p-1.5 bg-gradient-to-b from-amber-300 via-amber-500 to-amber-700 shadow-[0_0_25px_rgba(245,158,11,0.65)]">
+              {/* Inner Dark Obsidian & Gold Core */}
+              <div className="w-full h-full rounded-full bg-gradient-to-b from-[#2B1E0B] via-[#140E05] to-[#080603] border-2 border-amber-300/80 flex flex-col items-center justify-center shadow-inner relative overflow-hidden">
+                {/* Subtle radial highlight */}
+                <div
+                  className="absolute inset-0 pointer-events-none"
+                  style={{
+                    background:
+                      'radial-gradient(circle at 50% 30%, rgba(251, 191, 36, 0.28), transparent 70%)',
+                  }}
                 />
-                <div className="absolute inset-0">
-                  <FoxLevelOutfit level={previewOutfitLevel} />
+                <FoxCrestIcon className="w-11 h-11 sm:w-12 sm:h-12 drop-shadow-[0_0_10px_rgba(251,191,36,0.7)]" />
+                <span className="text-xs sm:text-sm font-black tracking-widest bg-gradient-to-b from-amber-100 via-amber-300 to-amber-500 bg-clip-text text-transparent drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)] -mt-0.5">
+                  TAP
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* =====================================================================
+            ROW 3: BENTO GRID (DAILY MISSIONS LEFT + LUCKY WHEEL & DAILY GIFT RIGHT)
+           ===================================================================== */}
+        <div className="w-full grid grid-cols-11 gap-2 mb-2.5 items-stretch">
+          {/* Left Column (7 cols): DAILY MISSIONS */}
+          <div className="col-span-7 bg-gradient-to-b from-[#151722]/98 to-[#0B0D14]/98 border border-amber-500/45 rounded-2xl p-2.5 flex flex-col justify-between shadow-[0_8px_24px_rgba(0,0,0,0.65)]">
+            {/* Daily Missions Header */}
+            <div className="flex items-center justify-between gap-1 pb-2 border-b border-amber-500/20">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <div className="w-5 h-5 rounded-md bg-amber-500/20 border border-amber-400/50 flex items-center justify-center text-amber-400 shrink-0">
+                  <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 fill-current">
+                    <path d="M19 3h-4.18C14.4 1.84 13.3 1 12 1c-1.3 0-2.4.84-2.82 2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zm2 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z" />
+                  </svg>
                 </div>
-                <span className="absolute top-1.5 right-1.5 px-2 py-0.5 rounded-lg bg-slate-950/90 border border-amber-400/40 text-[10px] font-black text-amber-300">
-                  Lvl {previewOutfitLevel}
+                <span className="text-[11px] sm:text-xs font-black tracking-wide text-white uppercase truncate">
+                  DAILY MISSIONS
                 </span>
               </div>
 
-              <div className="flex-1 min-w-0 text-left">
-                <div className="text-xs font-black text-amber-400 flex items-center gap-1">
-                  <span>{previewMeta.badgeEmoji}</span>
-                  <span>{previewMeta.levelName}</span>
+              <div className="flex items-center gap-1.5 shrink-0">
+                {/* Countdown Timer Pill */}
+                <div className="px-1.5 py-0.5 rounded-full bg-[#181B26] border border-slate-700/80 flex items-center gap-1 text-[9px] font-bold text-slate-200 tabular-nums">
+                  <Clock className="w-2.5 h-2.5 text-amber-400" />
+                  <span>{dailyCountdown}</span>
                 </div>
-                <h4 className="text-sm font-black text-white mt-0.5">
-                  {previewMeta.outfitTitle}
-                </h4>
-                <p className="text-[11px] text-slate-300 mt-1 leading-relaxed">
-                  {previewMeta.descriptionFa}
-                </p>
 
-                <div className="mt-2.5">
-                  {user.level >= previewOutfitLevel ? (
-                    <button
-                      onClick={() => {
-                        setCustomOutfitLevel(previewOutfitLevel === user.level ? null : previewOutfitLevel);
-                        sound.playSuccess();
-                      }}
-                      className={`w-full py-1.5 px-3 rounded-xl text-xs font-black flex items-center justify-center gap-1.5 cursor-pointer transition ${
-                        activeOutfitLevel === previewOutfitLevel
-                          ? 'bg-emerald-500/20 border border-emerald-400/60 text-emerald-300'
-                          : 'bg-gradient-to-r from-amber-400 to-orange-500 text-slate-950 shadow-lg shadow-amber-500/25'
-                      }`}
-                    >
-                      {activeOutfitLevel === previewOutfitLevel ? (
-                        <>
-                          <Check className="w-3.5 h-3.5" />
-                          <span>Currently Equipped</span>
-                        </>
-                      ) : (
-                        <span>Equip Outfit</span>
-                      )}
-                    </button>
-                  ) : (
-                    <div className="w-full py-1.5 px-2.5 rounded-xl bg-slate-950/90 border border-slate-800 text-amber-300/90 text-[11px] font-bold flex items-center justify-center gap-1.5">
-                      <Lock className="w-3.5 h-3.5 text-amber-400" />
-                      <span>Locked — Unlocks at Level {previewOutfitLevel}</span>
-                    </div>
-                  )}
-                </div>
+                {/* View All Button */}
+                <button
+                  type="button"
+                  onClick={() => onNavigateTab && onNavigateTab('tasks')}
+                  className="text-[10px] font-bold text-amber-300 hover:text-amber-200 flex items-center cursor-pointer whitespace-nowrap"
+                >
+                  <span>View All</span>
+                  <ChevronRight className="w-3 h-3" />
+                </button>
               </div>
             </div>
 
-            {/* Scrollable List of All 10 Level Outfits */}
-            <div className="p-3 overflow-y-auto space-y-2">
-              {FOX_LEVEL_OUTFITS.map((outfit) => {
-                const isUnlocked = user.level >= outfit.level;
-                const isWearing = activeOutfitLevel === outfit.level;
-                const isPreviewing = previewOutfitLevel === outfit.level;
+            {/* 4 Mission Rows */}
+            <div className="flex flex-col gap-1.5 mt-2 flex-1 justify-between">
+              {dailyMissions.map((m) => {
+                const pct = Math.min(100, Math.floor((m.current / m.target) * 100));
+                const isReady = m.current >= m.target;
+                const isClaimed = Boolean(claimedQuickMissions[m.id]);
 
                 return (
                   <div
-                    key={outfit.level}
-                    onClick={() => {
-                      setPreviewOutfitLevel(outfit.level);
-                      sound.playTap();
-                    }}
-                    className={`p-2 rounded-2xl border flex items-center gap-3 transition cursor-pointer ${
-                      isPreviewing
-                        ? 'bg-amber-500/15 border-amber-400 shadow-md'
-                        : isWearing
-                        ? 'bg-emerald-500/10 border-emerald-500/50'
-                        : isUnlocked
-                        ? 'bg-slate-950/70 border-slate-800 hover:border-slate-700'
-                        : 'bg-slate-950/40 border-slate-900 opacity-80 hover:opacity-100'
-                    }`}
+                    key={m.id}
+                    className="bg-gradient-to-r from-[#161925]/95 to-[#10131C]/95 border border-slate-800/90 hover:border-amber-500/35 rounded-xl p-1.5 flex items-center justify-between gap-1.5 transition"
                   >
-                    {/* Live mini preview of the exact same Fox wearing this level's outfit */}
-                    <div className="relative w-14 h-14 rounded-2xl overflow-hidden border border-slate-700 shrink-0 bg-slate-950">
-                      <img
-                        src={foxMascotImg}
-                        alt={outfit.outfitTitle}
-                        className="w-full h-full object-cover"
-                      />
-                      <div className="absolute inset-0">
-                        <FoxLevelOutfit level={outfit.level} />
+                    {/* Left Icon Circle */}
+                    <div className="w-8 h-8 rounded-full bg-gradient-to-b from-[#251C0D] to-[#0F0C07] border border-amber-400/55 flex items-center justify-center shrink-0 shadow-sm">
+                      {m.icon}
+                    </div>
+
+                    {/* Middle Title + Progress Bar */}
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[10px] sm:text-[11px] font-bold text-slate-100 truncate">
+                        {m.title}
+                      </div>
+                      <div className="flex items-center gap-1.5 mt-1">
+                        <div className="flex-1 h-2 bg-slate-800/90 rounded-full overflow-hidden p-0.2">
+                          <div
+                            className="h-full rounded-full bg-gradient-to-r from-amber-500 via-yellow-400 to-amber-200 transition-all duration-300"
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                        <span className="text-[8px] sm:text-[9px] font-bold text-slate-300 tabular-nums shrink-0">
+                          {m.current.toLocaleString('en-US')} / {m.target.toLocaleString('en-US')}
+                        </span>
                       </div>
                     </div>
 
-                    <div className="flex-1 min-w-0 text-left">
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-xs font-black text-amber-400">
-                          {outfit.badgeEmoji} Level {outfit.level}:
-                        </span>
-                        <span className="text-xs font-extrabold text-white truncate">
-                          {outfit.outfitTitle}
-                        </span>
+                    {/* Reward + Go/Claim Button */}
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <div className="flex items-center gap-0.5 text-[9px] sm:text-[10px] font-extrabold text-amber-300 tabular-nums">
+                        <img src={foxGoldCoinImg} alt="" className="w-3.5 h-3.5 rounded-full object-cover" />
+                        <span>+{m.reward.toLocaleString('en-US')}</span>
                       </div>
-                      <p className="text-[11px] text-slate-400 mt-0.5 leading-snug line-clamp-1">
-                        {outfit.descriptionFa}
-                      </p>
-                    </div>
 
-                    <div className="shrink-0">
-                      {isUnlocked ? (
+                      {isClaimed ? (
+                        <span className="px-2 py-1 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 font-black text-[9px]">
+                          Done
+                        </span>
+                      ) : isReady ? (
                         <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setPreviewOutfitLevel(outfit.level);
-                            setCustomOutfitLevel(outfit.level === user.level ? null : outfit.level);
-                            sound.playTap();
-                          }}
-                          className={`px-3 py-1.5 rounded-xl text-xs font-extrabold flex items-center gap-1 cursor-pointer transition ${
-                            isWearing
-                              ? 'bg-amber-400 text-slate-950'
-                              : 'bg-slate-800 hover:bg-slate-700 text-slate-200'
-                          }`}
+                          type="button"
+                          onClick={() => handleQuickMissionClaim(m.id, m.reward)}
+                          className="px-2.5 py-1 rounded-full bg-gradient-to-b from-amber-300 to-amber-500 text-slate-950 font-black text-[10px] shadow cursor-pointer active:scale-95 transition"
                         >
-                          {isWearing ? (
-                            <>
-                              <Check className="w-3.5 h-3.5" />
-                              <span>Equipped</span>
-                            </>
-                          ) : (
-                            <span>Equip</span>
-                          )}
+                          Claim
                         </button>
                       ) : (
-                        <div className="px-2.5 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 text-[11px] font-bold flex items-center gap-1">
-                          <Lock className="w-3 h-3 text-amber-400/80" />
-                          <span>Preview</span>
-                        </div>
+                        <button
+                          type="button"
+                          onClick={m.onGo}
+                          className="px-2.5 py-1 rounded-full bg-[#1C160B] hover:bg-[#2A2010] border border-amber-400/60 text-amber-200 font-bold text-[10px] cursor-pointer active:scale-95 transition"
+                        >
+                          Go
+                        </button>
                       )}
                     </div>
                   </div>
@@ -632,39 +762,332 @@ export const TapScreen: React.FC<TapScreenProps> = React.memo(({
               })}
             </div>
           </div>
-        </div>
-      )}
-    </div>
-  );
-}, (prev, next) => {
-  const pu = prev.user;
-  const nu = next.user;
-  const prevLevelRange = Math.max(1, pu.nextLevelMinCoins - pu.currentLevelMinCoins);
-  const nextLevelRange = Math.max(1, nu.nextLevelMinCoins - nu.currentLevelMinCoins);
-  const prevLevelPercent = Math.min(100, Math.floor((Math.max(0, pu.totalEarned - pu.currentLevelMinCoins) / prevLevelRange) * 100));
-  const nextLevelPercent = Math.min(100, Math.floor((Math.max(0, nu.totalEarned - nu.currentLevelMinCoins) / nextLevelRange) * 100));
-  const eqId = next.equippedGiftId;
 
-  return (
-    Math.floor(pu.balance) === Math.floor(nu.balance) &&
-    pu.energy === nu.energy &&
-    pu.maxEnergy === nu.maxEnergy &&
-    pu.level === nu.level &&
-    pu.levelName === nu.levelName &&
-    prevLevelPercent === nextLevelPercent &&
-    pu.tapPower === nu.tapPower &&
-    pu.profitPerHour === nu.profitPerHour &&
-    pu.unclaimedPassive === nu.unclaimedPassive &&
-    prev.offlineEarnings === next.offlineEarnings &&
-    pu.energyRegenRate === nu.energyRegenRate &&
-    pu.boosters.turboActiveUntil === nu.boosters.turboActiveUntil &&
-    pu.boosters.lastWheelSpinTimestamp === nu.boosters.lastWheelSpinTimestamp &&
-    prev.equippedGiftId === next.equippedGiftId &&
-    (eqId ? (pu.upgrades[eqId] || 0) === (nu.upgrades[eqId] || 0) : true) &&
-    prev.onTap === next.onTap &&
-    prev.onOpenBoost === next.onOpenBoost &&
-    prev.onOpenWheel === next.onOpenWheel &&
-    prev.onOpenGifts === next.onOpenGifts &&
-    prev.onOpenOfflineModal === next.onOpenOfflineModal
-  );
-});
+          {/* Right Column (4 cols): Stacked Lucky Wheel & Daily Gift Cards */}
+          <div className="col-span-4 flex flex-col gap-2 justify-between">
+            {/* Top Card: Lucky Wheel */}
+            <div className="flex-1 bg-gradient-to-b from-[#1A160F]/95 to-[#0D0F17]/98 border border-amber-500/45 rounded-2xl p-2.5 flex flex-col items-center justify-between text-center shadow-[0_8px_24px_rgba(0,0,0,0.65)] relative overflow-hidden">
+              {/* Glowing Colorful Wheel SVG */}
+              <div className="relative w-14 h-14 sm:w-16 sm:h-16 flex items-center justify-center my-0.5">
+                <div className="absolute inset-0 rounded-full bg-amber-500/25 blur-md animate-pulse-glow pointer-events-none" />
+                <svg
+                  viewBox="0 0 100 100"
+                  className="w-full h-full animate-spin-slow drop-shadow-[0_0_10px_rgba(245,158,11,0.5)]"
+                >
+                  {/* 8 Colorful Wheel Segments */}
+                  <path d="M50 50 L50 6 A44 44 0 0 1 81 19 Z" fill="#EF4444" />
+                  <path d="M50 50 L81 19 A44 44 0 0 1 94 50 Z" fill="#F59E0B" />
+                  <path d="M50 50 L94 50 A44 44 0 0 1 81 81 Z" fill="#10B981" />
+                  <path d="M50 50 L81 81 A44 44 0 0 1 50 94 Z" fill="#3B82F6" />
+                  <path d="M50 50 L50 94 A44 44 0 0 1 19 81 Z" fill="#8B5CF6" />
+                  <path d="M50 50 L19 81 A44 44 0 0 1 6 50 Z" fill="#EC4899" />
+                  <path d="M50 50 L6 50 A44 44 0 0 1 19 19 Z" fill="#F97316" />
+                  <path d="M50 50 L19 19 A44 44 0 0 1 50 6 Z" fill="#EAB308" />
+                  {/* Golden Outer Ring & Studs */}
+                  <circle cx="50" cy="50" r="44" fill="none" stroke="#FDE047" strokeWidth="5" />
+                  <circle cx="50" cy="50" r="44" fill="none" stroke="#B45309" strokeWidth="2" strokeDasharray="4 8" />
+                  {/* Center Golden Hub */}
+                  <circle cx="50" cy="50" r="11" fill="#1E1B18" stroke="#FDE047" strokeWidth="3" />
+                  <circle cx="50" cy="50" r="5" fill="#F59E0B" />
+                </svg>
+              </div>
+
+              <div>
+                <h4 className="text-xs sm:text-sm font-black text-amber-300 leading-tight">
+                  Lucky Wheel
+                </h4>
+                <p className="text-[9px] sm:text-[10px] text-slate-300 leading-tight mt-0.5">
+                  Spin and win amazing rewards!
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={onOpenWheel}
+                className="w-full mt-1.5 py-1.5 px-3 rounded-full bg-gradient-to-b from-amber-200 via-amber-400 to-amber-600 hover:from-amber-100 hover:to-amber-500 text-slate-950 font-black text-xs shadow-[0_0_14px_rgba(245,158,11,0.45)] transition active:scale-95 cursor-pointer"
+              >
+                Spin
+              </button>
+            </div>
+
+            {/* Bottom Card: Daily Gift */}
+            <div className="flex-1 bg-gradient-to-b from-[#1A160F]/95 to-[#0D0F17]/98 border border-amber-500/45 rounded-2xl p-2.5 flex flex-col items-center justify-between text-center shadow-[0_8px_24px_rgba(0,0,0,0.65)] relative overflow-hidden">
+              {user.canClaimDaily && (
+                <span className="absolute top-1.5 right-1.5 w-4 h-4 rounded-full bg-rose-600 text-white font-black text-[10px] flex items-center justify-center shadow animate-bounce">
+                  !
+                </span>
+              )}
+
+              {/* 3D Golden Gift Box Illustration */}
+              <div className="relative w-14 h-14 sm:w-16 sm:h-16 flex items-center justify-center my-0.5 animate-float-coin">
+                <div className="absolute inset-0 rounded-full bg-amber-500/25 blur-md pointer-events-none" />
+                <svg viewBox="0 0 64 64" className="w-13 h-13 drop-shadow-[0_4px_10px_rgba(245,158,11,0.45)]">
+                  <defs>
+                    <linearGradient id="gift_gold_box" x1="0%" y1="0%" x2="100%" y2="100%">
+                      <stop offset="0%" stopColor="#FEF08A" />
+                      <stop offset="50%" stopColor="#F59E0B" />
+                      <stop offset="100%" stopColor="#92400E" />
+                    </linearGradient>
+                    <linearGradient id="gift_dark_body" x1="0%" y1="0%" x2="0%" y2="100%">
+                      <stop offset="0%" stopColor="#451A03" />
+                      <stop offset="100%" stopColor="#1C0A00" />
+                    </linearGradient>
+                  </defs>
+                  {/* Ribbon Bow */}
+                  <path
+                    d="M32 16 C24 6, 14 12, 22 20 C26 22, 30 20, 32 16 Z M32 16 C40 6, 50 12, 42 20 C38 22, 34 20, 32 16 Z"
+                    fill="url(#gift_gold_box)"
+                  />
+                  {/* Box Lid */}
+                  <rect x="10" y="18" width="44" height="11" rx="3" fill="url(#gift_gold_box)" />
+                  {/* Box Base */}
+                  <rect
+                    x="13"
+                    y="29"
+                    width="38"
+                    height="25"
+                    rx="3"
+                    fill="url(#gift_dark_body)"
+                    stroke="url(#gift_gold_box)"
+                    strokeWidth="2"
+                  />
+                  {/* Vertical & Horizontal Golden Ribbons */}
+                  <rect x="28" y="18" width="8" height="36" fill="url(#gift_gold_box)" />
+                  <rect x="13" y="38" width="38" height="6" fill="url(#gift_gold_box)" />
+                </svg>
+              </div>
+
+              <div>
+                <h4 className="text-xs sm:text-sm font-black text-amber-300 leading-tight">
+                  Daily Gift
+                </h4>
+                <p className="text-[9px] sm:text-[10px] text-slate-300 leading-tight mt-0.5">
+                  Free rewards for you!
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={onOpenDaily}
+                className="w-full mt-1.5 py-1.5 px-3 rounded-full bg-gradient-to-b from-amber-200 via-amber-400 to-amber-600 hover:from-amber-100 hover:to-amber-500 text-slate-950 font-black text-xs shadow-[0_0_14px_rgba(245,158,11,0.45)] transition active:scale-95 cursor-pointer"
+              >
+                Claim
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* =====================================================================
+            ROW 4: COMMUNITY BANNER ("ONE COMMUNITY. ONE VISION. FOX!")
+           ===================================================================== */}
+        <button
+          type="button"
+          onClick={() => onNavigateTab && onNavigateTab('friends')}
+          className="w-full aspect-[6.6/1] relative rounded-2xl overflow-hidden border border-amber-400/60 shadow-[0_6px_22px_rgba(0,0,0,0.75)] cursor-pointer active:scale-99 transition group bg-[#120F0A]"
+        >
+          {/* Exact Community Banner Artwork from Reference Screenshot */}
+          <img
+            src={HERO_DESIGN_ASSET}
+            alt="One Community. One Vision. Fox!"
+            draggable={false}
+            style={{
+              width: '113.6%',
+              maxWidth: 'none',
+              left: '-7.0%',
+              top: '-1101.3%',
+              position: 'absolute',
+            }}
+            className="pointer-events-none select-none group-hover:scale-102 transition-transform duration-300"
+          />
+
+          {/* Animated Golden Shimmer Light Sweep */}
+          <div className="absolute inset-0 pointer-events-none overflow-hidden">
+            <div className="w-1/3 h-full bg-gradient-to-r from-transparent via-amber-200/20 to-transparent animate-shimmer-sweep" />
+          </div>
+        </button>
+
+        {/* =====================================================================
+            ROYAL FOX OUTFIT WARDROBE MODAL (3D Live Preview)
+           ===================================================================== */}
+        {showWardrobeModal && (
+          <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-4">
+            <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-2xl flex flex-col max-h-[90dvh]">
+              <div className="p-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-950/80">
+                <div className="flex items-center gap-2">
+                  <Shirt className="w-5 h-5 text-amber-400" />
+                  <div>
+                    <h3 className="text-sm font-black text-white">Royal Fox Outfit Wardrobe</h3>
+                    <p className="text-[11px] text-slate-400">
+                      Tap any level to preview its exclusive 3D outfit on your Fox
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowWardrobeModal(false)}
+                  className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Large Interactive 3D Outfit Showcase */}
+              <div className="p-3 bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 border-b border-slate-800 flex items-center gap-3.5">
+                <div
+                  style={{ borderColor: previewMeta.accentColor }}
+                  className="relative w-32 h-32 sm:w-36 sm:h-36 rounded-2xl overflow-hidden border-2 shadow-xl shrink-0 bg-slate-950"
+                >
+                  <img
+                    src={foxMascotImg}
+                    alt={previewMeta.outfitTitle}
+                    className="w-full h-full object-cover"
+                  />
+                  <div className="absolute inset-0">
+                    <FoxLevelOutfit level={previewOutfitLevel} />
+                  </div>
+                  <span className="absolute top-1.5 right-1.5 px-2 py-0.5 rounded-lg bg-slate-950/90 border border-amber-400/40 text-[10px] font-black text-amber-300">
+                    Lvl {previewOutfitLevel}
+                  </span>
+                </div>
+
+                <div className="flex-1 min-w-0 text-left">
+                  <div className="text-xs font-black text-amber-400 flex items-center gap-1">
+                    <span>{previewMeta.badgeEmoji}</span>
+                    <span>{previewMeta.levelName}</span>
+                  </div>
+                  <h4 className="text-sm font-black text-white mt-0.5">
+                    {previewMeta.outfitTitle}
+                  </h4>
+                  <p className="text-[11px] text-slate-300 mt-1 leading-relaxed">
+                    {previewMeta.descriptionFa}
+                  </p>
+
+                  <div className="mt-2.5">
+                    {user.level >= previewOutfitLevel ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCustomOutfitLevel(
+                            previewOutfitLevel === user.level ? null : previewOutfitLevel
+                          );
+                          sound.playSuccess();
+                        }}
+                        className={`w-full py-1.5 px-3 rounded-xl text-xs font-black flex items-center justify-center gap-1.5 cursor-pointer transition ${
+                          activeOutfitLevel === previewOutfitLevel
+                            ? 'bg-emerald-500/20 border border-emerald-400/60 text-emerald-300'
+                            : 'bg-gradient-to-r from-amber-400 to-orange-500 text-slate-950 shadow-lg shadow-amber-500/25'
+                        }`}
+                      >
+                        {activeOutfitLevel === previewOutfitLevel ? (
+                          <>
+                            <Check className="w-3.5 h-3.5" />
+                            <span>Currently Equipped</span>
+                          </>
+                        ) : (
+                          <span>Equip Outfit</span>
+                        )}
+                      </button>
+                    ) : (
+                      <div className="w-full py-1.5 px-2.5 rounded-xl bg-slate-950/90 border border-slate-800 text-amber-300/90 text-[11px] font-bold flex items-center justify-center gap-1.5">
+                        <Lock className="w-3.5 h-3.5 text-amber-400" />
+                        <span>Locked — Unlocks at Level {previewOutfitLevel}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Scrollable List of All 10 Level Outfits */}
+              <div className="p-3 overflow-y-auto space-y-2">
+                {FOX_LEVEL_OUTFITS.map((outfit) => {
+                  const isUnlocked = user.level >= outfit.level;
+                  const isWearing = activeOutfitLevel === outfit.level;
+                  const isPreviewing = previewOutfitLevel === outfit.level;
+
+                  return (
+                    <div
+                      key={outfit.level}
+                      onClick={() => {
+                        setPreviewOutfitLevel(outfit.level);
+                        sound.playTap();
+                      }}
+                      className={`p-2 rounded-2xl border flex items-center gap-3 transition cursor-pointer ${
+                        isPreviewing
+                          ? 'bg-amber-500/15 border-amber-400 shadow-md'
+                          : isWearing
+                          ? 'bg-emerald-500/10 border-emerald-500/50'
+                          : isUnlocked
+                          ? 'bg-slate-950/70 border-slate-800 hover:border-slate-700'
+                          : 'bg-slate-950/40 border-slate-900 opacity-80 hover:opacity-100'
+                      }`}
+                    >
+                      <div className="relative w-14 h-14 rounded-2xl overflow-hidden border border-slate-700 shrink-0 bg-slate-950">
+                        <img
+                          src={foxMascotImg}
+                          alt={outfit.outfitTitle}
+                          className="w-full h-full object-cover"
+                        />
+                        <div className="absolute inset-0">
+                          <FoxLevelOutfit level={outfit.level} />
+                        </div>
+                      </div>
+
+                      <div className="flex-1 min-w-0 text-left">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs font-black text-amber-400">
+                            {outfit.badgeEmoji} Level {outfit.level}:
+                          </span>
+                          <span className="text-xs font-extrabold text-white truncate">
+                            {outfit.outfitTitle}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-400 mt-0.5 leading-snug line-clamp-1">
+                          {outfit.descriptionFa}
+                        </p>
+                      </div>
+
+                      <div className="shrink-0">
+                        {isUnlocked ? (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setPreviewOutfitLevel(outfit.level);
+                              setCustomOutfitLevel(
+                                outfit.level === user.level ? null : outfit.level
+                              );
+                              sound.playTap();
+                            }}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-extrabold flex items-center gap-1 cursor-pointer transition ${
+                              isWearing
+                                ? 'bg-amber-400 text-slate-950'
+                                : 'bg-slate-800 hover:bg-slate-700 text-slate-200'
+                            }`}
+                          >
+                            {isWearing ? (
+                              <>
+                                <Check className="w-3.5 h-3.5" />
+                                <span>Equipped</span>
+                              </>
+                            ) : (
+                              <span>Equip</span>
+                            )}
+                          </button>
+                        ) : (
+                          <div className="px-2.5 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 text-[11px] font-bold flex items-center gap-1">
+                            <Lock className="w-3 h-3 text-amber-400/80" />
+                            <span>Preview</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+);

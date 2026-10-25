@@ -561,6 +561,8 @@ export default function App() {
             onOpenBoost={handleOpenBoost}
             onOpenDaily={handleOpenDaily}
             onOpenWheel={handleOpenWheel}
+            onOpenGifts={handleOpenGifts}
+            onOpenTrade={handleOpenTrade}
             onOpenAdminSetup={handleOpenAdminSetup}
             isMuted={isMuted}
             onToggleSound={handleToggleSound}
@@ -633,6 +635,21 @@ export default function App() {
                   onTap={handleTap}
                   onOpenBoost={handleOpenBoost}
                   onOpenWheel={handleOpenWheel}
+                  onOpenDaily={handleOpenDaily}
+                  onNavigateTab={setActiveTab}
+                  onClaimQuickMission={(_missionId, reward) => {
+                    updateGameState((prev) => {
+                      if (!prev) return null;
+                      const nextState = reconcileUserLevel({
+                        ...prev,
+                        balance: prev.balance + reward,
+                        totalEarned: prev.totalEarned + reward,
+                      });
+                      api.syncClientState(nextState);
+                      api.syncUserToServer(nextState).catch(() => {});
+                      return nextState;
+                    });
+                  }}
                   equippedGiftId={equippedGiftId}
                   onOpenGifts={handleOpenGifts}
                   offlineEarnings={offlineEarningsAmount}
