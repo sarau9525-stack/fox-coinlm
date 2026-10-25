@@ -310,7 +310,7 @@ export const TapScreen: React.FC<TapScreenProps> = React.memo(
       {
         id: 'invite_1',
         title: 'Invite 1 friend',
-        current: Math.min(1, user.referralsCount || 0),
+        current: Math.min(1, user.referralCount || 0),
         target: 1,
         reward: 200000,
         icon: <UserPlus className="w-4 h-4 text-amber-400" />,

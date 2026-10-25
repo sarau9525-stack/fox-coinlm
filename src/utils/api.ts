@@ -559,6 +559,16 @@ class ApiService {
       const cfg = await this.request<GameConfig>('/api/game/config');
       if (cfg.upgrades) cfg.upgrades = cfg.upgrades.map(sanitizeUpgrade);
       if (cfg.wheelPrizes) cfg.wheelPrizes = cfg.wheelPrizes.map(sanitizeWheelPrize);
+      if (Array.isArray(cfg.tasks)) {
+        const taskMap = new Map(TASKS.map((t) => [t.id, t]));
+        for (const serverTask of cfg.tasks) {
+          const defaultTask = taskMap.get(serverTask.id);
+          taskMap.set(serverTask.id, defaultTask ? { ...serverTask, ...defaultTask } : serverTask);
+        }
+        cfg.tasks = Array.from(taskMap.values());
+      } else {
+        cfg.tasks = [...TASKS];
+      }
       if (Array.isArray(cfg.fakeLeaderboardMembers)) {
         const localFakes = this.getLocalFakeLeaderboardMembers();
         if (cfg.fakeLeaderboardMembers.length > 0 || localFakes.length === 0) {
@@ -1333,6 +1343,10 @@ class ApiService {
   }
 
   public async claimTask(taskId: string): Promise<{ user: UserGameState; reward: number }> {
+    if (this.pendingTapCount > 0) {
+      await this.flushTaps();
+    }
+
     try {
       const res = await this.request<{ user: UserGameState; reward: number }>('/api/game/claim-task', {
         method: 'POST',
@@ -1349,6 +1363,7 @@ class ApiService {
         const user = this.getLocalUser();
         const taskDef = TASKS.find((t) => t.id === taskId);
         if (!taskDef) throw new Error('Task not found');
+        user.tasks = user.tasks || {};
         if (user.tasks[taskId]?.claimed) throw new Error('Task already claimed');
 
         user.tasks[taskId] = { progress: taskDef.target, completed: true, claimed: true };
@@ -1356,8 +1371,8 @@ class ApiService {
         user.totalEarned += taskDef.reward;
         this.syncLocalUserProgress(user);
         this.saveLocalUser(user);
-        if (this.onStateUpdated) this.onStateUpdated(user);
-        return { user, reward: taskDef.reward };
+        if (this.onStateUpdated) this.onStateUpdated({ ...user });
+        return { user: { ...user }, reward: taskDef.reward };
       }
       throw err;
     }

@@ -141,6 +141,13 @@ export const Navigation: React.FC<NavigationProps> = React.memo(
             );
           })}
         </div>
+
+        {/* Golden Community Motto Strip (Matches Mine Reference Image) */}
+        <div className="mt-1 pt-1 border-t border-amber-500/20 flex items-center justify-center">
+          <span className="text-[9px] sm:text-[10px] font-black tracking-[0.22em] uppercase bg-gradient-to-r from-amber-200 via-yellow-400 to-amber-200 bg-clip-text text-transparent drop-shadow-[0_1px_4px_rgba(245,158,11,0.35)]">
+            ONE COMMUNITY. ONE VISION. FOX!
+          </span>
+        </div>
       </nav>
     );
   },

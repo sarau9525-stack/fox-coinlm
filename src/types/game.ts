@@ -26,6 +26,9 @@ export interface TaskDefinition {
   reward: number;
   target: number;
   actionUrl?: string;
+  prerequisiteTaskId?: string;
+  isAchievement?: boolean;
+  chainOrder?: number;
 }
 
 export interface DailyRewardDay {

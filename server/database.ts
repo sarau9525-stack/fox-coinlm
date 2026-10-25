@@ -1109,21 +1109,56 @@ class DatabaseStore {
     }
 
     // Verify condition on server
+    const totalUpgradesCount = Object.values(user.upgrades || {}).reduce((a, b) => a + b, 0);
+    const hasSpunWheel = Boolean(user.boosters?.lastWheelSpinTimestamp && user.boosters.lastWheelSpinTimestamp > 0);
+    const hasUsedBoost =
+      (user.boosters?.fullEnergyRemaining ?? 6) < GAME_CONSTANTS.MAX_DAILY_FULL_ENERGY ||
+      Boolean(user.boosters?.nextTurboAt && user.boosters.nextTurboAt > 0);
+
     let eligible = false;
     if (taskId === 'tap_100') eligible = user.totalTaps >= 100;
+    else if (taskId === 'daily_tap_300') eligible = user.totalTaps >= 300;
     else if (taskId === 'tap_500') eligible = user.totalTaps >= 500;
-    else if (taskId === 'first_upgrade') eligible = Object.keys(user.upgrades).length >= 1;
-    else if (taskId === 'upgrade_5') eligible = Object.values(user.upgrades).reduce((a, b) => a + b, 0) >= 5;
+    else if (taskId === 'tap_2500') eligible = user.totalTaps >= 2_500;
+    else if (taskId === 'tap_10000') eligible = user.totalTaps >= 10_000;
+    else if (taskId === 'first_upgrade') eligible = totalUpgradesCount >= 1;
+    else if (taskId === 'upgrade_5') eligible = totalUpgradesCount >= 5;
+    else if (taskId === 'upgrade_15') eligible = totalUpgradesCount >= 15;
+    else if (taskId === 'spin_wheel_1') eligible = hasSpunWheel;
+    else if (taskId === 'daily_boost_1') eligible = hasUsedBoost || user.totalTaps >= 50;
     else if (taskId === 'reach_silver') eligible = user.level >= 2;
     else if (taskId === 'reach_gold') eligible = user.level >= 3;
-    else if (taskId === 'profit_1k') eligible = user.profitPerHour >= 1000;
+    else if (taskId === 'reach_diamond') eligible = user.level >= 5;
+    else if (taskId === 'profit_1k') eligible = user.profitPerHour >= 1_000;
+    else if (taskId === 'profit_10k') eligible = user.profitPerHour >= 10_000;
     else if (taskId === 'invite_1') eligible = user.referralCount >= 1;
-    else if (taskId === 'telegram_channel' || taskId === 'follow_x') eligible = true; // Social task verify
+    else if (taskId === 'invite_3') eligible = user.referralCount >= 3;
+    else if (taskId === 'invite_10') eligible = user.referralCount >= 10;
+    else if (taskId === 'telegram_channel' || taskId === 'youtube_channel' || taskId === 'follow_x') eligible = true;
+    else if (taskId === 'daily_chest_bonus') {
+      const completedDailyCount = [
+        user.totalTaps >= 100,
+        totalUpgradesCount >= 1,
+        hasSpunWheel,
+        user.totalTaps >= 300,
+        hasUsedBoost,
+      ].filter(Boolean).length;
+      eligible = completedDailyCount >= 3;
+    } else if (taskId === 'mission_chain_bonus') {
+      eligible =
+        user.totalTaps >= 100 &&
+        totalUpgradesCount >= 1 &&
+        user.referralCount >= 1 &&
+        hasSpunWheel;
+    } else {
+      eligible = (task.progress || 0) >= taskDef.target;
+    }
 
     if (!eligible) {
       return { success: false, error: 'Task objectives not yet completed' };
     }
 
+    task.progress = taskDef.target;
     task.completed = true;
     task.claimed = true;
     user.balance += taskDef.reward;

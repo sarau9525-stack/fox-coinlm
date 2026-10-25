@@ -169,6 +169,10 @@ export class TelegramService {
     }
   }
 
+  public static hapticImpact(style: 'light' | 'medium' | 'heavy' = 'light') {
+    this.triggerHaptic(style);
+  }
+
   public static triggerNotificationHaptic(type: 'success' | 'warning' | 'error' = 'success') {
     const tg = this.getWebApp();
     if (tg?.HapticFeedback && this.isVersionAtLeast('6.1')) {
@@ -180,6 +184,10 @@ export class TelegramService {
     if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
       navigator.vibrate([15, 30, 20]);
     }
+  }
+
+  public static hapticNotification(type: 'success' | 'warning' | 'error' = 'success') {
+    this.triggerNotificationHaptic(type);
   }
 
   public static openLink(url: string) {
@@ -207,6 +215,10 @@ export class TelegramService {
       a.click();
       document.body.removeChild(a);
     }
+  }
+
+  public static openTelegramLink(url: string) {
+    this.openLink(url);
   }
 
   /**

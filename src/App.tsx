@@ -513,14 +513,14 @@ export default function App() {
   const isEffectiveAdmin = Boolean(user?.isAdmin || isAdminUnlocked);
 
   return (
-    <div className="min-h-screen bg-[#07090F] flex flex-col items-center justify-center text-slate-100 font-sans selection:bg-amber-500 selection:text-black">
-      {/* Platform Mode Switcher — Visible only to Admin */}
+    <div className="min-h-screen w-full overflow-x-hidden bg-[#07090F] flex flex-col items-center justify-start text-slate-100 font-sans selection:bg-amber-500 selection:text-black">
+      {/* Platform Mode Switcher — Desktop/Tablet side badge so it never overlaps mobile Header icons */}
       {isEffectiveAdmin && (
-        <div className="fixed top-2 right-2 z-50 flex items-center gap-1.5 bg-slate-900/90 border border-slate-700/80 px-2.5 py-1 rounded-full shadow-lg text-[11px] font-bold">
+        <div className="hidden md:flex fixed bottom-4 right-4 z-50 items-center gap-1.5 bg-slate-900/95 border border-amber-500/40 px-3 py-1.5 rounded-full shadow-lg text-[11px] font-bold">
           <button
             onClick={handleToggleSimMode}
-            className={`flex items-center gap-1 transition ${
-              isTelegramSimMode ? 'text-sky-400' : 'text-slate-400 hover:text-white'
+            className={`flex items-center gap-1.5 transition cursor-pointer ${
+              isTelegramSimMode ? 'text-sky-400' : 'text-slate-300 hover:text-white'
             }`}
             title="Toggle Telegram Mini App UI simulation"
           >
@@ -532,7 +532,7 @@ export default function App() {
 
       {/* Mobile Device Frame Container */}
       <div
-        className={`w-full max-w-md min-h-screen flex flex-col bg-[#0B0E17] relative shadow-2xl ${
+        className={`w-full max-w-md min-h-screen flex flex-col bg-[#0B0E17] relative shadow-2xl overflow-x-hidden ${
           isTelegramSimMode ? 'border-x border-slate-800' : ''
         }`}
       >
@@ -556,6 +556,7 @@ export default function App() {
         {user && (
           <Header
             user={user}
+            activeTab={activeTab}
             isAdmin={isEffectiveAdmin}
             onOpenSettings={handleOpenSettings}
             onOpenBoost={handleOpenBoost}
@@ -664,6 +665,21 @@ export default function App() {
                   onPurchase={handlePurchaseUpgrade}
                   offlineEarnings={offlineEarningsAmount}
                   onClaimOffline={handleClaimPassive}
+                  onCollectVaultBonus={(bonusAmount) => {
+                    updateGameState((prev) => {
+                      if (!prev) return null;
+                      const nextState = reconcileUserLevel({
+                        ...prev,
+                        balance: prev.balance + bonusAmount,
+                        totalEarned: prev.totalEarned + bonusAmount,
+                        unclaimedPassive: 0,
+                      });
+                      api.syncClientState(nextState);
+                      api.syncUserToServer(nextState).catch(() => {});
+                      return nextState;
+                    });
+                    setOfflineEarningsAmount(0);
+                  }}
                 />
               )}
 
@@ -690,8 +706,26 @@ export default function App() {
                 <TasksScreen
                   user={user}
                   tasks={config.tasks}
+                  upgrades={config.upgrades}
                   onClaimTask={handleClaimTask}
                   onOpenWheel={handleOpenWheel}
+                  onOpenBoost={handleOpenBoost}
+                  onNavigateTab={setActiveTab}
+                  offlineEarnings={offlineEarningsAmount}
+                  onClaimOffline={handleClaimPassive}
+                  onCollectBonus={(bonusAmount) => {
+                    updateGameState((prev) => {
+                      if (!prev) return null;
+                      const nextState = reconcileUserLevel({
+                        ...prev,
+                        balance: prev.balance + bonusAmount,
+                        totalEarned: prev.totalEarned + bonusAmount,
+                      });
+                      api.syncClientState(nextState);
+                      api.syncUserToServer(nextState).catch(() => {});
+                      return nextState;
+                    });
+                  }}
                 />
               )}
 
