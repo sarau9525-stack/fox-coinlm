@@ -190,6 +190,17 @@ export class TelegramService {
     this.triggerNotificationHaptic(type);
   }
 
+  public static hapticSelection() {
+    const tg = this.getWebApp();
+    if (tg?.HapticFeedback && this.isVersionAtLeast('6.1')) {
+      try {
+        tg.HapticFeedback.selectionChanged();
+        return;
+      } catch {}
+    }
+    this.triggerHaptic('light');
+  }
+
   public static openLink(url: string) {
     const tg = this.getWebApp();
     if (this.isAvailable() && this.isVersionAtLeast('6.1')) {

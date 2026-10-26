@@ -1620,7 +1620,43 @@ class ApiService {
         }
       }
 
-      const sorted = Array.from(mergedMap.values()).sort((a, b) => {
+      // Deduplicate by normalized username/displayName so duplicate guest or repeated usernames never appear
+      const byNormalizedName = new Map<string, LeaderboardEntry>();
+      for (const item of mergedMap.values()) {
+        if (!item || !item.id) continue;
+        const isCurrent = item.id === currentUser.id || Boolean(item.isCurrentPlayer && item.id === currentUser.id);
+        const normKey = (item.displayName || item.username || item.id).trim().toLowerCase();
+        const existing = byNormalizedName.get(normKey);
+        if (!existing) {
+          byNormalizedName.set(normKey, { ...item, isCurrentPlayer: isCurrent });
+        } else {
+          const existingIsCurrent = existing.id === currentUser.id || Boolean(existing.isCurrentPlayer);
+          const preferNew =
+            isCurrent ||
+            (!existingIsCurrent &&
+              (item.balance > existing.balance ||
+                (item.balance === existing.balance && (item.profitPerHour || 0) > (existing.profitPerHour || 0))));
+          if (preferNew) {
+            byNormalizedName.set(normKey, {
+              ...item,
+              balance: isCurrent ? Math.max(item.balance, existing.balance) : item.balance,
+              profitPerHour: isCurrent
+                ? Math.max(item.profitPerHour || 0, existing.profitPerHour || 0)
+                : item.profitPerHour,
+              isCurrentPlayer: isCurrent,
+            });
+          } else if (existingIsCurrent) {
+            byNormalizedName.set(normKey, {
+              ...existing,
+              balance: Math.max(existing.balance, item.balance),
+              profitPerHour: Math.max(existing.profitPerHour || 0, item.profitPerHour || 0),
+              isCurrentPlayer: true,
+            });
+          }
+        }
+      }
+
+      const sorted = Array.from(byNormalizedName.values()).sort((a, b) => {
         if (b.balance !== a.balance) return b.balance - a.balance;
         return (b.profitPerHour || 0) - (a.profitPerHour || 0);
       });
@@ -1628,7 +1664,7 @@ class ApiService {
       const fullRanked: LeaderboardEntry[] = sorted.map((item, idx) => ({
         ...item,
         rank: idx + 1,
-        isCurrentPlayer: item.id === currentUser.id || Boolean(item.isCurrentPlayer && item.id === currentUser.id),
+        isCurrentPlayer: item.id === currentUser.id || Boolean(item.isCurrentPlayer),
       }));
 
       if (typeof window !== 'undefined') {

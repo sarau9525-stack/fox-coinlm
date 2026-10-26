@@ -13,6 +13,74 @@ export const PLAYER_LEVELS: PlayerLevel[] = [
   { level: 10, name: 'Lord Fox', minCoins: 1_000_000_000, badge: '🪐' },
 ];
 
+export interface FoxLeagueDefinition {
+  id: 'bronze' | 'silver' | 'gold' | 'diamond' | 'legendary';
+  name: 'Bronze Fox' | 'Silver Fox' | 'Gold Fox' | 'Diamond Fox' | 'Legendary Fox';
+  minCoins: number;
+  maxCoins: number | null;
+  rangeLabel: string;
+  badgeImg: string;
+  accentColor: string;
+}
+
+export const FOX_LEAGUES: FoxLeagueDefinition[] = [
+  {
+    id: 'bronze',
+    name: 'Bronze Fox',
+    minCoins: 0,
+    maxCoins: 9_999_999,
+    rangeLabel: '0 – 10M',
+    badgeImg: '/assets/rank/league_bronze.png',
+    accentColor: '#D97706',
+  },
+  {
+    id: 'silver',
+    name: 'Silver Fox',
+    minCoins: 10_000_000,
+    maxCoins: 49_999_999,
+    rangeLabel: '10M – 50M',
+    badgeImg: '/assets/rank/league_silver.png',
+    accentColor: '#CBD5E1',
+  },
+  {
+    id: 'gold',
+    name: 'Gold Fox',
+    minCoins: 50_000_000,
+    maxCoins: 199_999_999,
+    rangeLabel: '50M – 200M',
+    badgeImg: '/assets/rank/league_gold.png',
+    accentColor: '#FBBF24',
+  },
+  {
+    id: 'diamond',
+    name: 'Diamond Fox',
+    minCoins: 200_000_000,
+    maxCoins: 999_999_999,
+    rangeLabel: '200M – 1B',
+    badgeImg: '/assets/rank/league_diamond.png',
+    accentColor: '#38BDF8',
+  },
+  {
+    id: 'legendary',
+    name: 'Legendary Fox',
+    minCoins: 1_000_000_000,
+    maxCoins: null,
+    rangeLabel: '1B+',
+    badgeImg: '/assets/rank/league_legendary.png',
+    accentColor: '#F59E0B',
+  },
+];
+
+export function getFoxLeagueForScore(score: number): FoxLeagueDefinition {
+  const safeScore = Math.max(0, Number(score) || 0);
+  for (let i = FOX_LEAGUES.length - 1; i >= 0; i--) {
+    if (safeScore >= FOX_LEAGUES[i].minCoins) {
+      return FOX_LEAGUES[i];
+    }
+  }
+  return FOX_LEAGUES[0];
+}
+
 export const UPGRADES: UpgradeDefinition[] = [
   // Tap & Energy upgrades
   {

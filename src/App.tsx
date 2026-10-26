@@ -745,7 +745,7 @@ export default function App() {
               )}
 
               {user && activeTab === 'leaderboard' && (
-                <LeaderboardScreen user={user} />
+                <LeaderboardScreen user={user} onNavigateTab={setActiveTab} />
               )}
             </>
           )}

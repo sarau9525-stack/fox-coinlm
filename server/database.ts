@@ -1398,13 +1398,35 @@ class DatabaseStore {
       });
     }
 
-    combinedEntries.sort((a, b) => {
+    // Deduplicate by unique ID and normalized username/displayName (prefer currentUserId, then highest balance)
+    const dedupedByName = new Map<string, (typeof combinedEntries)[number]>();
+    for (const entry of combinedEntries) {
+      if (!entry || !entry.id) continue;
+      const normName = (entry.displayName || entry.username || entry.id).trim().toLowerCase();
+      const existing = dedupedByName.get(normName);
+      if (!existing) {
+        dedupedByName.set(normName, entry);
+      } else {
+        const keepNew =
+          Boolean(entry.isCurrentPlayer) ||
+          (!existing.isCurrentPlayer &&
+            (entry.balance > existing.balance ||
+              (entry.balance === existing.balance && entry.profitPerHour > existing.profitPerHour)));
+        if (keepNew) {
+          dedupedByName.set(normName, entry);
+        }
+      }
+    }
+
+    const uniqueEntries = Array.from(dedupedByName.values());
+
+    uniqueEntries.sort((a, b) => {
       if (b.balance !== a.balance) return b.balance - a.balance;
       if (b.profitPerHour !== a.profitPerHour) return b.profitPerHour - a.profitPerHour;
       return (b.totalEarned || 0) - (a.totalEarned || 0);
     });
 
-    const list: LeaderboardEntry[] = combinedEntries.slice(0, limit).map((u, index) => ({
+    const list: LeaderboardEntry[] = uniqueEntries.slice(0, limit).map((u, index) => ({
       rank: index + 1,
       id: u.id,
       displayName: u.displayName || u.username,
@@ -1418,9 +1440,9 @@ class DatabaseStore {
 
     let playerEntry: LeaderboardEntry | undefined;
     if (currentUserId) {
-      const idx = combinedEntries.findIndex((u) => u.id === currentUserId);
+      const idx = uniqueEntries.findIndex((u) => u.id === currentUserId || u.isCurrentPlayer);
       if (idx !== -1) {
-        const u = combinedEntries[idx];
+        const u = uniqueEntries[idx];
         playerEntry = {
           rank: idx + 1,
           id: u.id,
