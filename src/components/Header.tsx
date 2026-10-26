@@ -4,6 +4,11 @@ import { UserGameState } from '../types/game.js';
 import { foxGoldCoinImg } from '../assets/assets.js';
 import { AdminTabType } from './AdminTelegramSetup.js';
 import { NavTab } from './Navigation.js';
+import {
+  FoxCircularAvatar,
+  getActiveCharacterTier,
+  loadSavedCharacterPrefs,
+} from './FoxCharacterSystem.js';
 
 interface HeaderProps {
   user: UserGameState;
@@ -15,6 +20,7 @@ interface HeaderProps {
   onOpenWheel?: () => void;
   onOpenGifts?: () => void;
   onOpenTrade?: () => void;
+  onOpenCharacterProfile?: () => void;
   isMuted: boolean;
   onToggleSound: () => void;
   onOpenAdminSetup?: (tab?: AdminTabType) => void;
@@ -70,6 +76,7 @@ export const Header: React.FC<HeaderProps> = React.memo(
     onOpenDaily,
     onOpenGifts,
     onOpenTrade,
+    onOpenCharacterProfile,
     isMuted,
     onToggleSound,
     onOpenAdminSetup,
@@ -77,12 +84,18 @@ export const Header: React.FC<HeaderProps> = React.memo(
     const showAdminControls = Boolean(user.isAdmin || isAdmin);
     const isMineTab = activeTab === 'upgrades' || activeTab === 'tasks';
 
+    const savedPrefs = loadSavedCharacterPrefs(user.id);
+    const activeCharTier = getActiveCharacterTier(
+      user.level,
+      user.equippedCharacterTier || savedPrefs.tierId
+    );
+
     // Calculate level progress percentage for the profile bar
     const levelFloor = user.currentLevelMinCoins || 0;
     const levelCeil = user.nextLevelMinCoins || levelFloor + 5000;
     const levelSpan = Math.max(1, levelCeil - levelFloor);
     const levelProgress =
-      user.level >= 10
+      user.level >= 20
         ? 100
         : Math.min(100, Math.max(12, Math.floor(((user.totalEarned - levelFloor) / levelSpan) * 100)));
 
@@ -129,12 +142,16 @@ export const Header: React.FC<HeaderProps> = React.memo(
               </button>
             )}
 
-            {/* 1. Golden Gift Box Button */}
+            {/* 1. Golden Gift Box / NFT Collection Button */}
             <button
               type="button"
               onClick={onOpenGifts || onOpenDaily}
-              className="relative w-7 h-7 sm:w-8 sm:h-8 rounded-xl bg-gradient-to-b from-[#251C0E] to-[#110E09] border border-amber-500/50 hover:border-amber-400 flex items-center justify-center transition active:scale-95 cursor-pointer shadow-[0_0_10px_rgba(245,158,11,0.15)] shrink-0"
-              title="Fox Gifts"
+              className={`relative w-7 h-7 sm:w-8 sm:h-8 rounded-xl border flex items-center justify-center transition active:scale-95 cursor-pointer shrink-0 ${
+                activeTab === 'gifts'
+                  ? 'bg-gradient-to-b from-amber-500/30 to-amber-900/40 border-amber-300 shadow-[0_0_14px_rgba(251,191,36,0.5)]'
+                  : 'bg-gradient-to-b from-[#251C0E] to-[#110E09] border-amber-500/50 hover:border-amber-400 shadow-[0_0_10px_rgba(245,158,11,0.15)]'
+              }`}
+              title="My NFT Collection"
             >
               <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-amber-400 fill-amber-400">
                 <path d="M20 6h-2.18c.11-.31.18-.65.18-1a2.996 2.996 0 00-5.5-1.65l-.5.67-.5-.68C10.96 2.54 10.05 2 9 2 7.34 2 6 3.34 6 5c0 .35.07.69.18 1H4c-1.11 0-1.99.89-1.99 2L2 19c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V8c0-1.11-.89-2-2-2zm-5-2c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zM9 4c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zm11 15H4v-2h16v2zm0-5H4V8h5.08L7 10.83 8.62 12 11 8.76l1-1.36 1 1.36L15.38 12 17 10.83 14.92 8H20v6z" />
@@ -197,13 +214,22 @@ export const Header: React.FC<HeaderProps> = React.memo(
         {/* Row 2: Player Profile, Full FOX Balance & Hourly Income Strip */}
         {isMineTab ? (
           <div className="w-full flex items-stretch gap-1.5 min-w-0">
-            {/* Left Card: Avatar + Username + Rank/Level + Gold Progress Bar (flexible, shrinks first so balance never truncates) */}
-            <div className="flex-1 min-w-0 bg-gradient-to-b from-[#151824]/95 to-[#0C0E16]/95 border border-amber-500/30 rounded-xl px-2 py-1.5 flex items-center gap-1.5 shadow-[0_4px_14px_rgba(0,0,0,0.5)]">
+            {/* Left Card: Character Avatar + Username + Tier/Level + Gold Progress Bar */}
+            <button
+              type="button"
+              onClick={onOpenCharacterProfile}
+              title="Open Character Profile & Collection"
+              className="flex-1 min-w-0 bg-gradient-to-b from-[#151824]/95 to-[#0C0E16]/95 border border-amber-500/30 hover:border-amber-400/60 rounded-xl px-2 py-1.5 flex items-center gap-1.5 shadow-[0_4px_14px_rgba(0,0,0,0.5)] text-left transition cursor-pointer"
+            >
               <div className="relative shrink-0">
-                <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-full p-0.5 bg-gradient-to-tr from-amber-600 via-amber-400 to-yellow-200 shadow-[0_0_10px_rgba(245,158,11,0.35)]">
-                  <div className="w-full h-full rounded-full bg-[#0B0D14] flex items-center justify-center overflow-hidden border border-amber-300/30">
-                    <FoxCrestIcon className="w-5 h-5 sm:w-6 sm:h-6" />
-                  </div>
+                <div
+                  style={{ borderRadius: '50%' }}
+                  className="w-8 h-8 sm:w-9 sm:h-9 rounded-full p-0.5 bg-gradient-to-tr from-amber-600 via-amber-400 to-yellow-200 shadow-[0_0_10px_rgba(245,158,11,0.35)]"
+                >
+                  <FoxCircularAvatar
+                    tier={activeCharTier}
+                    className="w-full h-full bg-[#0B0D14] border border-amber-300/30"
+                  />
                 </div>
                 <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-[#1D9BF0] rounded-full flex items-center justify-center text-[7px] font-black text-white border border-[#0B0D14]">
                   ✓
@@ -217,7 +243,7 @@ export const Header: React.FC<HeaderProps> = React.memo(
                   </span>
                 </div>
                 <div className="text-[9px] sm:text-[10px] font-bold text-amber-300 truncate leading-tight mt-0.5">
-                  {user.levelName} <span className="text-slate-400">•</span>{' '}
+                  {activeCharTier.shortTitle} <span className="text-slate-400">•</span>{' '}
                   <span className="text-slate-100">Lv {user.level}</span>
                 </div>
                 {/* Gold Progress Bar */}
@@ -228,9 +254,9 @@ export const Header: React.FC<HeaderProps> = React.memo(
                   />
                 </div>
               </div>
-            </div>
+            </button>
 
-            {/* Center Card: FOX Balance + Golden [+] Button (shrink-0 & whitespace-nowrap so balance NEVER truncates to "2,...") */}
+            {/* Center Card: FOX Balance + Golden [+] Button */}
             <div className="shrink-0 bg-gradient-to-b from-[#17150F]/95 to-[#0D0F17]/95 border border-amber-500/35 rounded-xl px-2 py-1.5 flex items-center justify-between gap-1.5 shadow-[0_4px_14px_rgba(0,0,0,0.5)]">
               <div className="flex items-center gap-1">
                 <img
@@ -268,13 +294,22 @@ export const Header: React.FC<HeaderProps> = React.memo(
           </div>
         ) : (
           <div className="w-full px-1 flex items-center justify-between gap-2 min-w-0">
-            <div className="flex items-center gap-2 min-w-0 flex-1">
-              {/* Circular Golden Ring Avatar with Verified Checkmark */}
+            <button
+              type="button"
+              onClick={onOpenCharacterProfile}
+              title="Open Character Profile & Collection"
+              className="flex items-center gap-2 min-w-0 flex-1 text-left group cursor-pointer"
+            >
+              {/* Circular Golden Ring Avatar with Active Character Tier Portrait */}
               <div className="relative shrink-0">
-                <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-full p-0.5 bg-gradient-to-tr from-amber-600 via-amber-400 to-yellow-200 shadow-[0_0_14px_rgba(245,158,11,0.4)]">
-                  <div className="w-full h-full rounded-full bg-[#0B0D14] flex items-center justify-center overflow-hidden border border-amber-300/30">
-                    <FoxCrestIcon className="w-7 h-7 sm:w-8 sm:h-8" />
-                  </div>
+                <div
+                  style={{ borderRadius: '50%' }}
+                  className="w-10 h-10 sm:w-11 sm:h-11 rounded-full p-0.5 bg-gradient-to-tr from-amber-600 via-amber-400 to-yellow-200 shadow-[0_0_14px_rgba(245,158,11,0.4)] group-hover:scale-105 transition"
+                >
+                  <FoxCircularAvatar
+                    tier={activeCharTier}
+                    className="w-full h-full bg-[#0B0D14] border border-amber-300/30"
+                  />
                 </div>
                 <span
                   title="Verified Player"
@@ -286,7 +321,7 @@ export const Header: React.FC<HeaderProps> = React.memo(
 
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-1.5 min-w-0">
-                  <span className="font-extrabold text-sm sm:text-base tracking-tight text-white truncate">
+                  <span className="font-extrabold text-sm sm:text-base tracking-tight text-white truncate group-hover:text-amber-200 transition">
                     {user.displayName || user.username}
                   </span>
                   <span className="w-3.5 h-3.5 bg-[#1D9BF0] rounded-full flex items-center justify-center text-[8px] font-black text-white shrink-0 shadow-sm">
@@ -299,14 +334,14 @@ export const Header: React.FC<HeaderProps> = React.memo(
                   )}
                 </div>
                 <div className="flex items-center gap-1.5 text-xs font-semibold mt-0.5 truncate">
-                  <span className="text-amber-300 truncate">{user.levelName}</span>
+                  <span className="text-amber-300 truncate">{activeCharTier.shortTitle}</span>
                   <span className="text-slate-500 shrink-0">•</span>
                   <span className="text-slate-200 shrink-0">Lv {user.level}</span>
                 </div>
               </div>
-            </div>
+            </button>
 
-            {/* Right side: Live FOX Coin Balance & Quick Trade Trigger (Never truncated) */}
+            {/* Right side: Live FOX Coin Balance & Quick Trade Trigger */}
             <div className="flex items-center gap-1.5 shrink-0">
               <div className="px-2.5 py-1.5 rounded-xl bg-gradient-to-b from-[#1A160D]/90 to-[#0E1018]/90 border border-amber-500/40 flex items-center gap-1.5 shadow-[0_0_12px_rgba(245,158,11,0.12)]">
                 <img
@@ -345,6 +380,8 @@ export const Header: React.FC<HeaderProps> = React.memo(
     prev.user.username === next.user.username &&
     prev.user.level === next.user.level &&
     prev.user.levelName === next.user.levelName &&
+    prev.user.equippedCharacterTier === next.user.equippedCharacterTier &&
+    prev.user.equippedSkinId === next.user.equippedSkinId &&
     prev.user.isAdmin === next.user.isAdmin &&
     prev.user.isGuest === next.user.isGuest &&
     prev.user.isTelegram === next.user.isTelegram &&

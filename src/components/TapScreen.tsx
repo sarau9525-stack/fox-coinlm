@@ -19,6 +19,18 @@ import { TelegramService } from '../utils/telegram.js';
 import { foxMascotImg, foxGoldCoinImg } from '../assets/assets.js';
 import { FoxGiftAvatar, getFoxGiftMetadata } from './FoxGiftAvatar.js';
 import { FoxLevelOutfit, FOX_LEVEL_OUTFITS, getLevelOutfitMeta } from './FoxLevelOutfit.js';
+import {
+  FoxCircularAvatar,
+  FoxCharacterHeroStage,
+  FoxCharacterModal,
+  getActiveCharacterTier,
+  getActiveCharacterSkin,
+  getUnlockedCharacterTierForLevel,
+  loadSavedCharacterPrefs,
+  saveCharacterPrefs,
+  CharacterTierId,
+  CharacterSkinId,
+} from './FoxCharacterSystem.js';
 import { FoxCrestIcon } from './Header.js';
 import { NavTab } from './Navigation.js';
 
@@ -50,6 +62,9 @@ interface TapScreenProps {
   onOpenGifts?: () => void;
   offlineEarnings?: number;
   onOpenOfflineModal?: () => void;
+  externalCharacterModalView?: 'profile' | 'collection' | null;
+  onCloseExternalCharacterModal?: () => void;
+  onUpdateCharacterPrefs?: (tierId: CharacterTierId, skinId: CharacterSkinId) => void;
 }
 
 function formatCompactNumber(num: number): string {
@@ -81,6 +96,9 @@ export const TapScreen: React.FC<TapScreenProps> = React.memo(
     onOpenGifts,
     offlineEarnings = 0,
     onOpenOfflineModal,
+    externalCharacterModalView = null,
+    onCloseExternalCharacterModal,
+    onUpdateCharacterPrefs,
   }) => {
     const [floatingNumbers, setFloatingNumbers] = useState<FloatingNumber[]>([]);
     const [tapRipples, setTapRipples] = useState<TapRipple[]>([]);
@@ -88,10 +106,27 @@ export const TapScreen: React.FC<TapScreenProps> = React.memo(
     const [isOrbPressing, setIsOrbPressing] = useState<boolean>(false);
     const [tilt, setTilt] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
     const [turboRemaining, setTurboRemaining] = useState<number>(0);
-    const [customOutfitLevel, setCustomOutfitLevel] = useState<number | null>(null);
-    const [previewOutfitLevel, setPreviewOutfitLevel] = useState<number>(user.level);
-    const [showWardrobeModal, setShowWardrobeModal] = useState<boolean>(false);
-    const [levelUpBanner, setLevelUpBanner] = useState<{ level: number; titleFa: string } | null>(null);
+
+    const [equippedTierId, setEquippedTierId] = useState<CharacterTierId>(() => {
+      const saved = loadSavedCharacterPrefs(user.id);
+      return getActiveCharacterTier(
+        user.level,
+        user.equippedCharacterTier || saved.tierId
+      ).id;
+    });
+    const [equippedSkinId, setEquippedSkinId] = useState<CharacterSkinId>(() => {
+      const saved = loadSavedCharacterPrefs(user.id);
+      return getActiveCharacterSkin(
+        user.level,
+        user.equippedSkinId || saved.skinId
+      ).id;
+    });
+    const [characterModalView, setCharacterModalView] = useState<'profile' | 'collection' | null>(null);
+    const [levelUpBanner, setLevelUpBanner] = useState<{
+      level: number;
+      tierTitle: string;
+      tierImg: string;
+    } | null>(null);
     const [dailyCountdown, setDailyCountdown] = useState<string>('12:54:32');
     const [claimedQuickMissions, setClaimedQuickMissions] = useState<Record<string, boolean>>(() => {
       if (typeof window === 'undefined') return {};
@@ -108,6 +143,21 @@ export const TapScreen: React.FC<TapScreenProps> = React.memo(
     const nextId = useRef<number>(1);
     const cleanupTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
     const prevLevelRef = useRef<number>(user.level);
+
+    // Sync equipped character preferences when user changes
+    useEffect(() => {
+      const saved = loadSavedCharacterPrefs(user.id);
+      const validTier = getActiveCharacterTier(
+        user.level,
+        user.equippedCharacterTier || saved.tierId || equippedTierId
+      );
+      const validSkin = getActiveCharacterSkin(
+        user.level,
+        user.equippedSkinId || saved.skinId || equippedSkinId
+      );
+      setEquippedTierId(validTier.id);
+      setEquippedSkinId(validSkin.id);
+    }, [user.id, user.level, user.equippedCharacterTier, user.equippedSkinId]);
 
     // Clean up pending particle timers on unmount
     useEffect(() => {
@@ -135,24 +185,37 @@ export const TapScreen: React.FC<TapScreenProps> = React.memo(
       return () => clearInterval(interval);
     }, []);
 
-    // Automatically detect level-ups
+    // Automatically detect level-ups and new Character Tier unlocks (Lv 1, 5, 10, 15, 20)
     useEffect(() => {
       if (user.level > prevLevelRef.current) {
-        const meta = getLevelOutfitMeta(user.level);
-        setCustomOutfitLevel(null);
-        setPreviewOutfitLevel(user.level);
-        setLevelUpBanner({ level: user.level, titleFa: meta.outfitTitleFa });
+        const unlockedTier = getUnlockedCharacterTierForLevel(user.level);
+        const prevUnlockedTier = getUnlockedCharacterTierForLevel(prevLevelRef.current);
+
+        // If player crossed into a new character tier (5, 10, 15, 20), auto-equip the new tier
+        if (unlockedTier.id !== prevUnlockedTier.id) {
+          setEquippedTierId(unlockedTier.id);
+          saveCharacterPrefs(user.id, unlockedTier.id, equippedSkinId);
+          if (onUpdateCharacterPrefs) {
+            onUpdateCharacterPrefs(unlockedTier.id, equippedSkinId);
+          }
+        }
+
+        setLevelUpBanner({
+          level: user.level,
+          tierTitle: `${unlockedTier.fullTitle} (${unlockedTier.outfitName})`,
+          tierImg: unlockedTier.avatarUrl,
+        });
         sound.playSuccess();
         TelegramService.triggerNotificationHaptic('success');
 
         const timer = setTimeout(() => {
           setLevelUpBanner(null);
-        }, 4500);
+        }, 5000);
         prevLevelRef.current = user.level;
         return () => clearTimeout(timer);
       }
       prevLevelRef.current = user.level;
-    }, [user.level]);
+    }, [user.level, user.id, equippedSkinId, onUpdateCharacterPrefs]);
 
     // Check turbo active countdown
     useEffect(() => {
@@ -273,10 +336,27 @@ export const TapScreen: React.FC<TapScreenProps> = React.memo(
     const perSecondProfit = user.profitPerHour > 0 ? user.profitPerHour / 3600 : 0;
     const equippedMeta = equippedGiftId ? getFoxGiftMetadata(equippedGiftId) : null;
 
-    const activeOutfitLevel =
-      customOutfitLevel && customOutfitLevel <= user.level ? customOutfitLevel : user.level;
-    const activeOutfitMeta = getLevelOutfitMeta(activeOutfitLevel);
-    const previewMeta = getLevelOutfitMeta(previewOutfitLevel);
+    const activeCharTier = getActiveCharacterTier(user.level, equippedTierId);
+    const activeCharSkin = getActiveCharacterSkin(user.level, equippedSkinId);
+    const effectiveModalView = characterModalView || externalCharacterModalView;
+
+    const handleSelectCharacterTier = (nextTierId: CharacterTierId) => {
+      const targetTier = getActiveCharacterTier(user.level, nextTierId);
+      setEquippedTierId(targetTier.id);
+      saveCharacterPrefs(user.id, targetTier.id, equippedSkinId);
+      if (onUpdateCharacterPrefs) {
+        onUpdateCharacterPrefs(targetTier.id, equippedSkinId);
+      }
+    };
+
+    const handleSelectCharacterSkin = (nextSkinId: CharacterSkinId) => {
+      const targetSkin = getActiveCharacterSkin(user.level, nextSkinId);
+      setEquippedSkinId(targetSkin.id);
+      saveCharacterPrefs(user.id, equippedTierId, targetSkin.id);
+      if (onUpdateCharacterPrefs) {
+        onUpdateCharacterPrefs(equippedTierId, targetSkin.id);
+      }
+    };
 
     // Daily Missions progress calculation
     const totalUpgradesCount = Object.values(user.upgrades || {}).reduce((acc, v) => acc + (v || 0), 0);
@@ -377,19 +457,23 @@ export const TapScreen: React.FC<TapScreenProps> = React.memo(
             </button>
           )}
 
-        {/* Level-Up Celebration Banner */}
+        {/* Level-Up & Character Tier Unlock Celebration Banner */}
         {levelUpBanner && (
-          <div className="w-full mb-2 bg-gradient-to-r from-amber-500 via-orange-500 to-yellow-500 text-slate-950 font-black text-xs py-2 px-3 rounded-xl flex items-center justify-between shadow-lg shadow-amber-500/30 animate-bounce">
-            <span className="flex items-center gap-1.5">
-              <Sparkles className="w-4 h-4 fill-slate-950" />
-              <span>
-                Level Up! Reached Level {levelUpBanner.level} — Unlocked: {levelUpBanner.titleFa}
+          <div className="w-full mb-2 bg-gradient-to-r from-amber-500 via-orange-500 to-yellow-500 text-slate-950 font-black text-xs py-2 px-3 rounded-xl flex items-center justify-between gap-2 shadow-lg shadow-amber-500/30 animate-bounce">
+            <span className="flex items-center gap-2 min-w-0">
+              <FoxCircularAvatar
+                src={levelUpBanner.tierImg}
+                alt={levelUpBanner.tierTitle}
+                className="w-7 h-7 bg-slate-950 border border-slate-900"
+              />
+              <span className="truncate">
+                Level {levelUpBanner.level} Reached! Active: {levelUpBanner.tierTitle}
               </span>
             </span>
             <button
               type="button"
               onClick={() => setLevelUpBanner(null)}
-              className="text-slate-900/80 hover:text-slate-950"
+              className="text-slate-900/80 hover:text-slate-950 shrink-0"
             >
               <X className="w-3.5 h-3.5" />
             </button>
@@ -434,24 +518,20 @@ export const TapScreen: React.FC<TapScreenProps> = React.memo(
             </div>
           </button>
 
-          {/* Card 2: LEVEL 10/10 & ENERGY */}
+          {/* Card 2: LEVEL X/20 & ENERGY (Opens Character Profile) */}
           <button
             type="button"
-            onClick={() => {
-              setPreviewOutfitLevel(activeOutfitLevel);
-              setShowWardrobeModal(true);
-            }}
+            onClick={() => setCharacterModalView('profile')}
             className="bg-gradient-to-b from-[#1A1610]/95 to-[#0D0F16]/98 border border-amber-500/45 hover:border-amber-400/80 rounded-2xl p-2 flex items-center gap-2 shadow-[0_4px_16px_rgba(0,0,0,0.5)] transition active:scale-98 cursor-pointer text-left"
           >
-            {/* Glowing golden crown shield */}
-            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-gradient-to-b from-[#2A1F0D] to-[#120D06] border border-amber-400/60 flex items-center justify-center shrink-0 shadow-[0_0_12px_rgba(245,158,11,0.3)]">
-              <svg viewBox="0 0 24 24" className="w-5 h-5 text-amber-400 fill-amber-400">
-                <path d="M12 2L4 5v6.09c0 5.05 3.41 9.76 8 10.91 4.59-1.15 8-5.86 8-10.91V5l-8-3zm-5 13v-5l2.5 2 2.5-3 2.5 3 2.5-2v5H7z" />
-              </svg>
-            </div>
+            {/* Active Character Tier Circular Avatar */}
+            <FoxCircularAvatar
+              tier={activeCharTier}
+              className="w-9 h-9 sm:w-10 sm:h-10 bg-gradient-to-b from-[#2A1F0D] to-[#120D06] border border-amber-400/75 shadow-[0_0_12px_rgba(245,158,11,0.3)]"
+            />
             <div className="min-w-0 flex-1 flex flex-col justify-center">
               <div className="text-[9px] sm:text-[10px] font-bold text-slate-200 uppercase tracking-wider truncate">
-                LEVEL {user.level}/10
+                LEVEL {user.level}/20
               </div>
               <div className="w-full h-2.5 bg-slate-900 border border-amber-500/35 rounded-full p-0.5 mt-1 overflow-hidden">
                 <div
@@ -486,7 +566,7 @@ export const TapScreen: React.FC<TapScreenProps> = React.memo(
         </div>
 
         {/* =====================================================================
-            ROW 2: HERO ROYAL FOX EMPEROR STAGE (Matches Screenshot + Clean Animations)
+            ROW 2: HERO FOX CHARACTER STAGE (Dynamic Multi-Level Character System)
            ===================================================================== */}
         <div
           ref={stageRef}
@@ -499,12 +579,12 @@ export const TapScreen: React.FC<TapScreenProps> = React.memo(
               isPressing ? 0.99 : 1
             })`,
           }}
-          className="w-full aspect-[1.78/1] relative rounded-2xl overflow-hidden border border-amber-500/40 shadow-[0_12px_32px_rgba(0,0,0,0.85)] mb-2.5 cursor-pointer touch-none transition-transform duration-100 ease-out will-change-transform bg-[#0C0E15]"
+          className="w-full aspect-[1.68/1] relative rounded-2xl overflow-hidden border border-amber-500/45 shadow-[0_12px_32px_rgba(0,0,0,0.85)] mb-2.5 cursor-pointer touch-none transition-transform duration-100 ease-out will-change-transform bg-gradient-to-b from-[#131A2E] via-[#0B0F1D] to-[#070A12]"
         >
-          {/* Exact Royal Fox Emperor Stage Artwork from Reference Image */}
+          {/* Ambient Royal Throne Stage Background (Blurred & Darkened so Active Character Tier Stands Out) */}
           <img
             src={HERO_DESIGN_ASSET}
-            alt="Royal Fox Emperor Stage"
+            alt=""
             draggable={false}
             style={{
               width: '112.4%',
@@ -512,21 +592,23 @@ export const TapScreen: React.FC<TapScreenProps> = React.memo(
               left: '-6.2%',
               top: '-88.4%',
               position: 'absolute',
+              filter: 'blur(4px) brightness(0.38) saturate(1.1)',
             }}
             className="pointer-events-none select-none"
           />
 
-          {/* Subtle Golden Aura Breathing Overlay Behind Character */}
-          <div
-            className="absolute inset-0 pointer-events-none animate-pulse-glow"
-            style={{
-              background:
-                'radial-gradient(circle at 48% 52%, rgba(251, 191, 36, 0.16) 0%, rgba(245, 158, 11, 0.04) 45%, transparent 70%)',
-            }}
-          />
+          {/* Prominently Displayed Active Fox Character Tier with Idle & Tap Animations */}
+          <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none">
+            <FoxCharacterHeroStage
+              tier={activeCharTier}
+              skin={activeCharSkin}
+              isTapped={isPressing}
+              isTurbo={turboRemaining > 0}
+            />
+          </div>
 
           {/* Animated Rising Golden Embers */}
-          <div className="absolute inset-0 pointer-events-none overflow-hidden">
+          <div className="absolute inset-0 z-10 pointer-events-none overflow-hidden">
             <span
               style={{ left: '22%', bottom: '18%', animationDelay: '0s' }}
               className="absolute w-1.5 h-1.5 rounded-full bg-amber-300 shadow-[0_0_8px_#FCD34D] animate-ember-rise"
@@ -545,16 +627,16 @@ export const TapScreen: React.FC<TapScreenProps> = React.memo(
             />
           </div>
 
-          {/* Animated Floating 3D Golden Coins around the Royal Fox */}
+          {/* Animated Floating 3D Golden Coins around the Fox Hero */}
           <div
-            style={{ left: '29%', top: '31%', animationDelay: '0s' }}
-            className="absolute w-6 h-6 rounded-full overflow-hidden shadow-[0_0_12px_rgba(251,191,36,0.8)] pointer-events-none animate-float-coin"
+            style={{ left: '24%', top: '36%', animationDelay: '0s' }}
+            className="absolute z-10 w-6 h-6 rounded-full overflow-hidden shadow-[0_0_12px_rgba(251,191,36,0.8)] pointer-events-none animate-float-coin"
           >
             <img src={foxGoldCoinImg} alt="" className="w-full h-full object-cover" />
           </div>
           <div
-            style={{ left: '61%', top: '39%', animationDelay: '1.4s' }}
-            className="absolute w-7 h-7 rounded-full overflow-hidden shadow-[0_0_14px_rgba(251,191,36,0.85)] pointer-events-none animate-float-coin"
+            style={{ left: '66%', top: '34%', animationDelay: '1.4s' }}
+            className="absolute z-10 w-7 h-7 rounded-full overflow-hidden shadow-[0_0_14px_rgba(251,191,36,0.85)] pointer-events-none animate-float-coin"
           >
             <img src={foxGoldCoinImg} alt="" className="w-full h-full object-cover" />
           </div>
@@ -564,36 +646,38 @@ export const TapScreen: React.FC<TapScreenProps> = React.memo(
             <div
               key={r.id}
               style={{ left: `${r.x}px`, top: `${r.y}px` }}
-              className="absolute w-28 h-28 rounded-full border-2 border-amber-300/90 bg-amber-400/15 shadow-[0_0_25px_rgba(251,191,36,0.8)] pointer-events-none animate-tap-ripple"
+              className="absolute z-20 w-28 h-28 rounded-full border-2 border-amber-300/90 bg-amber-400/15 shadow-[0_0_25px_rgba(251,191,36,0.8)] pointer-events-none animate-tap-ripple"
             />
           ))}
 
           {/* Tap Flash Highlight */}
           {isPressing && (
-            <div className="absolute inset-0 bg-amber-300/10 pointer-events-none transition-opacity" />
+            <div className="absolute inset-0 z-10 bg-amber-300/10 pointer-events-none transition-opacity" />
           )}
 
-          {/* Top-Left Live Rank / Outfit Badge ("Gold Emperor / Next level: 25M") */}
+          {/* Top-Left Character Tier & Collection Trigger Badge */}
           <button
             type="button"
             data-wardrobe-btn="true"
             onClick={(e) => {
               e.stopPropagation();
-              setPreviewOutfitLevel(activeOutfitLevel);
-              setShowWardrobeModal(true);
+              setCharacterModalView('collection');
             }}
-            className="absolute top-2 left-2 z-20 bg-gradient-to-r from-[#14120E] via-[#19150F] to-[#12131C] border border-amber-400/65 hover:border-amber-300 rounded-2xl px-2.5 py-1.5 flex items-center gap-2 shadow-[0_6px_20px_rgba(0,0,0,0.85)] transition active:scale-95 cursor-pointer"
-            title="Open Royal Fox Outfit Wardrobe"
+            className="absolute top-2 left-2 z-20 bg-gradient-to-r from-[#14120E]/95 via-[#19150F]/95 to-[#12131C]/95 border border-amber-400/65 hover:border-amber-300 rounded-2xl px-2 py-1.5 flex items-center gap-2 shadow-[0_6px_20px_rgba(0,0,0,0.85)] transition active:scale-95 cursor-pointer"
+            title="Open Character Profile & Collection"
           >
-            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-gradient-to-b from-[#2E210B] to-[#110D06] border border-amber-400/70 flex items-center justify-center shrink-0 shadow-[0_0_10px_rgba(245,158,11,0.35)]">
-              <FoxCrestIcon className="w-6 h-6" />
-            </div>
+            <FoxCircularAvatar
+              tier={activeCharTier}
+              className="w-8 h-8 sm:w-9 sm:h-9 bg-gradient-to-b from-[#2E210B] to-[#110D06] border border-amber-400/70 shadow-[0_0_10px_rgba(245,158,11,0.35)]"
+            />
             <div className="text-left pr-1">
               <div className="text-[11px] sm:text-xs font-extrabold text-white leading-tight">
-                {user.level >= 10 ? 'Gold Emperor' : user.levelName}
+                {activeCharTier.fullTitle}
               </div>
-              <div className="text-[10px] font-bold text-amber-300 leading-tight mt-0.5">
-                Next level: {formatCompactNumber(user.nextLevelMinCoins || 25_000_000)}
+              <div className="text-[9px] sm:text-[10px] font-bold text-amber-300 leading-tight mt-0.5">
+                {user.level >= 20
+                  ? 'Max Level • Tap to View Collection'
+                  : `Next level: ${formatCompactNumber(user.nextLevelMinCoins || 5_000)}`}
               </div>
             </div>
           </button>
@@ -907,186 +991,23 @@ export const TapScreen: React.FC<TapScreenProps> = React.memo(
         </button>
 
         {/* =====================================================================
-            ROYAL FOX OUTFIT WARDROBE MODAL (3D Live Preview)
+            FOXCOIN MULTI-LEVEL CHARACTER PROFILE & COLLECTION MODAL
            ===================================================================== */}
-        {showWardrobeModal && (
-          <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-4">
-            <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-2xl flex flex-col max-h-[90dvh]">
-              <div className="p-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-950/80">
-                <div className="flex items-center gap-2">
-                  <Shirt className="w-5 h-5 text-amber-400" />
-                  <div>
-                    <h3 className="text-sm font-black text-white">Royal Fox Outfit Wardrobe</h3>
-                    <p className="text-[11px] text-slate-400">
-                      Tap any level to preview its exclusive 3D outfit on your Fox
-                    </p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setShowWardrobeModal(false)}
-                  className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white cursor-pointer"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-
-              {/* Large Interactive 3D Outfit Showcase */}
-              <div className="p-3 bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 border-b border-slate-800 flex items-center gap-3.5">
-                <div
-                  style={{ borderColor: previewMeta.accentColor }}
-                  className="relative w-32 h-32 sm:w-36 sm:h-36 rounded-2xl overflow-hidden border-2 shadow-xl shrink-0 bg-slate-950"
-                >
-                  <img
-                    src={foxMascotImg}
-                    alt={previewMeta.outfitTitle}
-                    className="w-full h-full object-cover"
-                  />
-                  <div className="absolute inset-0">
-                    <FoxLevelOutfit level={previewOutfitLevel} />
-                  </div>
-                  <span className="absolute top-1.5 right-1.5 px-2 py-0.5 rounded-lg bg-slate-950/90 border border-amber-400/40 text-[10px] font-black text-amber-300">
-                    Lvl {previewOutfitLevel}
-                  </span>
-                </div>
-
-                <div className="flex-1 min-w-0 text-left">
-                  <div className="text-xs font-black text-amber-400 flex items-center gap-1">
-                    <span>{previewMeta.badgeEmoji}</span>
-                    <span>{previewMeta.levelName}</span>
-                  </div>
-                  <h4 className="text-sm font-black text-white mt-0.5">
-                    {previewMeta.outfitTitle}
-                  </h4>
-                  <p className="text-[11px] text-slate-300 mt-1 leading-relaxed">
-                    {previewMeta.descriptionFa}
-                  </p>
-
-                  <div className="mt-2.5">
-                    {user.level >= previewOutfitLevel ? (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setCustomOutfitLevel(
-                            previewOutfitLevel === user.level ? null : previewOutfitLevel
-                          );
-                          sound.playSuccess();
-                        }}
-                        className={`w-full py-1.5 px-3 rounded-xl text-xs font-black flex items-center justify-center gap-1.5 cursor-pointer transition ${
-                          activeOutfitLevel === previewOutfitLevel
-                            ? 'bg-emerald-500/20 border border-emerald-400/60 text-emerald-300'
-                            : 'bg-gradient-to-r from-amber-400 to-orange-500 text-slate-950 shadow-lg shadow-amber-500/25'
-                        }`}
-                      >
-                        {activeOutfitLevel === previewOutfitLevel ? (
-                          <>
-                            <Check className="w-3.5 h-3.5" />
-                            <span>Currently Equipped</span>
-                          </>
-                        ) : (
-                          <span>Equip Outfit</span>
-                        )}
-                      </button>
-                    ) : (
-                      <div className="w-full py-1.5 px-2.5 rounded-xl bg-slate-950/90 border border-slate-800 text-amber-300/90 text-[11px] font-bold flex items-center justify-center gap-1.5">
-                        <Lock className="w-3.5 h-3.5 text-amber-400" />
-                        <span>Locked — Unlocks at Level {previewOutfitLevel}</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              {/* Scrollable List of All 10 Level Outfits */}
-              <div className="p-3 overflow-y-auto space-y-2">
-                {FOX_LEVEL_OUTFITS.map((outfit) => {
-                  const isUnlocked = user.level >= outfit.level;
-                  const isWearing = activeOutfitLevel === outfit.level;
-                  const isPreviewing = previewOutfitLevel === outfit.level;
-
-                  return (
-                    <div
-                      key={outfit.level}
-                      onClick={() => {
-                        setPreviewOutfitLevel(outfit.level);
-                        sound.playTap();
-                      }}
-                      className={`p-2 rounded-2xl border flex items-center gap-3 transition cursor-pointer ${
-                        isPreviewing
-                          ? 'bg-amber-500/15 border-amber-400 shadow-md'
-                          : isWearing
-                          ? 'bg-emerald-500/10 border-emerald-500/50'
-                          : isUnlocked
-                          ? 'bg-slate-950/70 border-slate-800 hover:border-slate-700'
-                          : 'bg-slate-950/40 border-slate-900 opacity-80 hover:opacity-100'
-                      }`}
-                    >
-                      <div className="relative w-14 h-14 rounded-2xl overflow-hidden border border-slate-700 shrink-0 bg-slate-950">
-                        <img
-                          src={foxMascotImg}
-                          alt={outfit.outfitTitle}
-                          className="w-full h-full object-cover"
-                        />
-                        <div className="absolute inset-0">
-                          <FoxLevelOutfit level={outfit.level} />
-                        </div>
-                      </div>
-
-                      <div className="flex-1 min-w-0 text-left">
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-xs font-black text-amber-400">
-                            {outfit.badgeEmoji} Level {outfit.level}:
-                          </span>
-                          <span className="text-xs font-extrabold text-white truncate">
-                            {outfit.outfitTitle}
-                          </span>
-                        </div>
-                        <p className="text-[11px] text-slate-400 mt-0.5 leading-snug line-clamp-1">
-                          {outfit.descriptionFa}
-                        </p>
-                      </div>
-
-                      <div className="shrink-0">
-                        {isUnlocked ? (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setPreviewOutfitLevel(outfit.level);
-                              setCustomOutfitLevel(
-                                outfit.level === user.level ? null : outfit.level
-                              );
-                              sound.playTap();
-                            }}
-                            className={`px-3 py-1.5 rounded-xl text-xs font-extrabold flex items-center gap-1 cursor-pointer transition ${
-                              isWearing
-                                ? 'bg-amber-400 text-slate-950'
-                                : 'bg-slate-800 hover:bg-slate-700 text-slate-200'
-                            }`}
-                          >
-                            {isWearing ? (
-                              <>
-                                <Check className="w-3.5 h-3.5" />
-                                <span>Equipped</span>
-                              </>
-                            ) : (
-                              <span>Equip</span>
-                            )}
-                          </button>
-                        ) : (
-                          <div className="px-2.5 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 text-[11px] font-bold flex items-center gap-1">
-                            <Lock className="w-3 h-3 text-amber-400/80" />
-                            <span>Preview</span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-        )}
+        <FoxCharacterModal
+          isOpen={effectiveModalView !== null}
+          onClose={() => {
+            setCharacterModalView(null);
+            if (onCloseExternalCharacterModal) {
+              onCloseExternalCharacterModal();
+            }
+          }}
+          user={user}
+          equippedTierId={activeCharTier.id}
+          equippedSkinId={activeCharSkin.id}
+          onSelectTier={handleSelectCharacterTier}
+          onSelectSkin={handleSelectCharacterSkin}
+          initialView={effectiveModalView || 'profile'}
+        />
       </div>
     );
   }

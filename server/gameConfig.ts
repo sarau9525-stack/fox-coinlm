@@ -1,16 +1,26 @@
 import { UpgradeDefinition, PlayerLevel, TaskDefinition, DailyRewardDay, LuckyWheelPrize } from '../src/types/game.js';
 
 export const PLAYER_LEVELS: PlayerLevel[] = [
-  { level: 1, name: 'Bronze Fox', minCoins: 0, badge: '🥉' },
+  { level: 1, name: 'Novice Fox', minCoins: 0, badge: '🦊' },
   { level: 2, name: 'Silver Fox', minCoins: 5_000, badge: '🥈' },
   { level: 3, name: 'Gold Fox', minCoins: 25_000, badge: '🥇' },
-  { level: 4, name: 'Platinum Fox', minCoins: 100_000, badge: '💎' },
-  { level: 5, name: 'Diamond Fox', minCoins: 1_000_000, badge: '💠' },
-  { level: 6, name: 'Epic Fox', minCoins: 5_000_000, badge: '🔥' },
-  { level: 7, name: 'Legendary Fox', minCoins: 20_000_000, badge: '⚡' },
-  { level: 8, name: 'Master Fox', minCoins: 100_000_000, badge: '👑' },
-  { level: 9, name: 'Grandmaster Fox', minCoins: 500_000_000, badge: '🌟' },
-  { level: 10, name: 'Lord Fox', minCoins: 1_000_000_000, badge: '🪐' },
+  { level: 4, name: 'Platinum Fox', minCoins: 60_000, badge: '💎' },
+  { level: 5, name: 'Adventurer Fox', minCoins: 100_000, badge: '🏹' },
+  { level: 6, name: 'Emerald Fox', minCoins: 250_000, badge: '🌿' },
+  { level: 7, name: 'Diamond Fox', minCoins: 600_000, badge: '💠' },
+  { level: 8, name: 'Epic Fox', minCoins: 1_500_000, badge: '🔥' },
+  { level: 9, name: 'Vanguard Fox', minCoins: 3_000_000, badge: '⚔️' },
+  { level: 10, name: 'Warrior Fox', minCoins: 5_000_000, badge: '🛡️' },
+  { level: 11, name: 'Commander Fox', minCoins: 10_000_000, badge: '⚡' },
+  { level: 12, name: 'Paladin Fox', minCoins: 20_000_000, badge: '✨' },
+  { level: 13, name: 'Templar Fox', minCoins: 40_000_000, badge: '⚜️' },
+  { level: 14, name: 'Royal Champion', minCoins: 75_000_000, badge: '👑' },
+  { level: 15, name: 'Knight Fox', minCoins: 150_000_000, badge: '🔮' },
+  { level: 16, name: 'Grand Duke Fox', minCoins: 300_000_000, badge: '🌟' },
+  { level: 17, name: 'Master Fox', minCoins: 500_000_000, badge: '🪐' },
+  { level: 18, name: 'Grandmaster Fox', minCoins: 750_000_000, badge: '🌌' },
+  { level: 19, name: 'Lord Fox', minCoins: 1_000_000_000, badge: '🔱' },
+  { level: 20, name: 'Legendary Fox', minCoins: 1_500_000_000, badge: '👑' },
 ];
 
 export interface FoxLeagueDefinition {

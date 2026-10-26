@@ -21,6 +21,15 @@ import { SettingsModal } from './components/modals/SettingsModal.js';
 import { AuthModal } from './components/modals/AuthModal.js';
 import { AdminTelegramSetup, AdminTabType } from './components/AdminTelegramSetup.js';
 import { MandatoryChannelGate } from './components/MandatoryChannelGate.js';
+import {
+  FoxCharacterModal,
+  getActiveCharacterTier,
+  getActiveCharacterSkin,
+  loadSavedCharacterPrefs,
+  saveCharacterPrefs,
+  CharacterTierId,
+  CharacterSkinId,
+} from './components/FoxCharacterSystem.js';
 import { Smartphone, Monitor, Sparkles, Lock, ShieldAlert } from 'lucide-react';
 
 export default function App() {
@@ -46,6 +55,7 @@ export default function App() {
   const [equippedGiftId, setEquippedGiftId] = useState<string | null>(() => {
     return typeof window !== 'undefined' ? localStorage.getItem('fox_equipped_gift') : null;
   });
+  const [globalCharacterModalView, setGlobalCharacterModalView] = useState<'profile' | 'collection' | null>(null);
 
   // Memoized Game State Updater:
   // Avoids creating new state references when game values haven't meaningfully changed
@@ -564,6 +574,7 @@ export default function App() {
             onOpenWheel={handleOpenWheel}
             onOpenGifts={handleOpenGifts}
             onOpenTrade={handleOpenTrade}
+            onOpenCharacterProfile={() => setGlobalCharacterModalView('profile')}
             onOpenAdminSetup={handleOpenAdminSetup}
             isMuted={isMuted}
             onToggleSound={handleToggleSound}
@@ -655,6 +666,21 @@ export default function App() {
                   onOpenGifts={handleOpenGifts}
                   offlineEarnings={offlineEarningsAmount}
                   onOpenOfflineModal={handleOpenOfflineModal}
+                  externalCharacterModalView={globalCharacterModalView}
+                  onCloseExternalCharacterModal={() => setGlobalCharacterModalView(null)}
+                  onUpdateCharacterPrefs={(tierId, skinId) => {
+                    updateGameState((prev) => {
+                      if (!prev) return null;
+                      const nextState = {
+                        ...prev,
+                        equippedCharacterTier: tierId,
+                        equippedSkinId: skinId,
+                      };
+                      api.syncClientState(nextState);
+                      api.syncUserToServer(nextState).catch(() => {});
+                      return nextState;
+                    });
+                  }}
                 />
               )}
 
@@ -804,6 +830,55 @@ export default function App() {
             user={user}
             onClose={() => setShowBoostModal(false)}
             onUseBoost={handleUseBoost}
+          />
+        )}
+
+        {user && activeTab !== 'home' && globalCharacterModalView !== null && (
+          <FoxCharacterModal
+            isOpen={true}
+            onClose={() => setGlobalCharacterModalView(null)}
+            user={user}
+            equippedTierId={
+              getActiveCharacterTier(
+                user.level,
+                user.equippedCharacterTier || loadSavedCharacterPrefs(user.id).tierId
+              ).id
+            }
+            equippedSkinId={
+              getActiveCharacterSkin(
+                user.level,
+                user.equippedSkinId || loadSavedCharacterPrefs(user.id).skinId
+              ).id
+            }
+            onSelectTier={(tierId: CharacterTierId) => {
+              const currSkin = getActiveCharacterSkin(
+                user.level,
+                user.equippedSkinId || loadSavedCharacterPrefs(user.id).skinId
+              ).id;
+              saveCharacterPrefs(user.id, tierId, currSkin);
+              updateGameState((prev) => {
+                if (!prev) return null;
+                const nextState = { ...prev, equippedCharacterTier: tierId, equippedSkinId: currSkin };
+                api.syncClientState(nextState);
+                api.syncUserToServer(nextState).catch(() => {});
+                return nextState;
+              });
+            }}
+            onSelectSkin={(skinId: CharacterSkinId) => {
+              const currTier = getActiveCharacterTier(
+                user.level,
+                user.equippedCharacterTier || loadSavedCharacterPrefs(user.id).tierId
+              ).id;
+              saveCharacterPrefs(user.id, currTier, skinId);
+              updateGameState((prev) => {
+                if (!prev) return null;
+                const nextState = { ...prev, equippedCharacterTier: currTier, equippedSkinId: skinId };
+                api.syncClientState(nextState);
+                api.syncUserToServer(nextState).catch(() => {});
+                return nextState;
+              });
+            }}
+            initialView={globalCharacterModalView}
           />
         )}
 

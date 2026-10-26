@@ -123,6 +123,9 @@ export interface UserGameState {
     lastWheelSpinTimestamp?: number;
   };
 
+  equippedCharacterTier?: string;
+  equippedSkinId?: string;
+
   createdAt: number;
 }
 

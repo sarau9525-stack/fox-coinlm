@@ -18,6 +18,11 @@ import { FOX_LEAGUES, getFoxLeagueForScore, FoxLeagueDefinition } from '../../se
 import { foxGoldCoinImg } from '../assets/assets.js';
 import { TelegramService } from '../utils/telegram.js';
 import { NavTab } from './Navigation.js';
+import {
+  FoxCircularAvatar,
+  getActiveCharacterTier,
+  loadSavedCharacterPrefs,
+} from './FoxCharacterSystem.js';
 
 interface LeaderboardScreenProps {
   user: UserGameState;
@@ -464,13 +469,13 @@ export const LeaderboardScreen: React.FC<LeaderboardScreenProps> = ({ user, onNa
         <div className="flex items-center justify-between gap-2 relative z-10">
           {/* Left: Player Avatar & Identity */}
           <div className="flex items-center gap-2.5 min-w-0">
-            <div className="w-12 h-12 rounded-xl bg-[#0B0F1C] border-2 border-amber-400/70 overflow-hidden shrink-0 shadow-[0_0_12px_rgba(251,191,36,0.25)]">
-              <img
-                src="/assets/rank/avatar_my_rank.png"
-                alt={myActiveEntry.displayName}
-                className="w-full h-full object-cover"
-              />
-            </div>
+            <FoxCircularAvatar
+              tier={getActiveCharacterTier(
+                user.level,
+                user.equippedCharacterTier || loadSavedCharacterPrefs(user.id).tierId
+              )}
+              className="w-12 h-12 bg-[#0B0F1C] border-2 border-amber-400/70 shadow-[0_0_12px_rgba(251,191,36,0.25)]"
+            />
 
             <div className="min-w-0">
               <div className="flex items-center gap-1.5 flex-wrap">
@@ -661,8 +666,17 @@ export const LeaderboardScreen: React.FC<LeaderboardScreenProps> = ({ user, onNa
                 </div>
 
                 {/* Dedicated Circular Fox Avatar */}
-                <div
-                  className={`w-10 h-10 rounded-full overflow-hidden shrink-0 bg-[#090D18] ${
+                <FoxCircularAvatar
+                  src={
+                    isMe
+                      ? getActiveCharacterTier(
+                          user.level,
+                          user.equippedCharacterTier || loadSavedCharacterPrefs(user.id).tierId
+                        ).avatarUrl
+                      : avatarSrc
+                  }
+                  alt={entry.displayName}
+                  className={`w-10 h-10 bg-[#090D18] ${
                     entry.rank === 1
                       ? 'border-2 border-amber-400 shadow-[0_0_10px_rgba(251,191,36,0.35)]'
                       : entry.rank === 2
@@ -673,13 +687,7 @@ export const LeaderboardScreen: React.FC<LeaderboardScreenProps> = ({ user, onNa
                       ? 'border-2 border-amber-400'
                       : 'border border-slate-700'
                   }`}
-                >
-                  <img
-                    src={avatarSrc}
-                    alt={entry.displayName}
-                    className="w-full h-full object-cover"
-                  />
-                </div>
+                />
 
                 {/* Username + Level Pill + League Badge */}
                 <div className="min-w-0 flex-1">
