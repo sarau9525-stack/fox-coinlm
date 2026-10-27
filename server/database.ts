@@ -1726,18 +1726,26 @@ class DatabaseStore {
 
   public getLockedSections(): Record<string, boolean> {
     const raw = this.data.lockedSections || {};
+    const knownKeys = ['leaderboard', 'trade', 'gifts', 'upgrades', 'tasks', 'friends'];
     const sanitized: Record<string, boolean> = {};
+    for (const key of knownKeys) {
+      sanitized[key] = Boolean(raw[key]);
+    }
     for (const [k, v] of Object.entries(raw)) {
-      if (v) sanitized[k] = true;
+      sanitized[k] = Boolean(v);
     }
     return sanitized;
   }
 
   public adminSaveLockedSections(locks: Record<string, boolean>): Record<string, boolean> {
+    const knownKeys = ['leaderboard', 'trade', 'gifts', 'upgrades', 'tasks', 'friends'];
     const sanitized: Record<string, boolean> = {};
+    for (const key of knownKeys) {
+      sanitized[key] = Boolean(locks && locks[key]);
+    }
     if (locks && typeof locks === 'object') {
       for (const [k, v] of Object.entries(locks)) {
-        if (v) sanitized[String(k)] = true;
+        sanitized[String(k)] = Boolean(v);
       }
     }
     this.data.lockedSections = sanitized;

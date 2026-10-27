@@ -678,7 +678,7 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
 
   // Section Lock / Unlock Handlers
   const handleToggleSectionLock = async (sectionId: string, forceState?: boolean) => {
-    const nextValue = forceState !== undefined ? forceState : !adminLockedSections[sectionId];
+    const nextValue = forceState !== undefined ? Boolean(forceState) : !Boolean(adminLockedSections[sectionId]);
     const nextMap: Record<string, boolean> = {
       ...adminLockedSections,
       [sectionId]: nextValue,
@@ -687,8 +687,9 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
       setIsSavingAdminData(true);
       setAdminFeedback(null);
       sound.playTap();
-      const res = await api.adminSaveLockedSections(nextMap, adminSecret || '123456');
-      notifyConfigUpdate(adminUpgrades, adminWheelPrizes, adminFakeMembers, res.lockedSections);
+      notifyConfigUpdate(adminUpgrades, adminWheelPrizes, adminFakeMembers, nextMap);
+      await api.adminSaveLockedSections(nextMap, adminSecret || '123456');
+      notifyConfigUpdate(adminUpgrades, adminWheelPrizes, adminFakeMembers, nextMap);
       const secMeta = LOCKABLE_APP_SECTIONS.find((s) => s.id === sectionId);
       const label = secMeta ? secMeta.titleFa : sectionId;
       setAdminFeedback({
@@ -712,8 +713,9 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
       setIsSavingAdminData(true);
       setAdminFeedback(null);
       sound.playTap();
-      const res = await api.adminSaveLockedSections(nextMap, adminSecret || '123456');
-      notifyConfigUpdate(adminUpgrades, adminWheelPrizes, adminFakeMembers, res.lockedSections);
+      notifyConfigUpdate(adminUpgrades, adminWheelPrizes, adminFakeMembers, nextMap);
+      await api.adminSaveLockedSections(nextMap, adminSecret || '123456');
+      notifyConfigUpdate(adminUpgrades, adminWheelPrizes, adminFakeMembers, nextMap);
       setAdminFeedback({
         type: 'success',
         message: customSuccessMsg || '✅ وضعیت قفل بخش‌ها با موفقیت ذخیره شد.',

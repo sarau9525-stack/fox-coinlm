@@ -716,10 +716,14 @@ async function persistEdgeFakeLeaderboard(
 }
 
 function sanitizeLockedSections(raw: any): Record<string, boolean> {
+  const knownKeys = ['leaderboard', 'trade', 'gifts', 'upgrades', 'tasks', 'friends'];
   const res: Record<string, boolean> = {};
+  for (const key of knownKeys) {
+    res[key] = Boolean(raw && typeof raw === 'object' && raw[key]);
+  }
   if (raw && typeof raw === 'object') {
     for (const [k, v] of Object.entries(raw)) {
-      if (v) res[String(k)] = true;
+      res[String(k)] = Boolean(v);
     }
   }
   return res;
@@ -1768,9 +1772,7 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
     if (!fakeLeaderboardHydrated) {
       await hydrateEdgeFakeLeaderboard(env);
     }
-    if (!lockedSectionsHydrated) {
-      await hydrateEdgeLockedSections(env);
-    }
+    await hydrateEdgeLockedSections(env);
     const telegramBotUsername = await resolveEdgeBotUsername();
     return jsonResponse({
       upgrades: edgeUpgrades,

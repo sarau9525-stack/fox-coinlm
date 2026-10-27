@@ -539,7 +539,7 @@ class ApiService {
           if (parsed && typeof parsed === 'object') {
             const res: Record<string, boolean> = {};
             for (const [k, v] of Object.entries(parsed)) {
-              if (v) res[String(k)] = true;
+              res[String(k)] = Boolean(v);
             }
             return res;
           }
@@ -552,10 +552,14 @@ class ApiService {
   public saveLocalLockedSections(locks: Record<string, boolean>) {
     if (typeof window === 'undefined') return;
     try {
+      const knownKeys = ['leaderboard', 'trade', 'gifts', 'upgrades', 'tasks', 'friends'];
       const sanitized: Record<string, boolean> = {};
+      for (const key of knownKeys) {
+        sanitized[key] = Boolean(locks && locks[key]);
+      }
       if (locks && typeof locks === 'object') {
         for (const [k, v] of Object.entries(locks)) {
-          if (v) sanitized[String(k)] = true;
+          sanitized[String(k)] = Boolean(v);
         }
       }
       localStorage.setItem(LOCAL_LOCKED_SECTIONS_KEY, JSON.stringify(sanitized));
@@ -589,12 +593,8 @@ class ApiService {
       }
 
       if (cfg.lockedSections && typeof cfg.lockedSections === 'object') {
-        const localLocks = this.getLocalLockedSections();
-        if (Object.keys(cfg.lockedSections).length > 0 || Object.keys(localLocks).length === 0) {
-          this.saveLocalLockedSections(cfg.lockedSections);
-        } else if (Object.keys(localLocks).length > 0) {
-          cfg.lockedSections = localLocks;
-        }
+        this.saveLocalLockedSections(cfg.lockedSections);
+        cfg.lockedSections = this.getLocalLockedSections();
       } else {
         cfg.lockedSections = this.getLocalLockedSections();
       }
@@ -2534,12 +2534,8 @@ class ApiService {
         { headers }
       );
       if (res.lockedSections && typeof res.lockedSections === 'object') {
-        const localLocks = this.getLocalLockedSections();
-        if (Object.keys(res.lockedSections).length > 0 || Object.keys(localLocks).length === 0) {
-          this.saveLocalLockedSections(res.lockedSections);
-          return { success: true, lockedSections: this.getLocalLockedSections() };
-        }
-        return await this.adminSaveLockedSections(localLocks, adminSecret);
+        this.saveLocalLockedSections(res.lockedSections);
+        return { success: true, lockedSections: this.getLocalLockedSections() };
       }
       return { success: true, lockedSections: this.getLocalLockedSections() };
     } catch {
