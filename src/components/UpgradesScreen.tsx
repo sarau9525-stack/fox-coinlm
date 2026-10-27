@@ -116,6 +116,9 @@ export const UpgradesScreen: React.FC<UpgradesScreenProps> = ({
   const [hasCollectedOffline, setHasCollectedOffline] = useState<boolean>(false);
   const [collectSuccessFlash, setCollectSuccessFlash] = useState<number | null>(null);
   const claimingOfflineRef = useRef<boolean>(false);
+  const lastOfflineCollectedAtRef = useRef<number>(
+    typeof window !== 'undefined' ? Number(localStorage.getItem('foxcoin_last_offline_claim_at_v1') || '0') : 0
+  );
 
   const rawUnclaimedOffline = Math.max(
     Math.floor(offlineEarnings || 0),
@@ -123,21 +126,33 @@ export const UpgradesScreen: React.FC<UpgradesScreenProps> = ({
   );
 
   useEffect(() => {
-    if (rawUnclaimedOffline > 0 && !claimingOfflineRef.current) {
+    const recentlyCollected =
+      lastOfflineCollectedAtRef.current > 0 && Date.now() - lastOfflineCollectedAtRef.current < 60000;
+    if (rawUnclaimedOffline > 0 && !claimingOfflineRef.current && !recentlyCollected) {
       setHasCollectedOffline(false);
     }
   }, [rawUnclaimedOffline]);
 
-  const accruedVaultCoins = hasCollectedOffline ? 0 : rawUnclaimedOffline;
+  const recentlyCollected =
+    lastOfflineCollectedAtRef.current > 0 && Date.now() - lastOfflineCollectedAtRef.current < 60000;
+  const accruedVaultCoins = hasCollectedOffline || recentlyCollected ? 0 : rawUnclaimedOffline;
 
   const cardRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   const handleCollectOffline = async () => {
     if (isClaimingOffline || claimingOfflineRef.current || accruedVaultCoins <= 0) return;
     const amountToCollect = accruedVaultCoins;
+    const now = Date.now();
     claimingOfflineRef.current = true;
+    lastOfflineCollectedAtRef.current = now;
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('foxcoin_last_offline_claim_at_v1', String(now));
+    }
     setIsClaimingOffline(true);
     setHasCollectedOffline(true);
+    setCollectSuccessFlash(amountToCollect);
+    setTimeout(() => setCollectSuccessFlash(null), 2200);
+
     try {
       sound.playLevelUp();
       TelegramService.triggerNotificationHaptic('success');
@@ -147,11 +162,6 @@ export const UpgradesScreen: React.FC<UpgradesScreenProps> = ({
       } else if (onCollectVaultBonus) {
         onCollectVaultBonus(amountToCollect);
       }
-
-      setCollectSuccessFlash(amountToCollect);
-      setTimeout(() => setCollectSuccessFlash(null), 2200);
-    } catch {
-      setHasCollectedOffline(false);
     } finally {
       claimingOfflineRef.current = false;
       setIsClaimingOffline(false);

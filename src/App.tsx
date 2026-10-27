@@ -137,7 +137,9 @@ export default function App() {
   const [isTelegramSimMode, setIsTelegramSimMode] = useState<boolean>(false);
   const offlineCheckedRef = useRef<boolean>(false);
   const isClaimingPassiveRef = useRef<boolean>(false);
-  const lastPassiveClaimTimeRef = useRef<number>(0);
+  const lastPassiveClaimTimeRef = useRef<number>(
+    typeof window !== 'undefined' ? Number(localStorage.getItem('foxcoin_last_offline_claim_at_v1') || '0') : 0
+  );
 
   // Initialize App and Authenticate
   useEffect(() => {
@@ -212,11 +214,14 @@ export default function App() {
     // Register real-time sync listener from api client with anti-rollback reconciliation
     api.registerStateListener((updatedUser) => {
       updateGameState((prev) => {
-        if (!prev || prev.id !== updatedUser.id) {
-          return { ...updatedUser };
-        }
         const recentlyClaimedOffline =
-          isClaimingPassiveRef.current || Date.now() - lastPassiveClaimTimeRef.current < 30000;
+          isClaimingPassiveRef.current || Date.now() - lastPassiveClaimTimeRef.current < 60000;
+        if (!prev || prev.id !== updatedUser.id) {
+          return {
+            ...updatedUser,
+            unclaimedPassive: recentlyClaimedOffline ? 0 : updatedUser.unclaimedPassive,
+          };
+        }
         return {
           ...updatedUser,
           balance: api.hasPendingTaps() ? Math.max(updatedUser.balance, prev.balance) : updatedUser.balance,
@@ -233,7 +238,7 @@ export default function App() {
       if (!api.hasPendingTaps() && !isClaimingPassiveRef.current) {
         api.syncUserToServer().then((synced) => {
           if (synced && !api.hasPendingTaps() && !isClaimingPassiveRef.current) {
-            const recentlyClaimedOffline = Date.now() - lastPassiveClaimTimeRef.current < 30000;
+            const recentlyClaimedOffline = Date.now() - lastPassiveClaimTimeRef.current < 60000;
             updateGameState(
               recentlyClaimedOffline ? { ...synced, unclaimedPassive: 0 } : synced
             );
@@ -262,7 +267,8 @@ export default function App() {
   // Offline passive income check on load and whenever unclaimedPassive updates
   useEffect(() => {
     if (!user) return;
-    if (isClaimingPassiveRef.current || Date.now() - lastPassiveClaimTimeRef.current < 30000) {
+    if (isClaimingPassiveRef.current || Date.now() - lastPassiveClaimTimeRef.current < 60000) {
+      setOfflineEarningsAmount(0);
       return;
     }
 
@@ -331,7 +337,11 @@ export default function App() {
         if (!prev) return null;
         const needsEnergy = prev.energy < prev.maxEnergy;
         const hasProfit = prev.profitPerHour > 0;
-        if (!needsEnergy && !hasProfit) return prev;
+        const recentlyClaimedOffline =
+          isClaimingPassiveRef.current || now - lastPassiveClaimTimeRef.current < 60000;
+        if (!needsEnergy && !hasProfit && (!recentlyClaimedOffline || prev.unclaimedPassive === 0)) {
+          return prev;
+        }
 
         const nextEnergy = needsEnergy
           ? Math.min(prev.maxEnergy, prev.energy + prev.energyRegenRate * elapsedSec)
@@ -343,7 +353,7 @@ export default function App() {
           energy: Math.floor(nextEnergy),
           balance: prev.balance + profitGain,
           totalEarned: prev.totalEarned + profitGain,
-          unclaimedPassive: prev.unclaimedPassive,
+          unclaimedPassive: recentlyClaimedOffline ? 0 : prev.unclaimedPassive,
           lastPassiveClaimTimestamp: now,
         });
         api.syncClientState(nextState);
@@ -418,46 +428,63 @@ export default function App() {
 
   // Claim Passive income (strictly single-claim locked so offline coins can only be collected once)
   const handleClaimPassive = useCallback(async () => {
-    if (isClaimingPassiveRef.current) return;
     const now = Date.now();
-    if (now - lastPassiveClaimTimeRef.current < 15000) {
-      setOfflineEarningsAmount(0);
-      setShowOfflineModal(false);
-      return;
-    }
-
     const expectedAmount = Math.max(
       Math.floor(offlineEarningsAmount || 0),
       Math.floor(user?.unclaimedPassive || 0)
     );
-    if (expectedAmount <= 0) {
-      setOfflineEarningsAmount(0);
-      setShowOfflineModal(false);
+
+    // Always immediately zero out UI state & localStorage when Collect is pressed
+    setOfflineEarningsAmount(0);
+    setShowOfflineModal(false);
+
+    if (isClaimingPassiveRef.current || now - lastPassiveClaimTimeRef.current < 15000 || expectedAmount <= 0) {
+      lastPassiveClaimTimeRef.current = now;
+      updateGameState((prev) => {
+        if (!prev) return null;
+        const zeroed: UserGameState = {
+          ...prev,
+          unclaimedPassive: 0,
+          lastPassiveClaimTimestamp: now,
+        };
+        api.syncClientState(zeroed);
+        return zeroed;
+      });
       return;
     }
 
     isClaimingPassiveRef.current = true;
     lastPassiveClaimTimeRef.current = now;
-    setOfflineEarningsAmount(0);
-    setShowOfflineModal(false);
 
-    // Immediately clear unclaimedPassive in React state so the 1-second ticker cannot re-populate offlineEarningsAmount
+    // Immediately credit coins & clear unclaimedPassive in React state + localStorage so UI updates in 0ms
     updateGameState((prev) => {
       if (!prev) return null;
-      return {
+      const nextState: UserGameState = reconcileUserLevel({
         ...prev,
+        balance: prev.balance + expectedAmount,
+        totalEarned: prev.totalEarned + expectedAmount,
         unclaimedPassive: 0,
         lastPassiveClaimTimestamp: now,
-      };
+      });
+      api.syncClientState(nextState);
+      return nextState;
     });
 
     try {
       const res = await api.claimPassive(expectedAmount);
       setOfflineEarningsAmount(0);
-      updateGameState({
-        ...res.user,
-        unclaimedPassive: 0,
-        lastPassiveClaimTimestamp: Date.now(),
+      updateGameState((prev) => {
+        const base = res.user || prev;
+        if (!base) return null;
+        const finalState: UserGameState = reconcileUserLevel({
+          ...base,
+          balance: prev ? Math.max(base.balance, prev.balance) : base.balance,
+          totalEarned: prev ? Math.max(base.totalEarned, prev.totalEarned) : base.totalEarned,
+          unclaimedPassive: 0,
+          lastPassiveClaimTimestamp: Date.now(),
+        });
+        api.syncClientState(finalState);
+        return finalState;
       });
     } finally {
       isClaimingPassiveRef.current = false;

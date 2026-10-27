@@ -67,6 +67,8 @@ export interface GameConfig {
   telegramBotUsername: string;
 }
 
+const LOCAL_OFFLINE_CLAIM_AT_KEY = 'foxcoin_last_offline_claim_at_v1';
+
 class ApiService {
   private token: string | null = null;
   private pendingTapCount: number = 0;
@@ -79,6 +81,7 @@ class ApiService {
   constructor() {
     if (typeof window !== 'undefined') {
       this.token = localStorage.getItem(TOKEN_KEY);
+      this.lastPassiveClaimAt = Number(localStorage.getItem(LOCAL_OFFLINE_CLAIM_AT_KEY) || '0');
     }
   }
 
@@ -183,8 +186,13 @@ class ApiService {
     const todayStr = new Date(now).toISOString().split('T')[0];
     user.canClaimDaily = user.lastDailyClaimDate !== todayStr;
 
-    const existingUnclaimed = Math.max(0, Math.floor(user.unclaimedPassive || 0));
-    if (user.profitPerHour > 0 && user.lastPassiveClaimTimestamp > 0) {
+    const recentlyClaimed =
+      this.isClaimingPassive || (this.lastPassiveClaimAt > 0 && now - this.lastPassiveClaimAt < 60000);
+    const existingUnclaimed = recentlyClaimed ? 0 : Math.max(0, Math.floor(user.unclaimedPassive || 0));
+    if (recentlyClaimed) {
+      user.unclaimedPassive = 0;
+      user.lastPassiveClaimTimestamp = now;
+    } else if (user.profitPerHour > 0 && user.lastPassiveClaimTimestamp > 0) {
       const elapsedSec = Math.max(0, (now - user.lastPassiveClaimTimestamp) / 1000);
       const maxOfflineSec = (user.maxOfflineHours || 3) * 3600;
       const maxBankableOffline = Math.ceil((user.profitPerHour / 3600) * maxOfflineSec);
@@ -220,7 +228,10 @@ class ApiService {
         ) {
           const syncedLocal = this.syncLocalUserProgress({ ...localParsed });
           let localHadMoreProgress = false;
-          const recentlyClaimedPassive = Date.now() - this.lastPassiveClaimAt < 30000;
+          const recentlyClaimedPassive =
+            this.isClaimingPassive ||
+            (this.lastPassiveClaimAt > 0 && Date.now() - this.lastPassiveClaimAt < 60000) ||
+            Number(localParsed.unclaimedPassive || 0) === 0;
 
           if (recentlyClaimedPassive) {
             serverUser.unclaimedPassive = 0;
@@ -332,7 +343,14 @@ class ApiService {
   }
 
   private saveLocalUser(user: UserGameState) {
-    if (typeof window !== 'undefined') {
+    if (typeof window !== 'undefined' && user) {
+      if (this.isClaimingPassive || (this.lastPassiveClaimAt > 0 && Date.now() - this.lastPassiveClaimAt < 60000)) {
+        user.unclaimedPassive = 0;
+        if (user.boosters) {
+          (user.boosters as any).lastOfflineClaimAt = this.lastPassiveClaimAt;
+        }
+        (user as any).lastOfflineClaimExecutedAt = this.lastPassiveClaimAt;
+      }
       localStorage.setItem(LOCAL_USER_KEY, JSON.stringify(user));
     }
   }
@@ -1296,35 +1314,60 @@ class ApiService {
 
   public async claimPassive(expectedAmount?: number): Promise<{ user: UserGameState; claimedAmount: number }> {
     const now = Date.now();
-    if (this.isClaimingPassive || now - this.lastPassiveClaimAt < 15000) {
-      const current = this.getLocalUser();
-      current.unclaimedPassive = 0;
-      this.saveLocalUser(current);
-      return { user: { ...current }, claimedAmount: 0 };
+    const localBefore = this.getLocalUser();
+    const fallbackAmount = Math.max(
+      0,
+      Math.floor(expectedAmount || 0),
+      Math.floor(localBefore.unclaimedPassive || 0)
+    );
+
+    if (this.isClaimingPassive || (this.lastPassiveClaimAt > 0 && now - this.lastPassiveClaimAt < 15000)) {
+      this.lastPassiveClaimAt = now;
+      if (typeof window !== 'undefined') {
+        localStorage.setItem(LOCAL_OFFLINE_CLAIM_AT_KEY, String(now));
+      }
+      localBefore.unclaimedPassive = 0;
+      localBefore.lastPassiveClaimTimestamp = now;
+      if (localBefore.boosters) {
+        (localBefore.boosters as any).lastOfflineClaimAt = now;
+      }
+      (localBefore as any).lastOfflineClaimExecutedAt = now;
+      this.saveLocalUser(localBefore);
+      if (this.onStateUpdated) {
+        this.onStateUpdated({ ...localBefore });
+      }
+      return { user: { ...localBefore }, claimedAmount: 0 };
     }
 
     this.isClaimingPassive = true;
     this.lastPassiveClaimAt = now;
+    if (typeof window !== 'undefined') {
+      localStorage.setItem(LOCAL_OFFLINE_CLAIM_AT_KEY, String(now));
+    }
 
     try {
+      // Immediately clear unclaimedPassive in localStorage BEFORE any network round-trip or tap flush
+      localBefore.unclaimedPassive = 0;
+      localBefore.lastPassiveClaimTimestamp = now;
+      if (localBefore.boosters) {
+        (localBefore.boosters as any).lastOfflineClaimAt = now;
+      }
+      (localBefore as any).lastOfflineClaimExecutedAt = now;
+      this.saveLocalUser(localBefore);
+
       if (this.pendingTapCount > 0) {
         await this.flushTaps();
       }
 
-      const localBefore = this.getLocalUser();
-      const fallbackAmount = Math.max(
-        0,
-        Math.floor(expectedAmount || 0),
-        Math.floor(localBefore.unclaimedPassive || 0)
-      );
-
-      // Immediately clear unclaimedPassive in localStorage before network round-trip
-      localBefore.unclaimedPassive = 0;
-      localBefore.lastPassiveClaimTimestamp = now;
-      this.saveLocalUser(localBefore);
-
       if (fallbackAmount <= 0) {
-        return { user: { ...localBefore }, claimedAmount: 0 };
+        const zeroed = this.getLocalUser();
+        zeroed.unclaimedPassive = 0;
+        zeroed.lastPassiveClaimTimestamp = now;
+        this.saveLocalUser(zeroed);
+        if (this.onStateUpdated) {
+          this.onStateUpdated({ ...zeroed });
+        }
+        return { user: { ...zeroed }, claimedAmount: 0 };
       }
 
       try {
@@ -1340,6 +1383,10 @@ class ApiService {
         }
         res.user.unclaimedPassive = 0;
         res.user.lastPassiveClaimTimestamp = Date.now();
+        if (res.user.boosters) {
+          (res.user.boosters as any).lastOfflineClaimAt = this.lastPassiveClaimAt;
+        }
+        (res.user as any).lastOfflineClaimExecutedAt = this.lastPassiveClaimAt;
         reconcileUserLevel(res.user, this.getLocalUpgrades());
 
         this.saveLocalUser(res.user);
@@ -1354,6 +1401,10 @@ class ApiService {
         user.totalEarned += claimedAmount;
         user.unclaimedPassive = 0;
         user.lastPassiveClaimTimestamp = Date.now();
+        if (user.boosters) {
+          (user.boosters as any).lastOfflineClaimAt = this.lastPassiveClaimAt;
+        }
+        (user as any).lastOfflineClaimExecutedAt = this.lastPassiveClaimAt;
         reconcileUserLevel(user, this.getLocalUpgrades());
         this.saveLocalUser(user);
         if (this.onStateUpdated) this.onStateUpdated({ ...user });

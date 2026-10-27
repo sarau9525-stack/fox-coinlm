@@ -488,6 +488,16 @@ function mergeUserProgress(base: UserGameState, incoming?: Partial<UserGameState
     incBoosters.referredByCode ||
     undefined;
 
+  const baseOfflineClaimAt = Math.max(
+    Number((base as any).lastOfflineClaimExecutedAt || 0),
+    Number(baseBoosters.lastOfflineClaimAt || 0)
+  );
+  const incOfflineClaimAt = Math.max(
+    Number((incoming as any).lastOfflineClaimExecutedAt || 0),
+    Number(incBoosters.lastOfflineClaimAt || 0)
+  );
+  const latestOfflineClaimAt = Math.max(baseOfflineClaimAt, incOfflineClaimAt);
+
   const mergedBoosters: any = {
     ...baseBoosters,
     ...incBoosters,
@@ -511,6 +521,7 @@ function mergeUserProgress(base: UserGameState, incoming?: Partial<UserGameState
         Number(base.channelVerifiedAt || baseBoosters.channelVerifiedAt || 0),
         Number(incoming.channelVerifiedAt || incBoosters.channelVerifiedAt || 0)
       ) || undefined,
+    lastOfflineClaimAt: latestOfflineClaimAt || undefined,
   };
 
   // Determine whether incoming has newer/higher progression
@@ -540,6 +551,19 @@ function mergeUserProgress(base: UserGameState, incoming?: Partial<UserGameState
   const isGenericName = (n?: string) =>
     !n || n === 'TeleFox' || n === 'Telegram Fox' || n === 'FoxPlayer' || n.startsWith('Fox_') || n.startsWith('Guest_');
 
+  let effectiveUnclaimedPassive = 0;
+  if (latestOfflineClaimAt > 0 && Date.now() - latestOfflineClaimAt < 60_000) {
+    effectiveUnclaimedPassive = 0;
+  } else if (incOfflineClaimAt > baseOfflineClaimAt) {
+    effectiveUnclaimedPassive = Math.max(0, Number(incoming.unclaimedPassive || 0));
+  } else if (baseOfflineClaimAt > incOfflineClaimAt) {
+    effectiveUnclaimedPassive = Math.max(0, Number(base.unclaimedPassive || 0));
+  } else if (Number(incoming.lastPassiveClaimTimestamp || 0) >= Number(base.lastPassiveClaimTimestamp || 0)) {
+    effectiveUnclaimedPassive = Math.max(0, Number(incoming.unclaimedPassive || 0));
+  } else {
+    effectiveUnclaimedPassive = Math.max(0, Number(base.unclaimedPassive || 0));
+  }
+
   const merged: UserGameState = {
     ...base,
     username: !isGenericName(incoming.username) ? String(incoming.username) : base.username,
@@ -554,7 +578,7 @@ function mergeUserProgress(base: UserGameState, incoming?: Partial<UserGameState
     totalEarned: Math.max(baseTotalEarned, incTotalEarned, effectiveBalance),
     totalTaps: Math.max(Number(base.totalTaps || 0), Number(incoming.totalTaps || 0)),
     level: Math.max(Number(base.level || 1), Number(incoming.level || 1)),
-    unclaimedPassive: Math.max(Number(base.unclaimedPassive || 0), Number(incoming.unclaimedPassive || 0)),
+    unclaimedPassive: effectiveUnclaimedPassive,
     lastPassiveClaimTimestamp:
       Math.max(Number(base.lastPassiveClaimTimestamp || 0), Number(incoming.lastPassiveClaimTimestamp || 0)) || Date.now(),
     upgrades: mergedUpgrades,
@@ -572,6 +596,9 @@ function mergeUserProgress(base: UserGameState, incoming?: Partial<UserGameState
     boosters: mergedBoosters,
     createdAt: Math.min(Number(base.createdAt || Date.now()), Number(incoming.createdAt || Date.now())),
   };
+  if (latestOfflineClaimAt > 0) {
+    (merged as any).lastOfflineClaimExecutedAt = latestOfflineClaimAt;
+  }
 
   return merged;
 }
@@ -2373,13 +2400,34 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
 
     const amount = Math.max(Math.floor(user.unclaimedPassive || 0), timeBasedEarned, safeRequested);
 
+    const lastServerClaimAt = Number((user as any).lastServerClaimedPassiveAt || 0);
+    if (now - lastServerClaimAt < 15_000 && Math.floor(user.unclaimedPassive || 0) <= 0 && elapsedSec < 60) {
+      user.unclaimedPassive = 0;
+      user.lastPassiveClaimTimestamp = now;
+      (user as any).lastOfflineClaimExecutedAt = now;
+      if (user.boosters) {
+        (user.boosters as any).lastOfflineClaimAt = now;
+      }
+      refreshEdgeUserState(user, now);
+      user.unclaimedPassive = 0;
+      edgeUsers.set(user.id, user);
+      await persistUserToD1(env.DB, user);
+      return jsonResponse({ user, claimedAmount: 0 });
+    }
+
     if (amount > 0) {
       user.balance += amount;
       user.totalEarned += amount;
     }
     user.unclaimedPassive = 0;
     user.lastPassiveClaimTimestamp = now;
+    (user as any).lastServerClaimedPassiveAt = now;
+    (user as any).lastOfflineClaimExecutedAt = now;
+    if (user.boosters) {
+      (user.boosters as any).lastOfflineClaimAt = now;
+    }
     refreshEdgeUserState(user, now);
+    user.unclaimedPassive = 0;
     edgeUsers.set(user.id, user);
     await persistUserToD1(env.DB, user);
     return jsonResponse({ user, claimedAmount: amount });

@@ -579,17 +579,38 @@ class DatabaseStore {
       existing.balance
     );
     existing.totalTaps = Math.max(Number(existing.totalTaps || 0), Number(incoming.totalTaps || 0));
+    const existingClaimAt = Math.max(
+      Number((existing as any).lastOfflineClaimExecutedAt || 0),
+      Number((existing.boosters as any)?.lastOfflineClaimAt || 0)
+    );
+    const incomingClaimAt = Math.max(
+      Number((incoming as any).lastOfflineClaimExecutedAt || 0),
+      Number((incoming.boosters as any)?.lastOfflineClaimAt || 0)
+    );
+    const latestClaimAt = Math.max(existingClaimAt, incomingClaimAt);
+    if (latestClaimAt > 0) {
+      (existing as any).lastOfflineClaimExecutedAt = latestClaimAt;
+      if (existing.boosters) {
+        (existing.boosters as any).lastOfflineClaimAt = latestClaimAt;
+      }
+    }
+
     if (
+      (latestClaimAt > 0 && Date.now() - latestClaimAt < 60_000) ||
+      (Number(incoming.unclaimedPassive || 0) === 0 && incomingClaimAt >= existingClaimAt && incomingClaimAt > 0)
+    ) {
+      existing.unclaimedPassive = 0;
+      existing.lastPassiveClaimTimestamp = Math.max(
+        Number(existing.lastPassiveClaimTimestamp || 0),
+        Number(incoming.lastPassiveClaimTimestamp || 0),
+        Date.now()
+      );
+    } else if (
       typeof incoming.lastPassiveClaimTimestamp === 'number' &&
       incoming.lastPassiveClaimTimestamp >= (existing.lastPassiveClaimTimestamp || 0)
     ) {
       existing.unclaimedPassive = Math.max(0, Number(incoming.unclaimedPassive || 0));
       existing.lastPassiveClaimTimestamp = incoming.lastPassiveClaimTimestamp;
-    } else {
-      existing.unclaimedPassive = Math.max(
-        Number(existing.unclaimedPassive || 0),
-        Number(incoming.unclaimedPassive || 0)
-      );
     }
     existing.referralCount = Math.max(Number(existing.referralCount || 0), Number(incoming.referralCount || 0));
     existing.referralEarnings = Math.max(Number(existing.referralEarnings || 0), Number(incoming.referralEarnings || 0));
@@ -1016,15 +1037,20 @@ class DatabaseStore {
     const now = Date.now();
     this.recalculatePlayerStats(user);
 
-    const lastExecutedAt = Number((user as any).lastOfflineClaimExecutedAt || 0);
+    const lastServerClaimAt = Number((user as any).lastServerClaimedPassiveAt || 0);
     const maxOfflineSec = (user.maxOfflineHours || 3) * 3600;
     const elapsedSec = Math.max(0, (now - (user.lastPassiveClaimTimestamp || now)) / 1000);
 
-    // Guard against duplicate offline claims within 30 seconds after already claiming
-    if (now - lastExecutedAt < 30_000 && Math.floor(user.unclaimedPassive || 0) <= 0 && elapsedSec < 60) {
+    // Guard against duplicate offline claims within 15 seconds after already claiming on server
+    if (now - lastServerClaimAt < 15_000 && Math.floor(user.unclaimedPassive || 0) <= 0 && elapsedSec < 60) {
       user.unclaimedPassive = 0;
       user.lastPassiveClaimTimestamp = now;
+      (user as any).lastOfflineClaimExecutedAt = now;
+      if (user.boosters) {
+        (user.boosters as any).lastOfflineClaimAt = now;
+      }
       this.refreshUserState(user, now);
+      user.unclaimedPassive = 0;
       this.save();
       return { success: true, state: user, claimedAmount: 0 };
     }
@@ -1051,9 +1077,14 @@ class DatabaseStore {
 
     user.lastPassiveClaimTimestamp = now;
     user.unclaimedPassive = 0;
+    (user as any).lastServerClaimedPassiveAt = now;
     (user as any).lastOfflineClaimExecutedAt = now;
+    if (user.boosters) {
+      (user.boosters as any).lastOfflineClaimAt = now;
+    }
 
     this.refreshUserState(user, now);
+    user.unclaimedPassive = 0;
     this.save();
     return { success: true, state: user, claimedAmount: amount };
   }
