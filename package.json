@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "vite build",
+    "build": "vite build && node scripts/embed-dist.mjs",
     "preview": "vite preview",
     "start": "tsx server.ts",
     "deploy": "vite build && npx wrangler deploy",

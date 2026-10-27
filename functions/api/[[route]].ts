@@ -25,6 +25,7 @@ import {
   UpgradeDefinition,
   LuckyWheelPrize,
 } from '../../src/types/game.js';
+import { STATIC_ASSETS } from '../generatedAssets.js';
 
 export interface CloudflareEnv {
   DB?: any; // Cloudflare D1 SQLite Database binding
@@ -3632,9 +3633,36 @@ export default {
         params: {},
       });
     }
+
+    // 1. Serve embedded static asset if matched
+    let assetPath = decodeURIComponent(url.pathname);
+    if (assetPath === '/' || assetPath === '') {
+      assetPath = '/index.html';
+    }
+    let asset = STATIC_ASSETS[assetPath];
+
+    // 2. SPA fallback to /index.html for navigation routes without file extensions
+    if (!asset && !assetPath.includes('.')) {
+      asset = STATIC_ASSETS['/index.html'];
+    }
+
+    if (asset) {
+      const body = Buffer.from(asset.base64, 'base64');
+      const headers = new Headers();
+      headers.set('Content-Type', asset.contentType);
+      headers.set('X-Content-Type-Options', 'nosniff');
+      if (asset.immutable) {
+        headers.set('Cache-Control', 'public, max-age=31536000, immutable');
+      } else {
+        headers.set('Cache-Control', 'public, max-age=0, must-revalidate');
+      }
+      return new Response(body, { status: 200, headers });
+    }
+
     if (env.ASSETS && typeof env.ASSETS.fetch === 'function') {
       return env.ASSETS.fetch(request);
     }
+
     return new Response('FOXCOIN Cloudflare Worker Active', { status: 200 });
   },
 };

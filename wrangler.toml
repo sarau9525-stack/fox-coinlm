@@ -12,8 +12,3 @@ binding = "DB"
 database_name = "foxcoin-db"
 database_id = "e990fb39-3378-4080-a12f-c20c6b011c95"
 
-[assets]
-directory = "./dist"
-binding = "ASSETS"
-not_found_handling = "single-page-application"
-run_worker_first = ["/api/*"]
