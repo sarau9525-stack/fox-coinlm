@@ -1,13 +1,19 @@
-name = "fox-coin"
+name = "fox-coinlm"
 main = "functions/api/[[route]].ts"
 compatibility_date = "2024-09-23"
 compatibility_flags = ["nodejs_compat"]
 keep_vars = true
+
+[vars]
+TELEGRAM_BOT_USERNAME = "FOX_COINlBOT"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "foxcoin-db"
+database_id = "e990fb39-3378-4080-a12f-c20c6b011c95"
 
 [assets]
 directory = "./dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
 run_worker_first = ["/api/*"]
-
-
