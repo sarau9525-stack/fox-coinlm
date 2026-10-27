@@ -233,7 +233,7 @@ export default function App() {
       });
     });
 
-    // Periodic & lifecycle sync to guarantee Cloudflare D1 database always has latest coins, referrals & upgrades
+    // Periodic & lifecycle sync to guarantee Cloudflare D1 database has latest state without exhausting D1 write quota
     const syncInterval = setInterval(() => {
       if (!api.hasPendingTaps() && !isClaimingPassiveRef.current) {
         api.syncUserToServer().then((synced) => {
@@ -247,7 +247,7 @@ export default function App() {
       } else if (api.hasPendingTaps()) {
         api.flushTaps().catch(() => {});
       }
-    }, 15000);
+    }, 60000);
 
     const handleVisibilityOrHide = () => {
       api.flushTaps().catch(() => {});

@@ -839,12 +839,12 @@ class ApiService {
       clearTimeout(this.tapBatchTimer);
     }
 
-    if (this.pendingTapCount >= 20) {
+    if (this.pendingTapCount >= 50) {
       this.flushTaps();
     } else {
       this.tapBatchTimer = setTimeout(() => {
         this.flushTaps();
-      }, 400);
+      }, 1500);
     }
   }
 
