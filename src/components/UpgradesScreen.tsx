@@ -113,63 +113,47 @@ export const UpgradesScreen: React.FC<UpgradesScreenProps> = ({
   const [justUpgradedId, setJustUpgradedId] = useState<string | null>(null);
   const [insufficientId, setInsufficientId] = useState<string | null>(null);
   const [isClaimingOffline, setIsClaimingOffline] = useState<boolean>(false);
+  const [hasCollectedOffline, setHasCollectedOffline] = useState<boolean>(false);
   const [collectSuccessFlash, setCollectSuccessFlash] = useState<number | null>(null);
+  const claimingOfflineRef = useRef<boolean>(false);
 
-  // Live accruing empire vault buffer so the Offline Earnings & Collect button feel alive
-  const [accruedVaultCoins, setAccruedVaultCoins] = useState<number>(() => {
-    const baseUnclaimed = Math.max(
-      Math.floor(offlineEarnings || 0),
-      Math.floor(user.unclaimedPassive || 0)
-    );
-    if (baseUnclaimed > 0) return baseUnclaimed;
-    // Provide an initial accrued vault yield proportional to passive income (or starter bonus)
-    return user.profitPerHour > 0 ? Math.max(25, Math.floor(user.profitPerHour * 0.15)) : 50;
-  });
+  const rawUnclaimedOffline = Math.max(
+    Math.floor(offlineEarnings || 0),
+    Math.floor(user.unclaimedPassive || 0)
+  );
+
+  useEffect(() => {
+    if (rawUnclaimedOffline > 0 && !claimingOfflineRef.current) {
+      setHasCollectedOffline(false);
+    }
+  }, [rawUnclaimedOffline]);
+
+  const accruedVaultCoins = hasCollectedOffline ? 0 : rawUnclaimedOffline;
 
   const cardRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
-  useEffect(() => {
-    const serverUnclaimed = Math.max(
-      Math.floor(offlineEarnings || 0),
-      Math.floor(user.unclaimedPassive || 0)
-    );
-    if (serverUnclaimed > accruedVaultCoins) {
-      setAccruedVaultCoins(serverUnclaimed);
-    }
-  }, [offlineEarnings, user.unclaimedPassive, accruedVaultCoins]);
-
-  // Increment vault coins smoothly while the player explores their Empire
-  useEffect(() => {
-    const timer = setInterval(() => {
-      const ratePerSec = Math.max(1, Math.floor((user.profitPerHour || 360) / 3600));
-      setAccruedVaultCoins((prev) => prev + ratePerSec);
-    }, 2000);
-    return () => clearInterval(timer);
-  }, [user.profitPerHour]);
-
   const handleCollectOffline = async () => {
-    if (isClaimingOffline || accruedVaultCoins <= 0) return;
+    if (isClaimingOffline || claimingOfflineRef.current || accruedVaultCoins <= 0) return;
     const amountToCollect = accruedVaultCoins;
+    claimingOfflineRef.current = true;
     setIsClaimingOffline(true);
+    setHasCollectedOffline(true);
     try {
       sound.playLevelUp();
       TelegramService.triggerNotificationHaptic('success');
 
-      const serverUnclaimed = Math.max(
-        Math.floor(offlineEarnings || 0),
-        Math.floor(user.unclaimedPassive || 0)
-      );
-
-      if (serverUnclaimed > 0 && onClaimOffline) {
+      if (onClaimOffline) {
         await onClaimOffline();
       } else if (onCollectVaultBonus) {
         onCollectVaultBonus(amountToCollect);
       }
 
-      setAccruedVaultCoins(0);
       setCollectSuccessFlash(amountToCollect);
       setTimeout(() => setCollectSuccessFlash(null), 2200);
+    } catch {
+      setHasCollectedOffline(false);
     } finally {
+      claimingOfflineRef.current = false;
       setIsClaimingOffline(false);
     }
   };

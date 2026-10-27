@@ -425,30 +425,6 @@ export const FoxCharacterHeroStage: React.FC<FoxCharacterHeroStageProps> = React
               aria-hidden="true"
             />
           )}
-
-          {/* Active Cosmetic Skin Badge Indicator (if non-default skin equipped) */}
-          {skin && skin.id !== 'default' && (
-            <div
-              style={{
-                borderColor: skin.accentColor,
-                borderRadius: '50%',
-                overflow: 'hidden',
-              }}
-              className="absolute -right-2 top-3 w-7 h-7 rounded-full overflow-hidden border-2 bg-slate-950 shadow-lg"
-            >
-              <img
-                src={skin.imageUrl}
-                alt={skin.name}
-                style={{
-                  width: '100%',
-                  height: '100%',
-                  objectFit: 'cover',
-                  objectPosition: 'center 18%',
-                }}
-                className="w-full h-full object-cover"
-              />
-            </div>
-          )}
         </div>
       </div>
     );

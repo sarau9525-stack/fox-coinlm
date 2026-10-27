@@ -255,14 +255,13 @@ export default function App() {
   useEffect(() => {
     if (user) {
       const unclaimed = Math.floor(user.unclaimedPassive || 0);
-      if (unclaimed >= 1) {
-        setOfflineEarningsAmount((prev) => Math.max(prev, unclaimed));
-        if (!offlineCheckedRef.current) {
-          offlineCheckedRef.current = true;
-          setShowOfflineModal(true);
-        }
-      } else if (!offlineCheckedRef.current) {
+      if (!offlineCheckedRef.current) {
         offlineCheckedRef.current = true;
+        const initialWelcomeAmount = unclaimed >= 1 ? unclaimed : 105;
+        setOfflineEarningsAmount(initialWelcomeAmount);
+        setShowOfflineModal(true);
+      } else if (unclaimed >= 1) {
+        setOfflineEarningsAmount((prev) => Math.max(prev, unclaimed));
       }
     }
   }, [user]);
@@ -402,19 +401,33 @@ export default function App() {
     [updateGameState]
   );
 
-  // Claim Passive income
+  // Claim Passive income (single-flight locked so rapid clicks cannot claim twice)
+  const isClaimingPassiveRef = useRef<boolean>(false);
   const handleClaimPassive = useCallback(async () => {
+    if (isClaimingPassiveRef.current) return;
     const expectedAmount = Math.max(
       Math.floor(offlineEarningsAmount || 0),
       Math.floor(user?.unclaimedPassive || 0)
     );
-    const res = await api.claimPassive(expectedAmount);
+    if (expectedAmount <= 0) {
+      setOfflineEarningsAmount(0);
+      setShowOfflineModal(false);
+      return;
+    }
+
+    isClaimingPassiveRef.current = true;
     setOfflineEarningsAmount(0);
     setShowOfflineModal(false);
-    updateGameState({
-      ...res.user,
-      unclaimedPassive: 0,
-    });
+
+    try {
+      const res = await api.claimPassive(expectedAmount);
+      updateGameState({
+        ...res.user,
+        unclaimedPassive: 0,
+      });
+    } finally {
+      isClaimingPassiveRef.current = false;
+    }
   }, [offlineEarningsAmount, user?.unclaimedPassive, updateGameState]);
 
   // Claim Daily reward
@@ -820,6 +833,7 @@ export default function App() {
           <OfflineEarningsModal
             amount={Math.max(offlineEarningsAmount, Math.floor(user.unclaimedPassive || 0))}
             profitPerHour={user.profitPerHour}
+            lastOfflineTimestamp={user.lastPassiveClaimTimestamp}
             onClaim={handleClaimPassive}
             onClose={() => setShowOfflineModal(false)}
           />
@@ -897,7 +911,7 @@ export default function App() {
         )}
 
         {/* Mandatory Telegram & YouTube Channel Membership Gate */}
-        {user && !isChannelVerified && (
+        {user && !isChannelVerified && !showOfflineModal && (
           <MandatoryChannelGate
             user={user}
             channelHandle="@FOX_COINEX"

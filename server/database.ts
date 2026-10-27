@@ -579,7 +579,18 @@ class DatabaseStore {
       existing.balance
     );
     existing.totalTaps = Math.max(Number(existing.totalTaps || 0), Number(incoming.totalTaps || 0));
-    existing.unclaimedPassive = Math.max(Number(existing.unclaimedPassive || 0), Number(incoming.unclaimedPassive || 0));
+    if (
+      typeof incoming.lastPassiveClaimTimestamp === 'number' &&
+      incoming.lastPassiveClaimTimestamp >= (existing.lastPassiveClaimTimestamp || 0)
+    ) {
+      existing.unclaimedPassive = Math.max(0, Number(incoming.unclaimedPassive || 0));
+      existing.lastPassiveClaimTimestamp = incoming.lastPassiveClaimTimestamp;
+    } else {
+      existing.unclaimedPassive = Math.max(
+        Number(existing.unclaimedPassive || 0),
+        Number(incoming.unclaimedPassive || 0)
+      );
+    }
     existing.referralCount = Math.max(Number(existing.referralCount || 0), Number(incoming.referralCount || 0));
     existing.referralEarnings = Math.max(Number(existing.referralEarnings || 0), Number(incoming.referralEarnings || 0));
     existing.claimedMilestones = Math.max(Number(existing.claimedMilestones || 0), Number(incoming.claimedMilestones || 0));

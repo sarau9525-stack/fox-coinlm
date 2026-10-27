@@ -17,7 +17,6 @@ import { UserGameState } from '../types/game.js';
 import { sound } from '../utils/audio.js';
 import { TelegramService } from '../utils/telegram.js';
 import { foxMascotImg, foxGoldCoinImg } from '../assets/assets.js';
-import { FoxGiftAvatar, getFoxGiftMetadata } from './FoxGiftAvatar.js';
 import { FoxLevelOutfit, FOX_LEVEL_OUTFITS, getLevelOutfitMeta } from './FoxLevelOutfit.js';
 import {
   FoxCircularAvatar,
@@ -334,7 +333,6 @@ export const TapScreen: React.FC<TapScreenProps> = React.memo(
     // Energy percentage
     const energyPercent = Math.min(100, Math.floor((user.energy / Math.max(1, user.maxEnergy)) * 100));
     const perSecondProfit = user.profitPerHour > 0 ? user.profitPerHour / 3600 : 0;
-    const equippedMeta = equippedGiftId ? getFoxGiftMetadata(equippedGiftId) : null;
 
     const activeCharTier = getActiveCharacterTier(user.level, equippedTierId);
     const activeCharSkin = getActiveCharacterSkin(user.level, equippedSkinId);
@@ -681,29 +679,6 @@ export const TapScreen: React.FC<TapScreenProps> = React.memo(
               </div>
             </div>
           </button>
-
-          {/* Equipped Collectible Gift Companion Badge (Bottom-Left if equipped) */}
-          {equippedGiftId && equippedMeta && (user.upgrades[equippedGiftId] || 0) > 0 && (
-            <button
-              type="button"
-              data-wardrobe-btn="true"
-              onClick={(e) => {
-                e.stopPropagation();
-                if (onOpenGifts) onOpenGifts();
-              }}
-              className="absolute bottom-2 left-2 z-20 p-1 pr-2.5 rounded-2xl bg-slate-950/95 border border-amber-400/60 shadow-xl flex items-center gap-1.5 cursor-pointer hover:scale-105 transition"
-            >
-              <FoxGiftAvatar giftId={equippedGiftId} size="sm" />
-              <div className="text-left">
-                <span className="text-[9px] font-bold text-amber-300 block leading-none">
-                  {equippedMeta.rarity} Gift
-                </span>
-                <span className="text-[10px] font-black text-white leading-tight block">
-                  {equippedMeta.backdropName}
-                </span>
-              </div>
-            </button>
-          )}
 
           {/* Bottom-Right Glowing Golden "TAP" Orb Button (Matches Screenshot Position & Design) */}
           <div

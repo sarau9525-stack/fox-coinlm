@@ -81,6 +81,7 @@ export const TasksScreen: React.FC<TasksScreenProps> = ({
 
   // Single-claim in-flight lock to prevent repeated-tap exploits
   const claimingSetRef = useRef<Set<string>>(new Set());
+  const [locallyClaimedIds, setLocallyClaimedIds] = useState<Record<string, boolean>>({});
 
   // Track opened social links in state + localStorage
   const [visitedSocialIds, setVisitedSocialIds] = useState<Record<string, boolean>>(() => {
@@ -143,32 +144,47 @@ export const TasksScreen: React.FC<TasksScreenProps> = ({
     [user.upgrades]
   );
 
-  const bankableOffline = Math.max(
+  const rawBankableOffline = Math.max(
     Math.floor(offlineEarnings || 0),
     Math.floor(user.unclaimedPassive || 0)
   );
   const [isCollectingOffline, setIsCollectingOffline] = useState(false);
+  const [hasCollectedOffline, setHasCollectedOffline] = useState(false);
+  const collectingOfflineRef = useRef(false);
+
+  useEffect(() => {
+    if (rawBankableOffline > 0 && !collectingOfflineRef.current) {
+      setHasCollectedOffline(false);
+    }
+  }, [rawBankableOffline]);
+
+  const bankableOffline = hasCollectedOffline ? 0 : rawBankableOffline;
 
   const handleCollectOfflineClick = async () => {
-    if (isCollectingOffline) return;
+    if (
+      isCollectingOffline ||
+      collectingOfflineRef.current ||
+      bankableOffline <= 0 ||
+      !onClaimOffline
+    ) {
+      return;
+    }
+    const amountToClaim = bankableOffline;
+    collectingOfflineRef.current = true;
     setIsCollectingOffline(true);
+    setHasCollectedOffline(true);
     try {
-      if (bankableOffline > 0 && onClaimOffline) {
-        await onClaimOffline();
-        sound.playSuccess();
-        TelegramService.triggerNotificationHaptic('success');
-        showToast(`Collected +${bankableOffline.toLocaleString('en-US')} FOX!`);
-      } else {
-        const quickBonus = Math.max(250, Math.floor((user.profitPerHour || 3600) / 20));
-        if (onCollectBonus) {
-          onCollectBonus(quickBonus);
-          sound.playSuccess();
-          TelegramService.triggerNotificationHaptic('success');
-          showToast(`Collected +${quickBonus.toLocaleString('en-US')} FOX Empire Yield!`);
-        }
-      }
+      await onClaimOffline();
+      sound.playSuccess();
+      TelegramService.triggerNotificationHaptic('success');
+      showToast(`Collected +${amountToClaim.toLocaleString('en-US')} FOX!`);
+    } catch (err: any) {
+      setHasCollectedOffline(false);
+      sound.playError();
+      setErrorMsg(err?.message || 'Could not collect offline earnings');
     } finally {
-      setTimeout(() => setIsCollectingOffline(false), 500);
+      collectingOfflineRef.current = false;
+      setIsCollectingOffline(false);
     }
   };
 
@@ -260,7 +276,7 @@ export const TasksScreen: React.FC<TasksScreenProps> = ({
     const completionMap = new Map<string, { progress: number; isCompleted: boolean; isClaimed: boolean }>();
     for (const t of visibleTaskDefinitions) {
       const progress = computeRawProgress(t);
-      const isClaimed = Boolean(user.tasks?.[t.id]?.claimed);
+      const isClaimed = Boolean(user.tasks?.[t.id]?.claimed || locallyClaimedIds[t.id]);
       const isCompleted = isClaimed || progress >= t.target;
       completionMap.set(t.id, { progress, isCompleted, isClaimed });
     }
@@ -308,7 +324,7 @@ export const TasksScreen: React.FC<TasksScreenProps> = ({
         pct,
       };
     });
-  }, [visibleTaskDefinitions, computeRawProgress, user.tasks]);
+  }, [visibleTaskDefinitions, computeRawProgress, user.tasks, locallyClaimedIds]);
 
   // Daily Mission Summary calculations (5-step daily track)
   const dailyMissions = useMemo(
@@ -325,6 +341,7 @@ export const TasksScreen: React.FC<TasksScreenProps> = ({
   const dailyChestStorageKey = `fox_daily_chest_${user.id}_${todayKey}`;
   const isDailyChestClaimed = Boolean(
     user.tasks?.['daily_chest_bonus']?.claimed ||
+      locallyClaimedIds['daily_chest_bonus'] ||
       (typeof window !== 'undefined' && localStorage.getItem(dailyChestStorageKey) === 'true')
   );
   const canClaimDailyChest = completedDailyCount >= 3 && !isDailyChestClaimed;
@@ -341,7 +358,9 @@ export const TasksScreen: React.FC<TasksScreenProps> = ({
     () => chainMissions.filter((m) => m.isCompleted || m.isClaimed).length,
     [chainMissions]
   );
-  const isMissionChainClaimed = Boolean(user.tasks?.['mission_chain_bonus']?.claimed);
+  const isMissionChainClaimed = Boolean(
+    user.tasks?.['mission_chain_bonus']?.claimed || locallyClaimedIds['mission_chain_bonus']
+  );
   const canClaimMissionChain = completedChainSteps >= 4 && !isMissionChainClaimed;
 
   // Permanent Achievements list for the Achievements drawer/modal
@@ -393,6 +412,7 @@ export const TasksScreen: React.FC<TasksScreenProps> = ({
 
     try {
       await onClaimTask(mission.id);
+      setLocallyClaimedIds((prev) => ({ ...prev, [mission.id]: true }));
       sound.playSuccess();
       TelegramService.triggerNotificationHaptic('success');
       showToast(`Claimed +${mission.reward.toLocaleString('en-US')} FOX!`);
@@ -472,6 +492,7 @@ export const TasksScreen: React.FC<TasksScreenProps> = ({
 
     try {
       await onClaimTask('daily_chest_bonus');
+      setLocallyClaimedIds((prev) => ({ ...prev, daily_chest_bonus: true }));
       if (typeof window !== 'undefined') {
         localStorage.setItem(dailyChestStorageKey, 'true');
       }
@@ -501,6 +522,7 @@ export const TasksScreen: React.FC<TasksScreenProps> = ({
 
     try {
       await onClaimTask('mission_chain_bonus');
+      setLocallyClaimedIds((prev) => ({ ...prev, mission_chain_bonus: true }));
       sound.playSuccess();
       TelegramService.triggerNotificationHaptic('success');
       showToast('Mission Chain Completed! +10,000 FOX Claimed!');
@@ -615,11 +637,7 @@ export const TasksScreen: React.FC<TasksScreenProps> = ({
                 className="w-3.5 h-3.5 rounded-full object-cover shrink-0"
               />
               <span className="text-[11px] sm:text-xs font-black text-amber-300 tabular-nums whitespace-nowrap">
-                +
-                {(bankableOffline > 0
-                  ? bankableOffline
-                  : Math.max(0, user.profitPerHour)
-                ).toLocaleString('en-US')}
+                +{bankableOffline.toLocaleString('en-US')}
               </span>
             </div>
           </div>
@@ -627,10 +645,14 @@ export const TasksScreen: React.FC<TasksScreenProps> = ({
           <button
             type="button"
             onClick={handleCollectOfflineClick}
-            disabled={isCollectingOffline}
-            className="px-2.5 py-1.5 rounded-lg bg-gradient-to-b from-amber-300 via-amber-500 to-orange-600 hover:brightness-110 active:scale-95 text-slate-950 font-black text-[10px] sm:text-[11px] tracking-wide shadow-[0_0_12px_rgba(245,158,11,0.45)] border border-yellow-200/70 transition shrink-0 cursor-pointer whitespace-nowrap"
+            disabled={isCollectingOffline || bankableOffline <= 0}
+            className={`px-2.5 py-1.5 rounded-lg font-black text-[10px] sm:text-[11px] tracking-wide border transition shrink-0 whitespace-nowrap ${
+              bankableOffline > 0 && !isCollectingOffline
+                ? 'bg-gradient-to-b from-amber-300 via-amber-500 to-orange-600 hover:brightness-110 active:scale-95 text-slate-950 shadow-[0_0_12px_rgba(245,158,11,0.45)] border-yellow-200/70 cursor-pointer'
+                : 'bg-slate-800/80 text-slate-500 border-slate-700/60 cursor-not-allowed opacity-75'
+            }`}
           >
-            {isCollectingOffline ? '...' : 'Collect'}
+            {isCollectingOffline ? '...' : bankableOffline > 0 ? 'Collect' : 'Collected'}
           </button>
         </div>
       </div>
