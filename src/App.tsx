@@ -136,6 +136,8 @@ export default function App() {
   // Telegram simulator shell toggle for desktop/web testing
   const [isTelegramSimMode, setIsTelegramSimMode] = useState<boolean>(false);
   const offlineCheckedRef = useRef<boolean>(false);
+  const isClaimingPassiveRef = useRef<boolean>(false);
+  const lastPassiveClaimTimeRef = useRef<number>(0);
 
   // Initialize App and Authenticate
   useEffect(() => {
@@ -213,25 +215,31 @@ export default function App() {
         if (!prev || prev.id !== updatedUser.id) {
           return { ...updatedUser };
         }
+        const recentlyClaimedOffline =
+          isClaimingPassiveRef.current || Date.now() - lastPassiveClaimTimeRef.current < 30000;
         return {
           ...updatedUser,
           balance: api.hasPendingTaps() ? Math.max(updatedUser.balance, prev.balance) : updatedUser.balance,
           totalEarned: Math.max(updatedUser.totalEarned || 0, prev.totalEarned || 0),
           totalTaps: Math.max(updatedUser.totalTaps || 0, prev.totalTaps || 0),
           energy: api.hasPendingTaps() ? Math.min(updatedUser.energy, prev.energy) : updatedUser.energy,
+          unclaimedPassive: recentlyClaimedOffline ? 0 : updatedUser.unclaimedPassive,
         };
       });
     });
 
     // Periodic & lifecycle sync to guarantee Cloudflare D1 database always has latest coins, referrals & upgrades
     const syncInterval = setInterval(() => {
-      if (!api.hasPendingTaps()) {
+      if (!api.hasPendingTaps() && !isClaimingPassiveRef.current) {
         api.syncUserToServer().then((synced) => {
-          if (synced && !api.hasPendingTaps()) {
-            updateGameState(synced);
+          if (synced && !api.hasPendingTaps() && !isClaimingPassiveRef.current) {
+            const recentlyClaimedOffline = Date.now() - lastPassiveClaimTimeRef.current < 30000;
+            updateGameState(
+              recentlyClaimedOffline ? { ...synced, unclaimedPassive: 0 } : synced
+            );
           }
         }).catch(() => {});
-      } else {
+      } else if (api.hasPendingTaps()) {
         api.flushTaps().catch(() => {});
       }
     }, 15000);
@@ -253,15 +261,22 @@ export default function App() {
 
   // Offline passive income check on load and whenever unclaimedPassive updates
   useEffect(() => {
-    if (user) {
-      const unclaimed = Math.floor(user.unclaimedPassive || 0);
+    if (!user) return;
+    if (isClaimingPassiveRef.current || Date.now() - lastPassiveClaimTimeRef.current < 30000) {
+      return;
+    }
+
+    const unclaimed = Math.floor(user.unclaimedPassive || 0);
+    if (unclaimed >= 1) {
+      setOfflineEarningsAmount(unclaimed);
       if (!offlineCheckedRef.current) {
         offlineCheckedRef.current = true;
-        const initialWelcomeAmount = unclaimed >= 1 ? unclaimed : 105;
-        setOfflineEarningsAmount(initialWelcomeAmount);
         setShowOfflineModal(true);
-      } else if (unclaimed >= 1) {
-        setOfflineEarningsAmount((prev) => Math.max(prev, unclaimed));
+      }
+    } else {
+      setOfflineEarningsAmount(0);
+      if (!offlineCheckedRef.current) {
+        offlineCheckedRef.current = true;
       }
     }
   }, [user]);
@@ -401,10 +416,16 @@ export default function App() {
     [updateGameState]
   );
 
-  // Claim Passive income (single-flight locked so rapid clicks cannot claim twice)
-  const isClaimingPassiveRef = useRef<boolean>(false);
+  // Claim Passive income (strictly single-claim locked so offline coins can only be collected once)
   const handleClaimPassive = useCallback(async () => {
     if (isClaimingPassiveRef.current) return;
+    const now = Date.now();
+    if (now - lastPassiveClaimTimeRef.current < 15000) {
+      setOfflineEarningsAmount(0);
+      setShowOfflineModal(false);
+      return;
+    }
+
     const expectedAmount = Math.max(
       Math.floor(offlineEarningsAmount || 0),
       Math.floor(user?.unclaimedPassive || 0)
@@ -416,14 +437,27 @@ export default function App() {
     }
 
     isClaimingPassiveRef.current = true;
+    lastPassiveClaimTimeRef.current = now;
     setOfflineEarningsAmount(0);
     setShowOfflineModal(false);
 
+    // Immediately clear unclaimedPassive in React state so the 1-second ticker cannot re-populate offlineEarningsAmount
+    updateGameState((prev) => {
+      if (!prev) return null;
+      return {
+        ...prev,
+        unclaimedPassive: 0,
+        lastPassiveClaimTimestamp: now,
+      };
+    });
+
     try {
       const res = await api.claimPassive(expectedAmount);
+      setOfflineEarningsAmount(0);
       updateGameState({
         ...res.user,
         unclaimedPassive: 0,
+        lastPassiveClaimTimestamp: Date.now(),
       });
     } finally {
       isClaimingPassiveRef.current = false;
@@ -704,20 +738,8 @@ export default function App() {
                   onPurchase={handlePurchaseUpgrade}
                   offlineEarnings={offlineEarningsAmount}
                   onClaimOffline={handleClaimPassive}
-                  onCollectVaultBonus={(bonusAmount) => {
-                    updateGameState((prev) => {
-                      if (!prev) return null;
-                      const nextState = reconcileUserLevel({
-                        ...prev,
-                        balance: prev.balance + bonusAmount,
-                        totalEarned: prev.totalEarned + bonusAmount,
-                        unclaimedPassive: 0,
-                      });
-                      api.syncClientState(nextState);
-                      api.syncUserToServer(nextState).catch(() => {});
-                      return nextState;
-                    });
-                    setOfflineEarningsAmount(0);
+                  onCollectVaultBonus={() => {
+                    handleClaimPassive().catch(() => {});
                   }}
                 />
               )}
@@ -752,19 +774,6 @@ export default function App() {
                   onNavigateTab={setActiveTab}
                   offlineEarnings={offlineEarningsAmount}
                   onClaimOffline={handleClaimPassive}
-                  onCollectBonus={(bonusAmount) => {
-                    updateGameState((prev) => {
-                      if (!prev) return null;
-                      const nextState = reconcileUserLevel({
-                        ...prev,
-                        balance: prev.balance + bonusAmount,
-                        totalEarned: prev.totalEarned + bonusAmount,
-                      });
-                      api.syncClientState(nextState);
-                      api.syncUserToServer(nextState).catch(() => {});
-                      return nextState;
-                    });
-                  }}
                 />
               )}
 

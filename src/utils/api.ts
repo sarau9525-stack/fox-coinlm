@@ -71,6 +71,8 @@ class ApiService {
   private pendingTapCount: number = 0;
   private tapBatchTimer: NodeJS.Timeout | null = null;
   private isFlushingTaps: boolean = false;
+  private isClaimingPassive: boolean = false;
+  private lastPassiveClaimAt: number = 0;
   private onStateUpdated?: (state: UserGameState) => void;
 
   constructor() {
@@ -217,8 +219,14 @@ class ApiService {
         ) {
           const syncedLocal = this.syncLocalUserProgress({ ...localParsed });
           let localHadMoreProgress = false;
+          const recentlyClaimedPassive = Date.now() - this.lastPassiveClaimAt < 30000;
 
-          if ((syncedLocal.unclaimedPassive || 0) > (serverUser.unclaimedPassive || 0)) {
+          if (recentlyClaimedPassive) {
+            serverUser.unclaimedPassive = 0;
+          } else if (
+            (localParsed.lastPassiveClaimTimestamp || 0) > (serverUser.lastPassiveClaimTimestamp || 0) &&
+            (syncedLocal.unclaimedPassive || 0) > (serverUser.unclaimedPassive || 0)
+          ) {
             serverUser.unclaimedPassive = syncedLocal.unclaimedPassive;
             localHadMoreProgress = true;
           }
@@ -1263,48 +1271,72 @@ class ApiService {
   }
 
   public async claimPassive(expectedAmount?: number): Promise<{ user: UserGameState; claimedAmount: number }> {
-    if (this.pendingTapCount > 0) {
-      await this.flushTaps();
+    const now = Date.now();
+    if (this.isClaimingPassive || now - this.lastPassiveClaimAt < 15000) {
+      const current = this.getLocalUser();
+      current.unclaimedPassive = 0;
+      this.saveLocalUser(current);
+      return { user: { ...current }, claimedAmount: 0 };
     }
 
-    const localBefore = this.getLocalUser();
-    const fallbackAmount = Math.max(
-      0,
-      Math.floor(expectedAmount || 0),
-      Math.floor(localBefore.unclaimedPassive || 0)
-    );
+    this.isClaimingPassive = true;
+    this.lastPassiveClaimAt = now;
 
     try {
-      const res = await this.request<{ user: UserGameState; claimedAmount: number }>('/api/game/claim-passive', {
-        method: 'POST',
-        body: JSON.stringify({ amount: fallbackAmount }),
-      });
-
-      const effectiveClaimed = Math.max(res.claimedAmount || 0, fallbackAmount);
-      if ((res.claimedAmount || 0) === 0 && fallbackAmount > 0) {
-        res.user.balance += fallbackAmount;
-        res.user.totalEarned += fallbackAmount;
+      if (this.pendingTapCount > 0) {
+        await this.flushTaps();
       }
-      res.user.unclaimedPassive = 0;
-      res.user.lastPassiveClaimTimestamp = Date.now();
-      reconcileUserLevel(res.user, this.getLocalUpgrades());
 
-      this.saveLocalUser(res.user);
-      if (this.onStateUpdated && res.user) {
-        this.onStateUpdated({ ...res.user });
+      const localBefore = this.getLocalUser();
+      const fallbackAmount = Math.max(
+        0,
+        Math.floor(expectedAmount || 0),
+        Math.floor(localBefore.unclaimedPassive || 0)
+      );
+
+      // Immediately clear unclaimedPassive in localStorage before network round-trip
+      localBefore.unclaimedPassive = 0;
+      localBefore.lastPassiveClaimTimestamp = now;
+      this.saveLocalUser(localBefore);
+
+      if (fallbackAmount <= 0) {
+        return { user: { ...localBefore }, claimedAmount: 0 };
       }
-      return { user: { ...res.user }, claimedAmount: effectiveClaimed };
-    } catch {
-      const user = this.getLocalUser();
-      const claimedAmount = Math.max(fallbackAmount, Math.floor(user.unclaimedPassive || 0));
-      user.balance += claimedAmount;
-      user.totalEarned += claimedAmount;
-      user.unclaimedPassive = 0;
-      user.lastPassiveClaimTimestamp = Date.now();
-      reconcileUserLevel(user, this.getLocalUpgrades());
-      this.saveLocalUser(user);
-      if (this.onStateUpdated) this.onStateUpdated({ ...user });
-      return { user: { ...user }, claimedAmount };
+
+      try {
+        const res = await this.request<{ user: UserGameState; claimedAmount: number }>('/api/game/claim-passive', {
+          method: 'POST',
+          body: JSON.stringify({ amount: fallbackAmount }),
+        });
+
+        const effectiveClaimed = Math.max(res.claimedAmount || 0, fallbackAmount);
+        if ((res.claimedAmount || 0) === 0 && fallbackAmount > 0) {
+          res.user.balance += fallbackAmount;
+          res.user.totalEarned += fallbackAmount;
+        }
+        res.user.unclaimedPassive = 0;
+        res.user.lastPassiveClaimTimestamp = Date.now();
+        reconcileUserLevel(res.user, this.getLocalUpgrades());
+
+        this.saveLocalUser(res.user);
+        if (this.onStateUpdated && res.user) {
+          this.onStateUpdated({ ...res.user });
+        }
+        return { user: { ...res.user }, claimedAmount: effectiveClaimed };
+      } catch {
+        const user = this.getLocalUser();
+        const claimedAmount = fallbackAmount;
+        user.balance += claimedAmount;
+        user.totalEarned += claimedAmount;
+        user.unclaimedPassive = 0;
+        user.lastPassiveClaimTimestamp = Date.now();
+        reconcileUserLevel(user, this.getLocalUpgrades());
+        this.saveLocalUser(user);
+        if (this.onStateUpdated) this.onStateUpdated({ ...user });
+        return { user: { ...user }, claimedAmount };
+      }
+    } finally {
+      this.isClaimingPassive = false;
     }
   }
 

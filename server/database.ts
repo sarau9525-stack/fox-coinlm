@@ -1016,10 +1016,21 @@ class DatabaseStore {
     const now = Date.now();
     this.recalculatePlayerStats(user);
 
+    const lastExecutedAt = Number((user as any).lastOfflineClaimExecutedAt || 0);
     const maxOfflineSec = (user.maxOfflineHours || 3) * 3600;
     const elapsedSec = Math.max(0, (now - (user.lastPassiveClaimTimestamp || now)) / 1000);
+
+    // Guard against duplicate offline claims within 30 seconds after already claiming
+    if (now - lastExecutedAt < 30_000 && Math.floor(user.unclaimedPassive || 0) <= 0 && elapsedSec < 60) {
+      user.unclaimedPassive = 0;
+      user.lastPassiveClaimTimestamp = now;
+      this.refreshUserState(user, now);
+      this.save();
+      return { success: true, state: user, claimedAmount: 0 };
+    }
+
     const cappedSec = Math.min(elapsedSec, maxOfflineSec);
-    const timeBasedEarned = Math.floor((user.profitPerHour / 3600) * cappedSec);
+    const timeBasedEarned = elapsedSec >= 60 ? Math.floor((user.profitPerHour / 3600) * cappedSec) : 0;
 
     const maxAllowedOffline = Math.max(
       Math.floor(user.unclaimedPassive || 0),
@@ -1040,6 +1051,7 @@ class DatabaseStore {
 
     user.lastPassiveClaimTimestamp = now;
     user.unclaimedPassive = 0;
+    (user as any).lastOfflineClaimExecutedAt = now;
 
     this.refreshUserState(user, now);
     this.save();
