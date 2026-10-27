@@ -454,6 +454,7 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
       setIsCheckingAuth(true);
       setAuthError(null);
       await api.verifyAdminAuth(key);
+      hasLoadedInitialConfigRef.current = true;
       setIsAuthorized(true);
       sessionStorage.setItem('fox_admin_secret', key);
       onAdminStatusChange?.(true);
@@ -708,22 +709,24 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
       }
     });
     lastLockActionAtRef.current = Date.now();
-    latestLockedSectionsRef.current = nextMap;
+    latestLockedSectionsRef.current = { ...nextMap };
     try {
       setIsSavingAdminData(true);
       setAdminFeedback(null);
       sound.playTap();
-      notifyConfigUpdate(adminUpgrades, adminWheelPrizes, adminFakeMembers, nextMap);
-      await api.adminSaveLockedSections(nextMap, adminSecret || '123456');
+      notifyConfigUpdate(adminUpgrades, adminWheelPrizes, adminFakeMembers, { ...nextMap });
+      const res = await api.adminSaveLockedSections(nextMap, adminSecret || '123456');
+      const finalMap = res.lockedSections ? { ...nextMap, ...res.lockedSections } : { ...nextMap };
       lastLockActionAtRef.current = Date.now();
-      notifyConfigUpdate(adminUpgrades, adminWheelPrizes, adminFakeMembers, nextMap);
+      notifyConfigUpdate(adminUpgrades, adminWheelPrizes, adminFakeMembers, finalMap);
+      sound.playSuccess();
       const secMeta = LOCKABLE_APP_SECTIONS.find((s) => s.id === sectionId);
       const label = secMeta ? secMeta.titleFa : sectionId;
       setAdminFeedback({
         type: 'success',
         message: nextValue
-          ? `🔒 «${label}» با موفقیت برای تمام کاربران قفل شد.`
-          : `🔓 قفل «${label}» باز شد و اکنون برای همه کاربران در دسترس است.`,
+          ? `🔒 «${label}» قفل شد و تغییرات ذخیره گردید.`
+          : `🔓 قفل «${label}» باز شد و تغییرات با موفقیت ذخیره گردید.`,
       });
     } catch (err: any) {
       setAdminFeedback({
@@ -741,18 +744,20 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
       normalizedMap[s.id] = Boolean(nextMap[s.id]);
     });
     lastLockActionAtRef.current = Date.now();
-    latestLockedSectionsRef.current = normalizedMap;
+    latestLockedSectionsRef.current = { ...normalizedMap };
     try {
       setIsSavingAdminData(true);
       setAdminFeedback(null);
       sound.playTap();
-      notifyConfigUpdate(adminUpgrades, adminWheelPrizes, adminFakeMembers, normalizedMap);
-      await api.adminSaveLockedSections(normalizedMap, adminSecret || '123456');
+      notifyConfigUpdate(adminUpgrades, adminWheelPrizes, adminFakeMembers, { ...normalizedMap });
+      const res = await api.adminSaveLockedSections(normalizedMap, adminSecret || '123456');
+      const finalMap = res.lockedSections ? { ...normalizedMap, ...res.lockedSections } : { ...normalizedMap };
       lastLockActionAtRef.current = Date.now();
-      notifyConfigUpdate(adminUpgrades, adminWheelPrizes, adminFakeMembers, normalizedMap);
+      notifyConfigUpdate(adminUpgrades, adminWheelPrizes, adminFakeMembers, finalMap);
+      sound.playSuccess();
       setAdminFeedback({
         type: 'success',
-        message: customSuccessMsg || '✅ وضعیت قفل بخش‌ها با موفقیت ذخیره شد.',
+        message: customSuccessMsg || '✅ تغییرات قفل بخش‌ها با موفقیت ذخیره و برای همه کاربران اعمال شد!',
       });
     } catch (err: any) {
       setAdminFeedback({
@@ -1608,14 +1613,26 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                       <button
                         type="button"
                         disabled={isSavingAdminData}
-                        onClick={() => handleToggleSectionLock('leaderboard')}
+                        onClick={() => handleToggleSectionLock('leaderboard', false)}
                         className={`flex-1 py-1.5 rounded-xl font-black text-[10px] transition active:scale-95 cursor-pointer ${
-                          adminLockedSections.leaderboard
-                            ? 'bg-emerald-500 hover:bg-emerald-400 text-slate-950'
-                            : 'bg-rose-500 hover:bg-rose-400 text-white'
+                          !adminLockedSections.leaderboard
+                            ? 'bg-emerald-500 text-slate-950 shadow'
+                            : 'bg-slate-900 hover:bg-emerald-500/20 border border-emerald-500/40 text-emerald-300'
                         }`}
                       >
-                        {adminLockedSections.leaderboard ? '🔓 باز کردن رنک' : '🔒 قفل رنک'}
+                        🔓 باز کردن
+                      </button>
+                      <button
+                        type="button"
+                        disabled={isSavingAdminData}
+                        onClick={() => handleToggleSectionLock('leaderboard', true)}
+                        className={`flex-1 py-1.5 rounded-xl font-black text-[10px] transition active:scale-95 cursor-pointer ${
+                          adminLockedSections.leaderboard
+                            ? 'bg-rose-500 text-white shadow'
+                            : 'bg-slate-900 hover:bg-rose-500/20 border border-rose-500/40 text-rose-300'
+                        }`}
+                      >
+                        🔒 قفل رنک
                       </button>
                       <button
                         type="button"
@@ -2526,10 +2543,25 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                     </span>
                   </div>
                   <p className="text-[11px] text-slate-300 leading-relaxed">
-                    از این قسمت می‌توانید هر بخش از مینی‌اپ (مثل <b>بخش رنک / لیدربورد</b>، <b>ترید</b>، <b>گیفت‌ها</b>، <b>ماین</b>، <b>تسک‌ها</b> یا <b>دعوت دوستان</b>) را با یک کلیک قفل یا باز کنید. وقتی بخشی قفل باشد، آیکون قفل 🔒 روی منوی پایین ظاهر شده و کاربران پیام «قفل بودن بخش توسط مدیریت» را مشاهده می‌کنند.
+                    از این قسمت می‌توانید هر بخش از مینی‌اپ (مثل <b>بخش رنک / لیدربورد</b>، <b>ترید</b>، <b>گیفت‌ها</b>، <b>ماین</b>، <b>تسک‌ها</b> یا <b>دعوت دوستان</b>) را باز یا قفل کنید و سپس دکمه <b>«ذخیره تغییرات»</b> را بزنید.
                   </p>
 
-                  {/* Quick Bulk Lock / Unlock All Buttons */}
+                  {/* Top Save Changes Button + Quick Bulk Lock / Unlock All Buttons */}
+                  <button
+                    type="button"
+                    disabled={isSavingAdminData}
+                    onClick={() =>
+                      handleSaveAllSectionLocks(
+                        latestLockedSectionsRef.current || adminLockedSections,
+                        '✅ تغییرات قفل بخش‌ها با موفقیت ذخیره و اعمال شد!'
+                      )
+                    }
+                    className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-amber-500 via-yellow-400 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-black text-xs flex items-center justify-center gap-2 shadow-lg shadow-amber-500/20 transition active:scale-95 cursor-pointer disabled:opacity-50"
+                  >
+                    <Save className={`w-4 h-4 ${isSavingAdminData ? 'animate-spin' : ''}`} />
+                    <span>{isSavingAdminData ? 'در حال ذخیره تغییرات...' : '💾 ذخیره تغییرات (Save Changes)'}</span>
+                  </button>
+
                   <div className="grid grid-cols-2 gap-2 pt-1">
                     <button
                       type="button"
@@ -2539,7 +2571,7 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                         LOCKABLE_APP_SECTIONS.forEach((s) => {
                           allUnlocked[s.id] = false;
                         });
-                        handleSaveAllSectionLocks(allUnlocked, '🔓 تمام بخش‌های برنامه برای همه کاربران باز شدند.');
+                        handleSaveAllSectionLocks(allUnlocked, '🔓 قفل تمام بخش‌های برنامه باز شد و تغییرات ذخیره گردید.');
                       }}
                       className="py-2 px-3 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 font-black text-xs flex items-center justify-center gap-1.5 transition active:scale-95 cursor-pointer disabled:opacity-50"
                     >
@@ -2554,7 +2586,7 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                         LOCKABLE_APP_SECTIONS.forEach((s) => {
                           allLocked[s.id] = true;
                         });
-                        handleSaveAllSectionLocks(allLocked, '🔒 تمام بخش‌های فرعی برنامه قفل شدند (فقط صفحه تپ باز است).');
+                        handleSaveAllSectionLocks(allLocked, '🔒 تمام بخش‌های فرعی قفل شدند و تغییرات ذخیره گردید.');
                       }}
                       className="py-2 px-3 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-rose-300 font-black text-xs flex items-center justify-center gap-1.5 transition active:scale-95 cursor-pointer disabled:opacity-50"
                     >
@@ -2564,17 +2596,17 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                   </div>
                 </div>
 
-                {/* Individual Section Lock Cards */}
+                {/* Individual Section Lock Cards with Separate Open & Lock Buttons */}
                 <div className="space-y-2.5">
                   {LOCKABLE_APP_SECTIONS.map((sec) => {
                     const isLocked = Boolean(adminLockedSections[sec.id]);
                     return (
                       <div
                         key={sec.id}
-                        className={`p-3.5 rounded-2xl border transition flex items-center justify-between gap-3 ${
+                        className={`p-3.5 rounded-2xl border transition flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
                           isLocked
                             ? 'bg-rose-950/35 border-rose-500/50 shadow-md'
-                            : 'bg-slate-900/90 border-slate-800 hover:border-slate-700'
+                            : 'bg-slate-900/90 border-emerald-500/30 hover:border-emerald-500/50'
                         }`}
                       >
                         <div className="flex items-start gap-2.5 min-w-0">
@@ -2582,7 +2614,7 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                             className={`w-10 h-10 rounded-xl flex items-center justify-center text-lg shrink-0 border ${
                               isLocked
                                 ? 'bg-rose-500/20 border-rose-500/40'
-                                : 'bg-slate-950 border-slate-800'
+                                : 'bg-emerald-500/15 border-emerald-500/30'
                             }`}
                           >
                             {sec.icon}
@@ -2604,31 +2636,69 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                           </div>
                         </div>
 
-                        <button
-                          type="button"
-                          disabled={isSavingAdminData}
-                          onClick={() => handleToggleSectionLock(sec.id)}
-                          className={`px-3.5 py-2.5 rounded-xl font-black text-xs shrink-0 flex items-center gap-1.5 shadow transition active:scale-95 cursor-pointer disabled:opacity-50 ${
-                            isLocked
-                              ? 'bg-emerald-500 hover:bg-emerald-400 text-slate-950'
-                              : 'bg-rose-600 hover:bg-rose-500 text-white'
-                          }`}
-                        >
-                          {isLocked ? (
-                            <>
-                              <Unlock className="w-3.5 h-3.5" />
-                              <span>باز کردن قفل</span>
-                            </>
-                          ) : (
-                            <>
-                              <Lock className="w-3.5 h-3.5" />
-                              <span>قفل کردن بخش</span>
-                            </>
-                          )}
-                        </button>
+                        {/* Explicit Open vs Lock Buttons (Never accidentally toggles back) */}
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <button
+                            type="button"
+                            disabled={isSavingAdminData}
+                            onClick={() => handleToggleSectionLock(sec.id, false)}
+                            className={`flex-1 sm:flex-initial px-3 py-2 rounded-xl font-black text-xs flex items-center justify-center gap-1 transition active:scale-95 cursor-pointer disabled:opacity-50 ${
+                              !isLocked
+                                ? 'bg-emerald-500 text-slate-950 shadow-md shadow-emerald-500/20 ring-2 ring-emerald-300/60'
+                                : 'bg-slate-950 hover:bg-emerald-500/20 border border-emerald-500/40 text-emerald-300'
+                            }`}
+                          >
+                            <Unlock className="w-3.5 h-3.5" />
+                            <span>{!isLocked ? 'باز است ✓' : 'باز کردن قفل'}</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            disabled={isSavingAdminData}
+                            onClick={() => handleToggleSectionLock(sec.id, true)}
+                            className={`flex-1 sm:flex-initial px-3 py-2 rounded-xl font-black text-xs flex items-center justify-center gap-1 transition active:scale-95 cursor-pointer disabled:opacity-50 ${
+                              isLocked
+                                ? 'bg-rose-600 text-white shadow-md shadow-rose-500/20 ring-2 ring-rose-300/60'
+                                : 'bg-slate-950 hover:bg-rose-500/20 border border-rose-500/40 text-rose-300'
+                            }`}
+                          >
+                            <Lock className="w-3.5 h-3.5" />
+                            <span>{isLocked ? 'قفل است ✓' : 'قفل کردن'}</span>
+                          </button>
+                        </div>
                       </div>
                     );
                   })}
+                </div>
+
+                {/* Bottom Prominent Save Changes Button */}
+                <div className="p-3.5 rounded-2xl bg-slate-900/95 border border-amber-500/40 space-y-2.5 shadow-xl">
+                  <button
+                    type="button"
+                    disabled={isSavingAdminData}
+                    onClick={() =>
+                      handleSaveAllSectionLocks(
+                        latestLockedSectionsRef.current || adminLockedSections,
+                        '✅ تغییرات قفل بخش‌ها با موفقیت ذخیره و برای همه کاربران اعمال شد!'
+                      )
+                    }
+                    className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-emerald-500 via-teal-400 to-emerald-500 hover:from-emerald-400 hover:to-teal-300 text-slate-950 font-black text-sm flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/25 transition active:scale-95 cursor-pointer disabled:opacity-50"
+                  >
+                    <Save className={`w-4 h-4 ${isSavingAdminData ? 'animate-spin' : ''}`} />
+                    <span>{isSavingAdminData ? 'در حال ذخیره تغییرات...' : '💾 ذخیره تغییرات قفل بخش‌ها (Save Changes)'}</span>
+                  </button>
+                  {adminFeedback && (
+                    <div
+                      className={`p-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 ${
+                        adminFeedback.type === 'success'
+                          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                          : 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
+                      }`}
+                    >
+                      <CheckCircle2 className="w-4 h-4 shrink-0" />
+                      <span>{adminFeedback.message}</span>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -2694,28 +2764,34 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                             <Trophy className="w-4 h-4 text-amber-400" />
                             <span>مدیریت ممبرهای فیک در رنک (فقط نمایشی)</span>
                           </h4>
-                          <button
-                            type="button"
-                            disabled={isSavingAdminData}
-                            onClick={() => handleToggleSectionLock('leaderboard')}
-                            className={`px-2.5 py-1 rounded-xl text-[10px] font-black flex items-center gap-1 transition cursor-pointer ${
-                              adminLockedSections.leaderboard
-                                ? 'bg-rose-500 text-white shadow'
-                                : 'bg-slate-950 hover:bg-rose-500/20 border border-rose-500/40 text-rose-300'
-                            }`}
-                          >
-                            {adminLockedSections.leaderboard ? (
-                              <>
-                                <Unlock className="w-3 h-3" />
-                                <span>بخش رنک قفل است (کلیک برای باز کردن)</span>
-                              </>
-                            ) : (
-                              <>
-                                <Lock className="w-3 h-3" />
-                                <span>قفل کردن بخش رنک</span>
-                              </>
-                            )}
-                          </button>
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              disabled={isSavingAdminData}
+                              onClick={() => handleToggleSectionLock('leaderboard', false)}
+                              className={`px-2.5 py-1 rounded-xl text-[10px] font-black flex items-center gap-1 transition cursor-pointer ${
+                                !adminLockedSections.leaderboard
+                                  ? 'bg-emerald-500 text-slate-950 shadow'
+                                  : 'bg-slate-950 hover:bg-emerald-500/20 border border-emerald-500/40 text-emerald-300'
+                              }`}
+                            >
+                              <Unlock className="w-3 h-3" />
+                              <span>{!adminLockedSections.leaderboard ? 'رنک باز است ✓' : 'باز کردن قفل رنک'}</span>
+                            </button>
+                            <button
+                              type="button"
+                              disabled={isSavingAdminData}
+                              onClick={() => handleToggleSectionLock('leaderboard', true)}
+                              className={`px-2.5 py-1 rounded-xl text-[10px] font-black flex items-center gap-1 transition cursor-pointer ${
+                                adminLockedSections.leaderboard
+                                  ? 'bg-rose-500 text-white shadow'
+                                  : 'bg-slate-950 hover:bg-rose-500/20 border border-rose-500/40 text-rose-300'
+                              }`}
+                            >
+                              <Lock className="w-3 h-3" />
+                              <span>{adminLockedSections.leaderboard ? 'رنک قفل است ✓' : 'قفل کردن رنک'}</span>
+                            </button>
+                          </div>
                         </div>
                         <p className="text-[11px] text-slate-300 leading-relaxed">
                           ممبرهایی که در این بخش اضافه می‌کنید <b>فقط نمایشی در جدول رنک (Hall of Foxes)</b> هستند و برای همه پلیرها دقیقاً مثل کاربران واقعی نمایش داده می‌شوند، اما وارد لیست کاربران واقعی نمی‌شوند.

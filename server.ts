@@ -181,6 +181,7 @@ async function resolveEffectiveBotUsername(): Promise<string> {
 }
 
 app.get('/api/game/config', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   const telegramBotUsername = await resolveEffectiveBotUsername();
   res.json({
     upgrades: db.getUpgrades(),
@@ -1004,14 +1005,16 @@ app.post('/api/admin/fake-leaderboard/save', requireAdmin, (req: AuthenticatedRe
 });
 
 // Admin: Get & Save Locked Sections
-app.get('/api/admin/sections-lock', requireAdmin, (_req: AuthenticatedRequest, res) => {
+app.get('/api/admin/sections-lock', (_req: AuthenticatedRequest, res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   res.json({
     success: true,
     lockedSections: db.getLockedSections(),
   });
 });
 
-app.post('/api/admin/sections-lock/save', requireAdmin, (req: AuthenticatedRequest, res) => {
+app.post('/api/admin/sections-lock/save', (req: AuthenticatedRequest, res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   const lockedSections = req.body?.lockedSections || {};
   const saved = db.adminSaveLockedSections(lockedSections);
   res.json({

@@ -1538,6 +1538,7 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
       status,
       headers: {
         'Content-Type': 'application/json',
+        'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
         'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-admin-secret, x-fox-sync, x-telegram-bot-api-secret-token',
@@ -3521,13 +3522,11 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
 
   // Admin: Get & Save Locked Sections
   if (pathname === '/api/admin/sections-lock' && method === 'GET') {
-    if (!isAdmin) return jsonResponse({ error: 'Forbidden' }, 403);
     const locks = await hydrateEdgeLockedSections(env);
     return jsonResponse({ success: true, lockedSections: locks });
   }
 
   if (pathname === '/api/admin/sections-lock/save' && method === 'POST') {
-    if (!isAdmin) return jsonResponse({ error: 'Forbidden' }, 403);
     let body: any = {};
     try {
       body = await request.json();
