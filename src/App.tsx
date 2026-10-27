@@ -666,9 +666,6 @@ export default function App() {
               <p className="text-xs text-slate-300 mt-2 max-w-xs leading-relaxed">
                 This account has been suspended by the administrator due to policy or anti-bot verification rules.
               </p>
-              <p className="text-[11px] text-slate-400 mt-1" dir="rtl">
-                حساب کاربری شما توسط مدیریت مسدود شده است.
-              </p>
             </div>
           ) : user && activeTab !== 'home' && config?.lockedSections?.[activeTab] ? (
             <div className="flex-1 flex flex-col items-center justify-center px-6 pb-28 pt-10 text-center animate-fade-in">
@@ -688,10 +685,7 @@ export default function App() {
                   ? 'Tasks Section Locked'
                   : 'Friends Section Locked'}
               </h3>
-              <p className="text-xs font-bold text-slate-200 mt-2 max-w-xs leading-relaxed" dir="rtl">
-                این بخش موقتاً توسط مدیریت قفل شده است و به‌زودی بازگشایی خواهد شد.
-              </p>
-              <p className="text-[11px] text-slate-400 mt-1 max-w-xs">
+              <p className="text-xs font-semibold text-slate-300 mt-2 max-w-xs leading-relaxed">
                 This section is temporarily locked by the administrator and will open soon.
               </p>
               <div className="flex items-center gap-2 mt-5">
@@ -708,7 +702,7 @@ export default function App() {
                     onClick={() => handleOpenAdminSetup('locks')}
                     className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-amber-500/40 text-amber-300 font-black text-xs transition cursor-pointer"
                   >
-                    مدیریت قفل‌ها ⚙️
+                    Manage Locks ⚙️
                   </button>
                 )}
               </div>

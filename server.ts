@@ -36,7 +36,7 @@ const SESSION_SECRET = process.env.SESSION_SECRET || 'fox_coin_secret_key_8899';
 // Middleware
 app.use(express.json({ limit: '5mb' }));
 
-// Parse client sync header and automatically persist user state to database
+// Parse client sync header and automatically persist user state & latest lock state to database
 app.use('/api', (req: Request, _res: Response, next: NextFunction) => {
   const syncHeader = req.headers['x-fox-sync'];
   if (typeof syncHeader === 'string' && syncHeader.length > 0) {
@@ -45,6 +45,22 @@ app.use('/api', (req: Request, _res: Response, next: NextFunction) => {
       const parsed = JSON.parse(jsonStr);
       if (parsed && typeof parsed.id === 'string') {
         db.upsertUserSnapshot(parsed);
+      }
+    } catch {}
+  }
+  const locksHeader = req.headers['x-fox-locks'];
+  if (typeof locksHeader === 'string' && locksHeader.length > 0) {
+    try {
+      const jsonStr = decodeURIComponent(Buffer.from(locksHeader, 'base64').toString('utf8'));
+      const parsed = JSON.parse(jsonStr);
+      const incUpdatedAt = Number(parsed?.updatedAt || 0);
+      if (
+        parsed &&
+        parsed.lockedSections &&
+        typeof parsed.lockedSections === 'object' &&
+        incUpdatedAt > db.getLockedSectionsUpdatedAt()
+      ) {
+        db.adminSaveLockedSections(parsed.lockedSections, incUpdatedAt);
       }
     } catch {}
   }
@@ -188,6 +204,7 @@ app.get('/api/game/config', async (req, res) => {
     wheelPrizes: db.getWheelPrizes(),
     fakeLeaderboardMembers: db.getFakeLeaderboardMembers(),
     lockedSections: db.getLockedSections(),
+    lockedSectionsUpdatedAt: db.getLockedSectionsUpdatedAt(),
     levels: PLAYER_LEVELS,
     tasks: TASKS,
     dailyRewards: DAILY_REWARDS,
@@ -1010,16 +1027,18 @@ app.get('/api/admin/sections-lock', (_req: AuthenticatedRequest, res) => {
   res.json({
     success: true,
     lockedSections: db.getLockedSections(),
+    lockedSectionsUpdatedAt: db.getLockedSectionsUpdatedAt(),
   });
 });
 
 app.post('/api/admin/sections-lock/save', (req: AuthenticatedRequest, res) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   const lockedSections = req.body?.lockedSections || {};
-  const saved = db.adminSaveLockedSections(lockedSections);
+  const saved = db.adminSaveLockedSections(lockedSections, Number(req.body?.updatedAt || 0));
   res.json({
     success: true,
     lockedSections: saved,
+    lockedSectionsUpdatedAt: db.getLockedSectionsUpdatedAt(),
   });
 });
 

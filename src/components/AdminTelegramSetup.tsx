@@ -179,13 +179,17 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
   const [adminFakeMembers, setAdminFakeMembers] = useState<FakeLeaderboardMember[]>(
     () => config?.fakeLeaderboardMembers || api.getLocalFakeLeaderboardMembers()
   );
-  const [adminLockedSections, setAdminLockedSections] = useState<Record<string, boolean>>(
-    () => config?.lockedSections || api.getLocalLockedSections()
+  const [adminLockedSections, setAdminLockedSections] = useState<Record<string, boolean>>(() =>
+    api.getLocalLockedSectionsUpdatedAt() > 0
+      ? api.getLocalLockedSections()
+      : config?.lockedSections || api.getLocalLockedSections()
   );
   const latestLockedSectionsRef = useRef<Record<string, boolean>>(
-    config?.lockedSections || api.getLocalLockedSections()
+    api.getLocalLockedSectionsUpdatedAt() > 0
+      ? api.getLocalLockedSections()
+      : config?.lockedSections || api.getLocalLockedSections()
   );
-  const lastLockActionAtRef = useRef<number>(0);
+  const hasModifiedLocksInSessionRef = useRef<boolean>(false);
   const hasLoadedInitialConfigRef = useRef<boolean>(false);
   const [editingFakeId, setEditingFakeId] = useState<string | null>(null);
   const [fakeDisplayName, setFakeDisplayName] = useState<string>('');
@@ -343,8 +347,7 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
       api
         .getAdminLockedSections(effectiveSecret)
         .then((lockRes) => {
-          // Never overwrite locks if the admin just toggled a lock/unlock in the UI
-          if (Date.now() - lastLockActionAtRef.current < 20000) return;
+          if (hasModifiedLocksInSessionRef.current) return;
           if (lockRes.lockedSections) {
             latestLockedSectionsRef.current = lockRes.lockedSections;
             setAdminLockedSections(lockRes.lockedSections);
@@ -665,9 +668,11 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
     if (config?.upgrades) setAdminUpgrades(config.upgrades);
     if (config?.wheelPrizes) setAdminWheelPrizes(config.wheelPrizes);
     if (config?.fakeLeaderboardMembers) setAdminFakeMembers(config.fakeLeaderboardMembers);
-    if (config?.lockedSections && Date.now() - lastLockActionAtRef.current >= 20000) {
-      latestLockedSectionsRef.current = config.lockedSections;
-      setAdminLockedSections(config.lockedSections);
+    if (config?.lockedSections && !hasModifiedLocksInSessionRef.current) {
+      const effectiveLocks =
+        api.getLocalLockedSectionsUpdatedAt() > 0 ? api.getLocalLockedSections() : config.lockedSections;
+      latestLockedSectionsRef.current = effectiveLocks;
+      setAdminLockedSections(effectiveLocks);
     }
   }, [config]);
 
@@ -689,6 +694,7 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
         wheelPrizes: nextWheel,
         fakeLeaderboardMembers: nextFakeMembers,
         lockedSections: nextLockedSections,
+        lockedSectionsUpdatedAt: api.getLocalLockedSectionsUpdatedAt() || Date.now(),
       });
     }
   };
@@ -708,25 +714,25 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
         nextMap[s.id] = Boolean(nextMap[s.id]);
       }
     });
-    lastLockActionAtRef.current = Date.now();
+    hasModifiedLocksInSessionRef.current = true;
     latestLockedSectionsRef.current = { ...nextMap };
     try {
       setIsSavingAdminData(true);
       setAdminFeedback(null);
       sound.playTap();
+      api.saveLocalLockedSections(nextMap, true);
       notifyConfigUpdate(adminUpgrades, adminWheelPrizes, adminFakeMembers, { ...nextMap });
-      const res = await api.adminSaveLockedSections(nextMap, adminSecret || '123456');
-      const finalMap = res.lockedSections ? { ...nextMap, ...res.lockedSections } : { ...nextMap };
-      lastLockActionAtRef.current = Date.now();
-      notifyConfigUpdate(adminUpgrades, adminWheelPrizes, adminFakeMembers, finalMap);
+      await api.adminSaveLockedSections(nextMap, adminSecret || '123456');
+      api.saveLocalLockedSections(nextMap, true);
+      notifyConfigUpdate(adminUpgrades, adminWheelPrizes, adminFakeMembers, { ...nextMap });
       sound.playSuccess();
       const secMeta = LOCKABLE_APP_SECTIONS.find((s) => s.id === sectionId);
       const label = secMeta ? secMeta.titleFa : sectionId;
       setAdminFeedback({
         type: 'success',
         message: nextValue
-          ? `🔒 «${label}» قفل شد و تغییرات ذخیره گردید.`
-          : `🔓 قفل «${label}» باز شد و تغییرات با موفقیت ذخیره گردید.`,
+          ? `🔒 «${label}» قفل شد و تغییرات به صورت دائمی ذخیره گردید.`
+          : `🔓 قفل «${label}» باز شد و تغییرات به صورت دائمی ذخیره گردید.`,
       });
     } catch (err: any) {
       setAdminFeedback({
@@ -743,17 +749,17 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
     LOCKABLE_APP_SECTIONS.forEach((s) => {
       normalizedMap[s.id] = Boolean(nextMap[s.id]);
     });
-    lastLockActionAtRef.current = Date.now();
+    hasModifiedLocksInSessionRef.current = true;
     latestLockedSectionsRef.current = { ...normalizedMap };
     try {
       setIsSavingAdminData(true);
       setAdminFeedback(null);
       sound.playTap();
+      api.saveLocalLockedSections(normalizedMap, true);
       notifyConfigUpdate(adminUpgrades, adminWheelPrizes, adminFakeMembers, { ...normalizedMap });
-      const res = await api.adminSaveLockedSections(normalizedMap, adminSecret || '123456');
-      const finalMap = res.lockedSections ? { ...normalizedMap, ...res.lockedSections } : { ...normalizedMap };
-      lastLockActionAtRef.current = Date.now();
-      notifyConfigUpdate(adminUpgrades, adminWheelPrizes, adminFakeMembers, finalMap);
+      await api.adminSaveLockedSections(normalizedMap, adminSecret || '123456');
+      api.saveLocalLockedSections(normalizedMap, true);
+      notifyConfigUpdate(adminUpgrades, adminWheelPrizes, adminFakeMembers, { ...normalizedMap });
       sound.playSuccess();
       setAdminFeedback({
         type: 'success',

@@ -97,6 +97,7 @@ interface DatabaseSchema {
   wheelPrizes?: LuckyWheelPrize[];
   fakeLeaderboardMembers?: FakeLeaderboardMember[];
   lockedSections?: Record<string, boolean>;
+  lockedSectionsUpdatedAt?: number;
   starsInvoices?: Record<
     string,
     {
@@ -1768,7 +1769,11 @@ class DatabaseStore {
     return sanitized;
   }
 
-  public adminSaveLockedSections(locks: Record<string, boolean>): Record<string, boolean> {
+  public getLockedSectionsUpdatedAt(): number {
+    return Number(this.data.lockedSectionsUpdatedAt || 0);
+  }
+
+  public adminSaveLockedSections(locks: Record<string, boolean>, updatedAt?: number): Record<string, boolean> {
     const knownKeys = ['leaderboard', 'trade', 'gifts', 'upgrades', 'tasks', 'friends'];
     const sanitized: Record<string, boolean> = {};
     for (const key of knownKeys) {
@@ -1780,6 +1785,11 @@ class DatabaseStore {
       }
     }
     this.data.lockedSections = sanitized;
+    this.data.lockedSectionsUpdatedAt = Math.max(
+      Date.now(),
+      Number(updatedAt || 0),
+      Number(this.data.lockedSectionsUpdatedAt || 0) + 1
+    );
     this.save();
     return this.getLockedSections();
   }

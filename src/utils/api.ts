@@ -47,6 +47,7 @@ export interface GameConfig {
   wheelPrizes?: LuckyWheelPrize[];
   fakeLeaderboardMembers?: FakeLeaderboardMember[];
   lockedSections?: Record<string, boolean>;
+  lockedSectionsUpdatedAt?: number;
   levels: Array<{ level: number; name: string; minCoins: number; badge: string }>;
   tasks: TaskDefinition[];
   dailyRewards: DailyRewardDay[];
@@ -390,6 +391,17 @@ class ApiService {
         if (rawUser) {
           headers['x-fox-sync'] = btoa(encodeURIComponent(rawUser));
         }
+        const localLocksUpdatedAt = this.getLocalLockedSectionsUpdatedAt();
+        if (localLocksUpdatedAt > 0) {
+          headers['x-fox-locks'] = btoa(
+            encodeURIComponent(
+              JSON.stringify({
+                lockedSections: this.getLocalLockedSections(),
+                updatedAt: localLocksUpdatedAt,
+              })
+            )
+          );
+        }
       } catch {}
     }
 
@@ -575,7 +587,20 @@ class ApiService {
     return base;
   }
 
-  public saveLocalLockedSections(locks: Record<string, boolean>, markAdminSaved = false) {
+  public getLocalLockedSectionsUpdatedAt(): number {
+    if (typeof window === 'undefined') return 0;
+    try {
+      return Number(localStorage.getItem(LOCAL_LOCKED_SECTIONS_UPDATED_KEY) || '0');
+    } catch {
+      return 0;
+    }
+  }
+
+  public saveLocalLockedSections(
+    locks: Record<string, boolean>,
+    markAdminSaved = false,
+    explicitUpdatedAt?: number
+  ) {
     if (typeof window === 'undefined') return;
     try {
       localStorage.removeItem('foxcoin_locked_sections_v1');
@@ -591,19 +616,16 @@ class ApiService {
       }
       localStorage.setItem(LOCAL_LOCKED_SECTIONS_KEY, JSON.stringify(sanitized));
       if (markAdminSaved) {
-        localStorage.setItem(LOCAL_LOCKED_SECTIONS_UPDATED_KEY, String(Date.now()));
+        const nextTs = Math.max(
+          Date.now(),
+          Number(explicitUpdatedAt || 0),
+          this.getLocalLockedSectionsUpdatedAt() + 1
+        );
+        localStorage.setItem(LOCAL_LOCKED_SECTIONS_UPDATED_KEY, String(nextTs));
+      } else if (explicitUpdatedAt && explicitUpdatedAt > this.getLocalLockedSectionsUpdatedAt()) {
+        localStorage.setItem(LOCAL_LOCKED_SECTIONS_UPDATED_KEY, String(explicitUpdatedAt));
       }
     } catch {}
-  }
-
-  private wasRecentlySavedByAdmin(): boolean {
-    if (typeof window === 'undefined') return false;
-    try {
-      const ts = Number(localStorage.getItem(LOCAL_LOCKED_SECTIONS_UPDATED_KEY) || '0');
-      return ts > 0 && Date.now() - ts < 30000;
-    } catch {
-      return false;
-    }
   }
 
   public async getConfig(): Promise<GameConfig> {
@@ -632,10 +654,13 @@ class ApiService {
         cfg.fakeLeaderboardMembers = this.getLocalFakeLeaderboardMembers();
       }
 
-      if (this.wasRecentlySavedByAdmin()) {
+      const localLocksUpdatedAt = this.getLocalLockedSectionsUpdatedAt();
+      const serverLocksUpdatedAt = Number(cfg.lockedSectionsUpdatedAt || 0);
+      if (localLocksUpdatedAt > 0 && localLocksUpdatedAt >= serverLocksUpdatedAt) {
         cfg.lockedSections = this.getLocalLockedSections();
+        cfg.lockedSectionsUpdatedAt = localLocksUpdatedAt;
       } else if (cfg.lockedSections && typeof cfg.lockedSections === 'object') {
-        this.saveLocalLockedSections(cfg.lockedSections, false);
+        this.saveLocalLockedSections(cfg.lockedSections, false, serverLocksUpdatedAt);
         cfg.lockedSections = this.getLocalLockedSections();
       } else {
         cfg.lockedSections = this.getLocalLockedSections();
@@ -2601,23 +2626,24 @@ class ApiService {
   public async getAdminLockedSections(
     adminSecret?: string
   ): Promise<{ success: boolean; lockedSections: Record<string, boolean> }> {
-    if (this.wasRecentlySavedByAdmin()) {
-      return { success: true, lockedSections: this.getLocalLockedSections() };
-    }
     try {
       const headers: Record<string, string> = {};
       const effectiveSecret =
         adminSecret || (typeof window !== 'undefined' ? sessionStorage.getItem('fox_admin_secret') || '' : '') || '123456';
       headers['x-admin-secret'] = effectiveSecret;
-      const res = await this.request<{ success: boolean; lockedSections: Record<string, boolean> }>(
-        `/api/admin/sections-lock?_t=${Date.now()}`,
-        { headers }
-      );
-      if (this.wasRecentlySavedByAdmin()) {
+      const res = await this.request<{
+        success: boolean;
+        lockedSections: Record<string, boolean>;
+        lockedSectionsUpdatedAt?: number;
+      }>(`/api/admin/sections-lock?_t=${Date.now()}`, { headers });
+
+      const localUpdatedAt = this.getLocalLockedSectionsUpdatedAt();
+      const serverUpdatedAt = Number(res.lockedSectionsUpdatedAt || 0);
+      if (localUpdatedAt > 0 && localUpdatedAt >= serverUpdatedAt) {
         return { success: true, lockedSections: this.getLocalLockedSections() };
       }
       if (res.lockedSections && typeof res.lockedSections === 'object') {
-        this.saveLocalLockedSections(res.lockedSections, false);
+        this.saveLocalLockedSections(res.lockedSections, false, serverUpdatedAt);
         return { success: true, lockedSections: this.getLocalLockedSections() };
       }
       return { success: true, lockedSections: this.getLocalLockedSections() };
@@ -2630,23 +2656,33 @@ class ApiService {
     lockedSections: Record<string, boolean>,
     adminSecret?: string
   ): Promise<{ success: boolean; lockedSections: Record<string, boolean> }> {
-    this.saveLocalLockedSections(lockedSections, true);
+    const saveTs = Math.max(Date.now(), this.getLocalLockedSectionsUpdatedAt() + 1);
+    this.saveLocalLockedSections(lockedSections, true, saveTs);
     const localSaved = this.getLocalLockedSections();
     try {
       const headers: Record<string, string> = {};
       const effectiveSecret =
         adminSecret || (typeof window !== 'undefined' ? sessionStorage.getItem('fox_admin_secret') || '' : '') || '123456';
       headers['x-admin-secret'] = effectiveSecret;
-      const res = await this.request<{ success: boolean; lockedSections: Record<string, boolean> }>(
-        '/api/admin/sections-lock/save',
-        {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({ lockedSections: localSaved, adminSecret: effectiveSecret }),
-        }
-      );
+      const res = await this.request<{
+        success: boolean;
+        lockedSections: Record<string, boolean>;
+        lockedSectionsUpdatedAt?: number;
+      }>('/api/admin/sections-lock/save', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          lockedSections: localSaved,
+          updatedAt: saveTs,
+          adminSecret: effectiveSecret,
+        }),
+      });
       if (res.lockedSections && typeof res.lockedSections === 'object') {
-        this.saveLocalLockedSections(res.lockedSections, true);
+        this.saveLocalLockedSections(
+          res.lockedSections,
+          true,
+          Math.max(saveTs, Number(res.lockedSectionsUpdatedAt || 0))
+        );
         return { success: true, lockedSections: this.getLocalLockedSections() };
       }
       return { success: true, lockedSections: localSaved };

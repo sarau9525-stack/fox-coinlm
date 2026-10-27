@@ -60,6 +60,7 @@ let edgeWheelPrizes: LuckyWheelPrize[] = [...LUCKY_WHEEL_PRIZES];
 let edgeFakeLeaderboard: FakeLeaderboardMember[] = [];
 let fakeLeaderboardHydrated = false;
 let edgeLockedSections: Record<string, boolean> = {};
+let edgeLockedSectionsUpdatedAt = 0;
 let lockedSectionsHydrated = false;
 let edgeBotConfig = {
   botToken: '',
@@ -744,17 +745,51 @@ async function persistEdgeFakeLeaderboard(
 }
 
 function sanitizeLockedSections(raw: any): Record<string, boolean> {
+  const source =
+    raw && typeof raw === 'object' && raw.lockedSections && typeof raw.lockedSections === 'object'
+      ? raw.lockedSections
+      : raw;
   const knownKeys = ['leaderboard', 'trade', 'gifts', 'upgrades', 'tasks', 'friends'];
   const res: Record<string, boolean> = {};
   for (const key of knownKeys) {
-    res[key] = Boolean(raw && typeof raw === 'object' && raw[key]);
+    res[key] = Boolean(source && typeof source === 'object' && source[key]);
   }
-  if (raw && typeof raw === 'object') {
-    for (const [k, v] of Object.entries(raw)) {
+  if (source && typeof source === 'object') {
+    for (const [k, v] of Object.entries(source)) {
+      if (k === 'lockedSections' || k === 'updatedAt') continue;
       res[String(k)] = Boolean(v);
     }
   }
   return res;
+}
+
+function parseLockedSectionsPayload(
+  raw: any,
+  fallbackUpdatedAt = 0
+): { lockedSections: Record<string, boolean>; updatedAt: number } {
+  const lockedSections = sanitizeLockedSections(raw);
+  const updatedAt = Math.max(
+    Number(raw?.updatedAt || 0),
+    Number(raw?.lockedSectionsUpdatedAt || 0),
+    Number(fallbackUpdatedAt || 0)
+  );
+  return { lockedSections, updatedAt };
+}
+
+async function ensureD1KvTableOnly(db: any) {
+  if (!db) return;
+  try {
+    await db
+      .prepare(
+        `CREATE TABLE IF NOT EXISTS foxcoin_users_kv (
+          id TEXT PRIMARY KEY,
+          user_json TEXT NOT NULL,
+          balance REAL DEFAULT 0,
+          updated_at INTEGER NOT NULL
+        )`
+      )
+      .run();
+  } catch {}
 }
 
 async function hydrateEdgeLockedSections(env: CloudflareEnv): Promise<Record<string, boolean>> {
@@ -762,30 +797,38 @@ async function hydrateEdgeLockedSections(env: CloudflareEnv): Promise<Record<str
   const kv = resolveKVBinding(env);
   const db = resolveD1Binding(env);
 
+  let bestLocks: Record<string, boolean> = sanitizeLockedSections(edgeLockedSections);
+  let bestUpdatedAt = edgeLockedSectionsUpdatedAt;
+
   if (db) {
     try {
-      await ensureD1Schema(db);
-      const row = await db
-        .prepare('SELECT user_json FROM foxcoin_users_kv WHERE id = ?')
+      await ensureD1KvTableOnly(db);
+      const row = (await db
+        .prepare('SELECT user_json, updated_at FROM foxcoin_users_kv WHERE id = ?')
         .bind(D1_LOCKED_SECTIONS_CONFIG_ID)
-        .first();
+        .first()) as any;
       if (row && row.user_json) {
         const parsed = JSON.parse(String(row.user_json));
-        edgeLockedSections = sanitizeLockedSections(parsed);
-        lockedSectionsHydrated = true;
-        return edgeLockedSections;
+        const candidate = parseLockedSectionsPayload(parsed, Number(row.updated_at || 1));
+        if (candidate.updatedAt >= bestUpdatedAt) {
+          bestLocks = candidate.lockedSections;
+          bestUpdatedAt = candidate.updatedAt;
+        }
       }
     } catch {}
   }
 
   if (kv) {
     try {
-      const rawKv = await kv.get('foxcoin_locked_sections_v1');
+      const rawKvV2 = await kv.get('foxcoin_locked_sections_v2');
+      const rawKv = rawKvV2 || (await kv.get('foxcoin_locked_sections_v1'));
       if (rawKv) {
         const parsed = JSON.parse(rawKv);
-        edgeLockedSections = sanitizeLockedSections(parsed);
-        lockedSectionsHydrated = true;
-        return edgeLockedSections;
+        const candidate = parseLockedSectionsPayload(parsed, 1);
+        if (candidate.updatedAt >= bestUpdatedAt) {
+          bestLocks = candidate.lockedSections;
+          bestUpdatedAt = candidate.updatedAt;
+        }
       }
     } catch {}
   }
@@ -795,26 +838,40 @@ async function hydrateEdgeLockedSections(env: CloudflareEnv): Promise<Record<str
       const cachedRes = await edgeCache.match(EDGE_CACHE_LOCKED_SECTIONS_URL);
       if (cachedRes && cachedRes.ok) {
         const parsed = await cachedRes.json();
-        edgeLockedSections = sanitizeLockedSections(parsed);
-        lockedSectionsHydrated = true;
-        return edgeLockedSections;
+        const candidate = parseLockedSectionsPayload(parsed, 1);
+        if (candidate.updatedAt >= bestUpdatedAt) {
+          bestLocks = candidate.lockedSections;
+          bestUpdatedAt = candidate.updatedAt;
+        }
       }
     } catch {}
   }
 
+  edgeLockedSections = bestLocks;
+  edgeLockedSectionsUpdatedAt = bestUpdatedAt;
   lockedSectionsHydrated = true;
   return edgeLockedSections;
 }
 
 async function persistEdgeLockedSections(
   env: CloudflareEnv,
-  locks: Record<string, boolean>
+  locks: Record<string, boolean>,
+  explicitUpdatedAt?: number
 ): Promise<Record<string, boolean>> {
   const sanitized = sanitizeLockedSections(locks);
+  const nextUpdatedAt = Math.max(
+    Date.now(),
+    Number(explicitUpdatedAt || 0),
+    edgeLockedSectionsUpdatedAt + 1
+  );
   edgeLockedSections = sanitized;
+  edgeLockedSectionsUpdatedAt = nextUpdatedAt;
   lockedSectionsHydrated = true;
 
-  const jsonPayload = JSON.stringify(sanitized);
+  const jsonPayload = JSON.stringify({
+    lockedSections: sanitized,
+    updatedAt: nextUpdatedAt,
+  });
   const edgeCache = getGlobalEdgeCache();
   if (edgeCache) {
     try {
@@ -831,6 +888,7 @@ async function persistEdgeLockedSections(
   const kv = resolveKVBinding(env);
   if (kv) {
     try {
+      await kv.put('foxcoin_locked_sections_v2', jsonPayload);
       await kv.put('foxcoin_locked_sections_v1', jsonPayload);
     } catch {}
   }
@@ -838,7 +896,7 @@ async function persistEdgeLockedSections(
   const db = resolveD1Binding(env);
   if (db) {
     try {
-      await ensureD1Schema(db);
+      await ensureD1KvTableOnly(db);
       await db
         .prepare(
           `INSERT INTO foxcoin_users_kv (id, user_json, balance, updated_at)
@@ -847,7 +905,7 @@ async function persistEdgeLockedSections(
              user_json = excluded.user_json,
              updated_at = excluded.updated_at`
         )
-        .bind(D1_LOCKED_SECTIONS_CONFIG_ID, jsonPayload, Date.now())
+        .bind(D1_LOCKED_SECTIONS_CONFIG_ID, jsonPayload, nextUpdatedAt)
         .run();
     } catch {}
   }
@@ -1568,7 +1626,7 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
         'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-admin-secret, x-fox-sync, x-telegram-bot-api-secret-token',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-admin-secret, x-fox-sync, x-fox-locks, x-telegram-bot-api-secret-token',
       },
     });
   };
@@ -1580,7 +1638,7 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
       headers: {
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-admin-secret, x-fox-sync, x-telegram-bot-api-secret-token',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-admin-secret, x-fox-sync, x-fox-locks, x-telegram-bot-api-secret-token',
         'Access-Control-Max-Age': '86400',
       },
     });
@@ -1703,6 +1761,24 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
     }
   }
 
+  // Also rehydrate/sync section locks if client sent a newer x-fox-locks header
+  const locksHeader = request.headers.get('x-fox-locks');
+  if (locksHeader) {
+    try {
+      const jsonStr = decodeURIComponent(Buffer.from(locksHeader, 'base64').toString('utf8'));
+      const parsed = JSON.parse(jsonStr);
+      const headerLocks = parseLockedSectionsPayload(parsed, 0);
+      if (headerLocks.updatedAt > 0) {
+        if (!lockedSectionsHydrated) {
+          await hydrateEdgeLockedSections(env);
+        }
+        if (headerLocks.updatedAt > edgeLockedSectionsUpdatedAt) {
+          await persistEdgeLockedSections(env, headerLocks.lockedSections, headerLocks.updatedAt);
+        }
+      }
+    } catch {}
+  }
+
   // Auth helper with automatic cold-start isolate rehydration & D1 persistence
   const getAuthUser = (): UserGameState | null => {
     const authHeader = request.headers.get('authorization');
@@ -1808,6 +1884,7 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
       wheelPrizes: edgeWheelPrizes,
       fakeLeaderboardMembers: edgeFakeLeaderboard,
       lockedSections: edgeLockedSections,
+      lockedSectionsUpdatedAt: edgeLockedSectionsUpdatedAt,
       levels: PLAYER_LEVELS,
       tasks: TASKS,
       dailyRewards: DAILY_REWARDS,
@@ -3571,7 +3648,11 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
   // Admin: Get & Save Locked Sections
   if (pathname === '/api/admin/sections-lock' && method === 'GET') {
     const locks = await hydrateEdgeLockedSections(env);
-    return jsonResponse({ success: true, lockedSections: locks });
+    return jsonResponse({
+      success: true,
+      lockedSections: locks,
+      lockedSectionsUpdatedAt: edgeLockedSectionsUpdatedAt,
+    });
   }
 
   if (pathname === '/api/admin/sections-lock/save' && method === 'POST') {
@@ -3579,8 +3660,16 @@ export const onRequest: PagesFunction<CloudflareEnv> = async (context) => {
     try {
       body = await request.json();
     } catch {}
-    const saved = await persistEdgeLockedSections(env, body?.lockedSections || {});
-    return jsonResponse({ success: true, lockedSections: saved });
+    const saved = await persistEdgeLockedSections(
+      env,
+      body?.lockedSections || {},
+      Number(body?.updatedAt || 0)
+    );
+    return jsonResponse({
+      success: true,
+      lockedSections: saved,
+      lockedSectionsUpdatedAt: edgeLockedSectionsUpdatedAt,
+    });
   }
 
   // Admin: Bulk User Actions (Ban Selected, Unban Selected, Reset Coins, Add Coins, Delete Selected)
