@@ -144,49 +144,10 @@ export const TasksScreen: React.FC<TasksScreenProps> = ({
     [user.upgrades]
   );
 
-  const rawBankableOffline = Math.max(
+  const bankableOffline = Math.max(
     Math.floor(offlineEarnings || 0),
     Math.floor(user.unclaimedPassive || 0)
   );
-  const [isCollectingOffline, setIsCollectingOffline] = useState(false);
-  const [hasCollectedOffline, setHasCollectedOffline] = useState(false);
-  const collectingOfflineRef = useRef(false);
-
-  useEffect(() => {
-    if (rawBankableOffline > 0 && !collectingOfflineRef.current) {
-      setHasCollectedOffline(false);
-    }
-  }, [rawBankableOffline]);
-
-  const bankableOffline = hasCollectedOffline ? 0 : rawBankableOffline;
-
-  const handleCollectOfflineClick = async () => {
-    if (
-      isCollectingOffline ||
-      collectingOfflineRef.current ||
-      bankableOffline <= 0 ||
-      !onClaimOffline
-    ) {
-      return;
-    }
-    const amountToClaim = bankableOffline;
-    collectingOfflineRef.current = true;
-    setIsCollectingOffline(true);
-    setHasCollectedOffline(true);
-    try {
-      await onClaimOffline();
-      sound.playSuccess();
-      TelegramService.triggerNotificationHaptic('success');
-      showToast(`Collected +${amountToClaim.toLocaleString('en-US')} FOX!`);
-    } catch (err: any) {
-      setHasCollectedOffline(false);
-      sound.playError();
-      setErrorMsg(err?.message || 'Could not collect offline earnings');
-    } finally {
-      collectingOfflineRef.current = false;
-      setIsCollectingOffline(false);
-    }
-  };
 
   // Calculate real-time progress for every mission from actual user game state
   const hasSpunWheel = Boolean(
@@ -596,9 +557,9 @@ export const TasksScreen: React.FC<TasksScreenProps> = ({
       )}
 
       {/* 1. EMPIRE OVERVIEW BAR (3 Responsive Gold-Framed Panels) */}
-      <div className="w-full bg-gradient-to-b from-[#171A26]/95 to-[#0D1018]/95 border border-amber-500/40 rounded-2xl p-1.5 flex items-stretch gap-1.5 shadow-[0_6px_20px_rgba(0,0,0,0.65)] min-w-0">
+      <div className="w-full bg-gradient-to-b from-[#171A26]/95 to-[#0D1018]/95 border border-amber-500/40 rounded-2xl p-1.5 grid grid-cols-3 gap-1.5 shadow-[0_6px_20px_rgba(0,0,0,0.65)] min-w-0">
         {/* Col 1: Total Businesses */}
-        <div className="bg-gradient-to-b from-[#1B1F2E]/90 to-[#10131D]/90 border border-amber-500/25 rounded-xl px-2 py-1 flex flex-col justify-center shrink-0">
+        <div className="bg-gradient-to-b from-[#1B1F2E]/90 to-[#10131D]/90 border border-amber-500/25 rounded-xl px-2.5 py-1.5 flex flex-col justify-center min-w-0">
           <span className="text-[8px] sm:text-[9px] font-bold text-slate-300 whitespace-nowrap leading-tight">
             Businesses
           </span>
@@ -613,7 +574,7 @@ export const TasksScreen: React.FC<TasksScreenProps> = ({
         </div>
 
         {/* Col 2: Total Upgrades */}
-        <div className="bg-gradient-to-b from-[#1B1F2E]/90 to-[#10131D]/90 border border-amber-500/25 rounded-xl px-2 py-1 flex flex-col justify-center shrink-0">
+        <div className="bg-gradient-to-b from-[#1B1F2E]/90 to-[#10131D]/90 border border-amber-500/25 rounded-xl px-2.5 py-1.5 flex flex-col justify-center min-w-0">
           <span className="text-[8px] sm:text-[9px] font-bold text-slate-300 whitespace-nowrap leading-tight">
             Upgrades
           </span>
@@ -624,36 +585,21 @@ export const TasksScreen: React.FC<TasksScreenProps> = ({
           </div>
         </div>
 
-        {/* Col 3: Offline Earnings + Collect Button */}
-        <div className="flex-1 min-w-0 bg-gradient-to-b from-[#1F1A12]/90 to-[#12131C]/90 border border-amber-500/35 rounded-xl px-2 py-1 flex items-center justify-between gap-1.5">
-          <div className="min-w-0 flex-1">
-            <div className="text-[8px] sm:text-[9px] font-bold text-slate-300 truncate leading-tight">
-              Offline Earnings
-            </div>
-            <div className="flex items-center gap-1 mt-0.5 min-w-0">
-              <img
-                src={foxGoldCoinImg}
-                alt="FOX"
-                className="w-3.5 h-3.5 rounded-full object-cover shrink-0"
-              />
-              <span className="text-[11px] sm:text-xs font-black text-amber-300 tabular-nums whitespace-nowrap">
-                +{bankableOffline.toLocaleString('en-US')}
-              </span>
-            </div>
+        {/* Col 3: Offline Earnings (Display Only - Collect Button Removed) */}
+        <div className="min-w-0 bg-gradient-to-b from-[#1F1A12]/90 to-[#12131C]/90 border border-amber-500/35 rounded-xl px-2.5 py-1.5 flex flex-col justify-center">
+          <div className="text-[8px] sm:text-[9px] font-bold text-slate-300 truncate leading-tight">
+            Offline Earnings
           </div>
-
-          <button
-            type="button"
-            onClick={handleCollectOfflineClick}
-            disabled={isCollectingOffline || bankableOffline <= 0}
-            className={`px-2.5 py-1.5 rounded-lg font-black text-[10px] sm:text-[11px] tracking-wide border transition shrink-0 whitespace-nowrap ${
-              bankableOffline > 0 && !isCollectingOffline
-                ? 'bg-gradient-to-b from-amber-300 via-amber-500 to-orange-600 hover:brightness-110 active:scale-95 text-slate-950 shadow-[0_0_12px_rgba(245,158,11,0.45)] border-yellow-200/70 cursor-pointer'
-                : 'bg-slate-800/80 text-slate-500 border-slate-700/60 cursor-not-allowed opacity-75'
-            }`}
-          >
-            {isCollectingOffline ? '...' : bankableOffline > 0 ? 'Collect' : 'Collected'}
-          </button>
+          <div className="flex items-center gap-1 mt-0.5 min-w-0">
+            <img
+              src={foxGoldCoinImg}
+              alt="FOX"
+              className="w-3.5 h-3.5 rounded-full object-cover shrink-0"
+            />
+            <span className="text-xs sm:text-sm font-black text-amber-300 tabular-nums truncate">
+              +{bankableOffline.toLocaleString('en-US')}
+            </span>
+          </div>
         </div>
       </div>
 
