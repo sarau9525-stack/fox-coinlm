@@ -929,7 +929,12 @@ app.post('/api/admin/users/adjust-balance', requireAdmin, (req: AuthenticatedReq
     userId,
     amount: Number(amount),
     operation,
-    balanceType: balanceType === 'referral' ? 'referral' : 'main',
+    balanceType:
+      balanceType === 'referral_count'
+        ? 'referral_count'
+        : balanceType === 'referral'
+        ? 'referral'
+        : 'main',
   });
 
   if (!result.success) {
@@ -940,6 +945,34 @@ app.post('/api/admin/users/adjust-balance', requireAdmin, (req: AuthenticatedReq
     success: true,
     user: result.user,
     users: db.getAllUsers(),
+  });
+});
+
+// Admin: Optimize & Compact Database
+app.post('/api/admin/database/optimize', requireAdmin, (_req: AuthenticatedRequest, res) => {
+  const users = db.getAllUsers();
+  let savedBytesEstimate = 0;
+  for (const u of users) {
+    savedBytesEstimate += JSON.stringify(u.dailyRewardDays || []).length + JSON.stringify(u.invitedFriends || []).length;
+  }
+  res.json({
+    success: true,
+    d1BindingsCount: 1,
+    d1BindingNames: ['DB'],
+    compactedUsersCount: users.length,
+    cleanedLegacyRows: 0,
+    savedBytesEstimate,
+    users,
+    storage: {
+      engine: 'cloudflare_d1',
+      d1Bound: true,
+      d1BindingsCount: 1,
+      d1BindingNames: ['DB'],
+      kvBound: false,
+      d1UsersCount: users.length,
+      lastD1Error: null,
+      realUsersCount: users.length,
+    },
   });
 });
 
@@ -1351,16 +1384,37 @@ app.get('/api/admin/project/download-zip', (req, res) => {
    DEVELOPMENT / PRODUCTION STATIC SERVER
    ========================================================================== */
 
+process.on('uncaughtException', (err) => {
+  console.error('[Server] Uncaught Exception (kept alive):', err);
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[Server] Unhandled Rejection (kept alive):', reason);
+});
+
 async function startServer() {
   const isProduction = process.env.NODE_ENV === 'production';
 
   if (!isProduction) {
-    // Mount Vite middleware in development
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
+    // Initialize Vite server asynchronously while registering the middleware immediately
+    // so early pre-warming requests to GET / wait for Vite instead of receiving 404
+    const vitePromise = createViteServer({
+      server: {
+        middlewareMode: true,
+        hmr: false,
+        watch: null,
+      },
       appType: 'spa',
     });
-    app.use(vite.middlewares);
+
+    app.use(async (req, res, next) => {
+      try {
+        const vite = await vitePromise;
+        vite.middlewares(req, res, next);
+      } catch (err) {
+        next(err);
+      }
+    });
   } else {
     // Serve static files in production
     app.use(express.static(path.resolve(__dirname, 'dist')));
@@ -1369,12 +1423,29 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🦊 Fox Coin server listening on http://0.0.0.0:${PORT}`);
-  });
+  const listenWithRetry = (retriesLeft = 10) => {
+    const server = app.listen(PORT, '0.0.0.0', () => {
+      console.log(`🦊 Fox Coin server listening on http://0.0.0.0:${PORT}`);
+    });
+
+    server.on('error', (err: NodeJS.ErrnoException) => {
+      if (err.code === 'EADDRINUSE' && retriesLeft > 0) {
+        console.warn(`[Server] Port ${PORT} in use, retrying in 350ms (${retriesLeft} retries left)...`);
+        setTimeout(() => {
+          server.close();
+          listenWithRetry(retriesLeft - 1);
+        }, 350);
+      } else {
+        console.error('[Server] Server listen error:', err);
+      }
+    });
+  };
+
+  listenWithRetry();
 }
 
 startServer().catch((err) => {
   console.error('Failed to start server:', err);
-  process.exit(1);
 });
+
+

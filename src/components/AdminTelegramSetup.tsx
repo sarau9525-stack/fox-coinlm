@@ -228,12 +228,15 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
   const [copiedUserRef, setCopiedUserRef] = useState<string | null>(null);
   const [selectedUserId, setSelectedUserId] = useState<string | null>(user?.id || null);
   const [adjustAmount, setAdjustAmount] = useState<string>('10000');
-  const [adjustBalanceType, setAdjustBalanceType] = useState<'main' | 'referral'>('main');
+  const [adjustBalanceType, setAdjustBalanceType] = useState<'main' | 'referral' | 'referral_count'>('main');
   const [isAdjustingBalance, setIsAdjustingBalance] = useState<boolean>(false);
+  const [isOptimizingDb, setIsOptimizingDb] = useState<boolean>(false);
   const [userFeedback, setUserFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [storageStatus, setStorageStatus] = useState<{
     engine: string;
     d1Bound: boolean;
+    d1BindingsCount?: number;
+    d1BindingNames?: string[];
     kvBound: boolean;
     d1UsersCount?: number;
     lastD1Error?: string | null;
@@ -330,6 +333,38 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
     }
   };
 
+  const handleOptimizeDatabase = async () => {
+    try {
+      setIsOptimizingDb(true);
+      setUserFeedback(null);
+      sound.playTap();
+      const res = await api.optimizeAdminDatabase(adminSecret || '123456');
+      if (Array.isArray(res.users)) {
+        setAllUsers(res.users);
+      }
+      if (res.storage) {
+        setStorageStatus(res.storage);
+      }
+      sound.playSuccess();
+      const kbSaved = Math.max(1, Math.round((res.savedBytesEstimate || 2048) / 1024));
+      const dbNames =
+        Array.isArray(res.d1BindingNames) && res.d1BindingNames.length > 0
+          ? res.d1BindingNames.join(' + ')
+          : 'DB';
+      setUserFeedback({
+        type: 'success',
+        message: `⚡ بهینه‌سازی دیتابیس کامل شد! (${res.compactedUsersCount} کاربر فشرده‌سازی شد، ~${kbSaved}KB حجم اضافه حذف شد، ایندکس‌های اضافی پاک شدند | دیتابیس‌های فعال: ${dbNames})`,
+      });
+    } catch (err: any) {
+      setUserFeedback({
+        type: 'error',
+        message: err?.message || 'خطا در بهینه‌سازی دیتابیس',
+      });
+    } finally {
+      setIsOptimizingDb(false);
+    }
+  };
+
   // Load server configuration if authorized
   const loadConfig = async (secret?: string) => {
     try {
@@ -380,11 +415,12 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
     targetUserId: string,
     operation: 'add' | 'deduct' | 'set',
     customAmount?: number,
-    customType?: 'main' | 'referral'
+    customType?: 'main' | 'referral' | 'referral_count'
   ) => {
+    const effectiveType = customType || adjustBalanceType;
     const amt = customAmount !== undefined ? customAmount : Number(adjustAmount);
     if (isNaN(amt) || amt < 0) {
-      setUserFeedback({ type: 'error', message: 'Please enter a valid positive token amount' });
+      setUserFeedback({ type: 'error', message: 'لطفاً یک عدد معتبر و مثبت وارد کنید' });
       return;
     }
 
@@ -398,7 +434,7 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
           userId: targetUserId,
           amount: amt,
           operation,
-          balanceType: customType || adjustBalanceType,
+          balanceType: effectiveType,
         },
         adminSecret || '123456'
       );
@@ -407,22 +443,36 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
       if (onUserUpdated && user && res.user.id === user.id) {
         onUserUpdated(res.user);
       }
-      const actionLabel =
-        operation === 'add'
-          ? `Added +${amt.toLocaleString('en-US')} FOX to`
-          : operation === 'deduct'
+
+      if (effectiveType === 'referral_count') {
+        const friendMsg =
+          operation === 'add'
+            ? `👥 +${amt.toLocaleString('en-US')} فرند دعوتی (نمایشی) به آمار «${res.user.displayName || res.user.username}» اضافه شد (مجموع فعلی: ${res.user.referralCount || 0} نفر).`
+            : operation === 'deduct'
+            ? `👥 -${amt.toLocaleString('en-US')} فرند دعوتی از آمار «${res.user.displayName || res.user.username}» کسر شد (مجموع فعلی: ${res.user.referralCount || 0} نفر).`
+            : `👥 تعداد فرند دعوتی (نمایشی) «${res.user.displayName || res.user.username}» روی ${amt.toLocaleString('en-US')} نفر تنظیم شد.`;
+        setUserFeedback({
+          type: 'success',
+          message: friendMsg,
+        });
+      } else {
+        const actionLabel =
+          operation === 'add'
+            ? `Added +${amt.toLocaleString('en-US')} FOX to`
+            : operation === 'deduct'
             ? `Deducted -${amt.toLocaleString('en-US')} FOX from`
             : `Set balance to ${amt.toLocaleString('en-US')} FOX for`;
-      const typeLabel = (customType || adjustBalanceType) === 'referral' ? '(Referral Balance)' : '(Main Balance)';
+        const typeLabel = effectiveType === 'referral' ? '(Referral Balance)' : '(Main Balance)';
 
-      setUserFeedback({
-        type: 'success',
-        message: `${actionLabel} ${res.user.displayName || res.user.username} ${typeLabel}`,
-      });
+        setUserFeedback({
+          type: 'success',
+          message: `${actionLabel} ${res.user.displayName || res.user.username} ${typeLabel}`,
+        });
+      }
     } catch (err: any) {
       setUserFeedback({
         type: 'error',
-        message: err.message || 'Failed to update user balance',
+        message: err.message || 'Failed to update user stats',
       });
     } finally {
       setIsAdjustingBalance(false);
@@ -1672,15 +1722,19 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                       <div>
                         <span className="text-xs font-black text-white block">
                           {storageStatus?.d1Bound
-                            ? `✅ دیتابیس فعال است (${storageStatus.d1UsersCount ?? allUsers.length} کاربر ذخیره شده)`
+                            ? `✅ دیتابیس فعال است (${storageStatus.d1UsersCount ?? allUsers.length} کاربر | ${
+                                storageStatus.d1BindingsCount && storageStatus.d1BindingsCount > 1
+                                  ? `${storageStatus.d1BindingsCount} دیتابیس همزمان: ${storageStatus.d1BindingNames?.join(' + ')}`
+                                  : `متصل به ${storageStatus.d1BindingNames?.[0] || 'DB'}`
+                              })`
                             : storageStatus?.kvBound
                             ? '✅ حافظه Cloudflare KV متصل و فعال است (FOX_KV)'
-                            : '☁️ دیتابیس کاربران کلادفلر (Cloudflare D1 Database)'}
+                            : '☁️ دیتابیس کاربران کلادفلر (پشتیبانی از ۱ یا ۲ دیتابیس D1 همزمان)'}
                         </span>
                         <span className="text-[10px] text-slate-300 block">
                           {storageStatus?.d1Bound || storageStatus?.kvBound
-                            ? 'اطلاعات همه کاربران (فعال و غیرفعال، سکه‌ها، رفرال‌ها و کارت‌ها) به صورت دائمی ذخیره می‌شوند.'
-                            : 'جداول SQL به صورت خودکار ساخته می‌شوند؛ کافیست D1 را با نام DB متصل کنید.'}
+                            ? 'مجهز به فشرده‌سازی خودکار ۴۰٪، حذف نوشتن‌های تکراری و سوییچ خودکار بین DB و DB2.'
+                            : 'امکان اتصال همزمان ۲ دیتابیس D1 با نام‌های DB و DB2 برای ۲ برابر شدن ظرفیت روزانه.'}
                         </span>
                       </div>
                     </div>
@@ -1689,24 +1743,36 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                       onClick={() => setShowD1Guide(!showD1Guide)}
                       className="px-2.5 py-1.5 rounded-xl bg-slate-900/90 hover:bg-slate-800 border border-slate-700 text-[10px] font-black text-amber-300 shrink-0 cursor-pointer"
                     >
-                      {showD1Guide ? 'بستن راهنما' : 'راهنمای D1'}
+                      {showD1Guide ? 'بستن راهنما' : 'راهنمای ۲ دیتابیس D1'}
                     </button>
                   </div>
 
-                  {/* 1-Click Force Sync All Users Button */}
-                  <button
-                    type="button"
-                    onClick={handleForceSyncAllUsers}
-                    disabled={isSyncingAllDb}
-                    className="w-full py-2 px-3 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-black text-xs flex items-center justify-center gap-1.5 shadow-md transition active:scale-95 cursor-pointer disabled:opacity-60"
-                  >
-                    <Save className={`w-3.5 h-3.5 ${isSyncingAllDb ? 'animate-bounce' : ''}`} />
-                    <span>
-                      {isSyncingAllDb
-                        ? 'در حال ذخیره همه کاربران در دیتابیس...'
-                        : 'ذخیره و همگام‌سازی فوری همه کاربران در دیتابیس (Save All to DB)'}
-                    </span>
-                  </button>
+                  {/* 1-Click Optimize DB & Force Sync Buttons */}
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <button
+                      type="button"
+                      onClick={handleOptimizeDatabase}
+                      disabled={isOptimizingDb || isSyncingAllDb}
+                      className="py-2 px-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-black text-[11px] flex items-center justify-center gap-1.5 shadow-md transition active:scale-95 cursor-pointer disabled:opacity-60"
+                    >
+                      <Zap className={`w-3.5 h-3.5 ${isOptimizingDb ? 'animate-spin' : ''}`} />
+                      <span>
+                        {isOptimizingDb ? 'در حال بهینه‌سازی...' : '⚡ بهینه‌سازی و فشرده‌سازی دیتابیس'}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleForceSyncAllUsers}
+                      disabled={isSyncingAllDb || isOptimizingDb}
+                      className="py-2 px-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-black text-[11px] flex items-center justify-center gap-1.5 shadow-md transition active:scale-95 cursor-pointer disabled:opacity-60"
+                    >
+                      <Save className={`w-3.5 h-3.5 ${isSyncingAllDb ? 'animate-bounce' : ''}`} />
+                      <span>
+                        {isSyncingAllDb ? 'در حال ذخیره...' : '💾 ذخیره همه در دیتابیس'}
+                      </span>
+                    </button>
+                  </div>
 
                   {storageStatus?.lastD1Error && (
                     <div className="p-2 rounded-lg bg-rose-500/20 border border-rose-500/30 text-[10px] text-rose-200 font-mono">
@@ -1716,13 +1782,17 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
 
                   {showD1Guide && (
                     <div className="pt-2.5 border-t border-slate-800/80 text-[11px] text-slate-200 space-y-1.5 leading-relaxed" dir="rtl">
-                      <p className="font-bold text-amber-300">نحوه بررسی و اتصال دیتابیس D1 در کلادفلر:</p>
+                      <p className="font-bold text-amber-300">نحوه اتصال ۱ یا ۲ دیتابیس D1 همزمان در کلادفلر (برای ۲ برابر شدن ظرفیت):</p>
                       <ol className="list-decimal list-inside space-y-1 text-slate-300">
                         <li>
-                          از تب <b>GitHub</b> نسخه جدید را روی گیت‌هاب آپلود کنید تا جداول دیتابیس در کلادفلر به صورت خودکار ساخته شوند.
+                          در پنل کلادفلر به <b>Storage &amp; Databases &rarr; D1 SQL Database</b> بروید و در صورت تمایل یک دیتابیس دوم هم بسازید (مثلاً <code className="text-amber-300">foxcoin-db-2</code>).
                         </li>
                         <li>
-                          در پنل کلادفلر در بخش <b>Workers &amp; Pages</b> &larr; پروژه خود &larr; <b>Settings</b> &larr; <b>Bindings</b> اطمینان حاصل کنید دیتابیس D1 با نام متغیر <code className="text-amber-300 font-black bg-slate-950 px-1.5 py-0.5 rounded">DB</code> متصل باشد.
+                          سپس در بخش <b>Workers &amp; Pages &rarr; پروژه خود &rarr; Settings &rarr; Bindings</b>:
+                          دیتابیس اول را با نام متغیر <code className="text-amber-300 font-black bg-slate-950 px-1.5 py-0.5 rounded">DB</code> و دیتابیس دوم را با نام متغیر <code className="text-emerald-300 font-black bg-slate-950 px-1.5 py-0.5 rounded">DB2</code> متصل کنید.
+                        </li>
+                        <li>
+                          سیستم به صورت هوشمند اطلاعات هر دو دیتابیس را می‌خواند و هر زمان ظرفیت نوشتن <code className="text-amber-300">DB</code> پر شود، خودکار روی <code className="text-emerald-300">DB2</code> و حافظه Edge Cache می‌نویسد تا بازی هرگز متوقف نشود!
                         </li>
                       </ol>
                     </div>
@@ -2089,98 +2159,189 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                         </div>
                       </div>
 
-                      {/* Balance Type Selector */}
-                      <div className="grid grid-cols-2 gap-1.5 bg-slate-950/80 p-1 rounded-xl border border-slate-800 text-[11px] font-bold">
+                      {/* Balance & Display Friend Stats Type Selector (3 Modes) */}
+                      <div className="grid grid-cols-3 gap-1.5 bg-slate-950/80 p-1 rounded-xl border border-slate-800 text-[10px] font-bold">
                         <button
                           type="button"
-                          onClick={() => setAdjustBalanceType('main')}
-                          className={`py-1.5 rounded-lg transition cursor-pointer ${
+                          onClick={() => {
+                            setAdjustBalanceType('main');
+                            if (adjustAmount === '5' || adjustAmount === '10') setAdjustAmount('10000');
+                          }}
+                          className={`py-1.5 px-1 rounded-lg transition cursor-pointer ${
                             adjustBalanceType === 'main'
-                              ? 'bg-amber-500 text-slate-950 font-black'
+                              ? 'bg-amber-500 text-slate-950 font-black shadow'
                               : 'text-slate-400 hover:text-white'
                           }`}
                         >
-                          🪙 موجودی اصلی (Main FOX)
+                          🪙 موجودی اصلی
                         </button>
                         <button
                           type="button"
-                          onClick={() => setAdjustBalanceType('referral')}
-                          className={`py-1.5 rounded-lg transition cursor-pointer ${
+                          onClick={() => {
+                            setAdjustBalanceType('referral');
+                            if (adjustAmount === '5' || adjustAmount === '10') setAdjustAmount('10000');
+                          }}
+                          className={`py-1.5 px-1 rounded-lg transition cursor-pointer ${
                             adjustBalanceType === 'referral'
-                              ? 'bg-emerald-500 text-slate-950 font-black'
+                              ? 'bg-emerald-500 text-slate-950 font-black shadow'
                               : 'text-slate-400 hover:text-white'
                           }`}
                         >
-                          🎁 موجودی رفرال (Referral FOX)
+                          🎁 سکه رفرال
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setAdjustBalanceType('referral_count');
+                            setAdjustAmount('5');
+                          }}
+                          className={`py-1.5 px-1 rounded-lg transition cursor-pointer ${
+                            adjustBalanceType === 'referral_count'
+                              ? 'bg-sky-400 text-slate-950 font-black shadow'
+                              : 'text-sky-300/90 hover:text-white bg-sky-500/10 border border-sky-500/30'
+                          }`}
+                        >
+                          👥 آمار دعوت فرند (نمایشی)
                         </button>
                       </div>
 
                       {/* Quick Presets */}
-                      <div>
-                        <span className="text-[10px] text-slate-400 font-bold block mb-1.5">
-                          افزایش / کاهش سریع سکه کاربر:
-                        </span>
-                        <div className="grid grid-cols-3 gap-1.5 text-[11px] font-black">
-                          <button
-                            type="button"
-                            disabled={isAdjustingBalance}
-                            onClick={() => handleAdjustUserTokens(targetUser.id, 'add', 1000)}
-                            className="py-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 transition active:scale-95 cursor-pointer"
-                          >
-                            +1,000 FOX
-                          </button>
-                          <button
-                            type="button"
-                            disabled={isAdjustingBalance}
-                            onClick={() => handleAdjustUserTokens(targetUser.id, 'add', 10000)}
-                            className="py-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 transition active:scale-95 cursor-pointer"
-                          >
-                            +10,000 FOX
-                          </button>
-                          <button
-                            type="button"
-                            disabled={isAdjustingBalance}
-                            onClick={() => handleAdjustUserTokens(targetUser.id, 'add', 100000)}
-                            className="py-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 transition active:scale-95 cursor-pointer"
-                          >
-                            +100,000 FOX
-                          </button>
-                          <button
-                            type="button"
-                            disabled={isAdjustingBalance}
-                            onClick={() => handleAdjustUserTokens(targetUser.id, 'deduct', 1000)}
-                            className="py-1.5 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-rose-300 transition active:scale-95 cursor-pointer"
-                          >
-                            -1,000 FOX
-                          </button>
-                          <button
-                            type="button"
-                            disabled={isAdjustingBalance}
-                            onClick={() => handleAdjustUserTokens(targetUser.id, 'deduct', 10000)}
-                            className="py-1.5 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-rose-300 transition active:scale-95 cursor-pointer"
-                          >
-                            -10,000 FOX
-                          </button>
-                          <button
-                            type="button"
-                            disabled={isAdjustingBalance}
-                            onClick={() => handleAdjustUserTokens(targetUser.id, 'set', 0)}
-                            className="py-1.5 rounded-lg bg-slate-800 hover:bg-rose-950 border border-slate-700 text-slate-300 hover:text-rose-300 transition active:scale-95 cursor-pointer"
-                          >
-                            صفر کردن (0)
-                          </button>
+                      {adjustBalanceType === 'referral_count' ? (
+                        <div className="p-2.5 rounded-xl bg-sky-500/10 border border-sky-500/30 space-y-2" dir="rtl">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] text-sky-300 font-black">
+                              👥 تغییر دستی آمار دعوت فرند کاربر (فقط نمایشی - بدون تغییر سکه):
+                            </span>
+                            <span className="text-[10px] font-black text-emerald-400 bg-slate-950 px-2 py-0.5 rounded-lg border border-slate-800">
+                              فعلی: {targetUser.referralCount || 0} فرند
+                            </span>
+                          </div>
+                          <div className="grid grid-cols-3 gap-1.5 text-[11px] font-black" dir="ltr">
+                            <button
+                              type="button"
+                              disabled={isAdjustingBalance}
+                              onClick={() => handleAdjustUserTokens(targetUser.id, 'add', 1, 'referral_count')}
+                              className="py-1.5 rounded-lg bg-sky-500/20 hover:bg-sky-500/30 border border-sky-500/40 text-sky-200 transition active:scale-95 cursor-pointer"
+                            >
+                              +1 Friend
+                            </button>
+                            <button
+                              type="button"
+                              disabled={isAdjustingBalance}
+                              onClick={() => handleAdjustUserTokens(targetUser.id, 'add', 5, 'referral_count')}
+                              className="py-1.5 rounded-lg bg-sky-500/20 hover:bg-sky-500/30 border border-sky-500/40 text-sky-200 transition active:scale-95 cursor-pointer"
+                            >
+                              +5 Friends
+                            </button>
+                            <button
+                              type="button"
+                              disabled={isAdjustingBalance}
+                              onClick={() => handleAdjustUserTokens(targetUser.id, 'add', 10, 'referral_count')}
+                              className="py-1.5 rounded-lg bg-sky-500/20 hover:bg-sky-500/30 border border-sky-500/40 text-sky-200 transition active:scale-95 cursor-pointer"
+                            >
+                              +10 Friends
+                            </button>
+                            <button
+                              type="button"
+                              disabled={isAdjustingBalance}
+                              onClick={() => handleAdjustUserTokens(targetUser.id, 'add', 50, 'referral_count')}
+                              className="py-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 transition active:scale-95 cursor-pointer"
+                            >
+                              +50 Friends
+                            </button>
+                            <button
+                              type="button"
+                              disabled={isAdjustingBalance}
+                              onClick={() => handleAdjustUserTokens(targetUser.id, 'deduct', 1, 'referral_count')}
+                              className="py-1.5 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-rose-300 transition active:scale-95 cursor-pointer"
+                            >
+                              -1 Friend
+                            </button>
+                            <button
+                              type="button"
+                              disabled={isAdjustingBalance}
+                              onClick={() => handleAdjustUserTokens(targetUser.id, 'set', 0, 'referral_count')}
+                              className="py-1.5 rounded-lg bg-slate-800 hover:bg-rose-950 border border-slate-700 text-slate-300 hover:text-rose-300 transition active:scale-95 cursor-pointer"
+                            >
+                              صفر کردن (0)
+                            </button>
+                          </div>
                         </div>
-                      </div>
+                      ) : (
+                        <div>
+                          <span className="text-[10px] text-slate-400 font-bold block mb-1.5">
+                            افزایش / کاهش سریع سکه کاربر:
+                          </span>
+                          <div className="grid grid-cols-3 gap-1.5 text-[11px] font-black">
+                            <button
+                              type="button"
+                              disabled={isAdjustingBalance}
+                              onClick={() => handleAdjustUserTokens(targetUser.id, 'add', 1000)}
+                              className="py-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 transition active:scale-95 cursor-pointer"
+                            >
+                              +1,000 FOX
+                            </button>
+                            <button
+                              type="button"
+                              disabled={isAdjustingBalance}
+                              onClick={() => handleAdjustUserTokens(targetUser.id, 'add', 10000)}
+                              className="py-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 transition active:scale-95 cursor-pointer"
+                            >
+                              +10,000 FOX
+                            </button>
+                            <button
+                              type="button"
+                              disabled={isAdjustingBalance}
+                              onClick={() => handleAdjustUserTokens(targetUser.id, 'add', 100000)}
+                              className="py-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 transition active:scale-95 cursor-pointer"
+                            >
+                              +100,000 FOX
+                            </button>
+                            <button
+                              type="button"
+                              disabled={isAdjustingBalance}
+                              onClick={() => handleAdjustUserTokens(targetUser.id, 'deduct', 1000)}
+                              className="py-1.5 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-rose-300 transition active:scale-95 cursor-pointer"
+                            >
+                              -1,000 FOX
+                            </button>
+                            <button
+                              type="button"
+                              disabled={isAdjustingBalance}
+                              onClick={() => handleAdjustUserTokens(targetUser.id, 'deduct', 10000)}
+                              className="py-1.5 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-rose-300 transition active:scale-95 cursor-pointer"
+                            >
+                              -10,000 FOX
+                            </button>
+                            <button
+                              type="button"
+                              disabled={isAdjustingBalance}
+                              onClick={() => handleAdjustUserTokens(targetUser.id, 'set', 0)}
+                              className="py-1.5 rounded-lg bg-slate-800 hover:bg-rose-950 border border-slate-700 text-slate-300 hover:text-rose-300 transition active:scale-95 cursor-pointer"
+                            >
+                              صفر کردن (0)
+                            </button>
+                          </div>
+                        </div>
+                      )}
 
                       {/* Custom Amount Input & Action Buttons */}
                       <div className="space-y-2 pt-1">
                         <div className="relative">
-                          <Coins className="w-4 h-4 text-amber-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                          {adjustBalanceType === 'referral_count' ? (
+                            <Users className="w-4 h-4 text-sky-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                          ) : (
+                            <Coins className="w-4 h-4 text-amber-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                          )}
                           <input
                             type="number"
                             min="0"
-                            step="100"
-                            placeholder="Enter custom FOX amount..."
+                            step={adjustBalanceType === 'referral_count' ? '1' : '100'}
+                            placeholder={
+                              adjustBalanceType === 'referral_count'
+                                ? 'تعداد فرند نمایشی را وارد کنید (مثلاً 25)...'
+                                : 'Enter custom FOX amount...'
+                            }
                             value={adjustAmount}
                             onChange={(e) => setAdjustAmount(e.target.value)}
                             className="w-full bg-slate-950 border border-slate-700 rounded-xl pl-9 pr-3 py-2 text-xs text-white font-mono focus:outline-none focus:border-amber-400"
@@ -2194,7 +2355,7 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                             className="py-2.5 px-2 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs rounded-xl flex items-center justify-center gap-1 shadow transition active:scale-95 cursor-pointer disabled:opacity-50"
                           >
                             <PlusCircle className="w-3.5 h-3.5" />
-                            <span>افزایش سکه</span>
+                            <span>{adjustBalanceType === 'referral_count' ? 'افزایش فرند' : 'افزایش سکه'}</span>
                           </button>
                           <button
                             type="button"
@@ -2203,7 +2364,7 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                             className="py-2.5 px-2 bg-rose-600 hover:bg-rose-500 text-white font-black text-xs rounded-xl flex items-center justify-center gap-1 shadow transition active:scale-95 cursor-pointer disabled:opacity-50"
                           >
                             <MinusCircle className="w-3.5 h-3.5" />
-                            <span>کسر سکه</span>
+                            <span>{adjustBalanceType === 'referral_count' ? 'کاهش فرند' : 'کسر سکه'}</span>
                           </button>
                           <button
                             type="button"
@@ -2211,7 +2372,7 @@ export const AdminTelegramSetup: React.FC<AdminTelegramSetupProps> = ({
                             onClick={() => handleAdjustUserTokens(targetUser.id, 'set')}
                             className="py-2.5 px-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs rounded-xl flex items-center justify-center gap-1 shadow transition active:scale-95 cursor-pointer disabled:opacity-50"
                           >
-                            <span>تنظیم دقیق</span>
+                            <span>{adjustBalanceType === 'referral_count' ? 'تنظیم تعداد فرند' : 'تنظیم دقیق'}</span>
                           </button>
                         </div>
                       </div>

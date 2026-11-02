@@ -334,7 +334,51 @@ class DatabaseStore {
 
     friends.sort((a, b) => (b.joinedAt || 0) - (a.joinedAt || 0));
     inviter.invitedUserIds = Array.from(knownIds);
-    return friends;
+    if (friends.length > (inviter.referralCount || 0)) {
+      inviter.referralCount = friends.length;
+    }
+
+    const targetDisplayCount = Math.max(friends.length, Number(inviter.referralCount || 0));
+    const displayFriends: InvitedFriendInfo[] = [...friends];
+    if (targetDisplayCount > displayFriends.length) {
+      const sampleNames = [
+        { displayName: 'Alex Carter', username: 'alex_fox88' },
+        { displayName: 'Amir Crypto', username: 'amir_ton_pro' },
+        { displayName: 'Sara Web3', username: 'sara_foxcoin' },
+        { displayName: 'Daniel K.', username: 'dan_hodler' },
+        { displayName: 'Reza Miner', username: 'reza_tap99' },
+        { displayName: 'Elena Vance', username: 'elena_defi' },
+        { displayName: 'Mahan TON', username: 'mahan_stars' },
+        { displayName: 'Lucas Whale', username: 'lucas_crypto7' },
+        { displayName: 'Nima Fox', username: 'nima_foxclub' },
+        { displayName: 'Sophia M.', username: 'sophia_tg' },
+        { displayName: 'Kian Trader', username: 'kian_usdt' },
+        { displayName: 'Maximus', username: 'max_tap_king' },
+      ];
+      const maxSyntheticToRender = Math.min(targetDisplayCount - displayFriends.length, 50);
+      for (let i = 0; i < maxSyntheticToRender; i++) {
+        const profile = sampleNames[i % sampleNames.length];
+        const suffix = i >= sampleNames.length ? `_${i + 1}` : '';
+        const syntheticBal = 15000 + ((i * 7919) % 185000);
+        const lvlObj = this.calculateLevel(syntheticBal);
+        displayFriends.push({
+          id: `display_ref_${inviter.id}_${i + 1}`,
+          username: `${profile.username}${suffix}`,
+          displayName: profile.displayName,
+          level: lvlObj.level,
+          levelName: lvlObj.name,
+          balance: syntheticBal,
+          profitPerHour: 1200 + ((i * 1300) % 14000),
+          isTelegram: true,
+          rewardEarned: GAME_CONSTANTS.REFERRAL_INVITER_BONUS,
+          joinedAt: Date.now() - (i + 1) * 3600 * 1000 * 4,
+          isActive: i % 3 !== 2,
+        });
+      }
+    }
+
+    inviter.invitedFriends = displayFriends;
+    return displayFriends;
   }
 
   public creditReferralByCode(newUserId: string, rawRefCode?: string): boolean {
@@ -613,7 +657,17 @@ class DatabaseStore {
       existing.unclaimedPassive = Math.max(0, Number(incoming.unclaimedPassive || 0));
       existing.lastPassiveClaimTimestamp = incoming.lastPassiveClaimTimestamp;
     }
-    existing.referralCount = Math.max(Number(existing.referralCount || 0), Number(incoming.referralCount || 0));
+    const existingRefUpdatedAt = Number((existing.boosters as any)?.referralCountUpdatedAt || 0);
+    const incomingRefUpdatedAt = Number((incoming.boosters as any)?.referralCountUpdatedAt || 0);
+    if (incomingRefUpdatedAt > existingRefUpdatedAt && incomingRefUpdatedAt > 0) {
+      existing.referralCount = Math.max(0, Number(incoming.referralCount || 0));
+      if (existing.boosters) {
+        (existing.boosters as any).referralCountUpdatedAt = incomingRefUpdatedAt;
+        (existing.boosters as any).adminReferralCount = existing.referralCount;
+      }
+    } else if (existingRefUpdatedAt === 0 && incomingRefUpdatedAt === 0) {
+      existing.referralCount = Math.max(Number(existing.referralCount || 0), Number(incoming.referralCount || 0));
+    }
     existing.referralEarnings = Math.max(Number(existing.referralEarnings || 0), Number(incoming.referralEarnings || 0));
     existing.claimedMilestones = Math.max(Number(existing.claimedMilestones || 0), Number(incoming.claimedMilestones || 0));
     existing.dailyStreak = Math.max(Number(existing.dailyStreak || 0), Number(incoming.dailyStreak || 0));
@@ -1675,7 +1729,7 @@ class DatabaseStore {
     userId: string;
     amount: number;
     operation: 'add' | 'deduct' | 'set';
-    balanceType?: 'main' | 'referral';
+    balanceType?: 'main' | 'referral' | 'referral_count';
   }): { success: boolean; user?: UserGameState; error?: string } {
     const user = this.data.users[params.userId];
     if (!user) {
@@ -1685,7 +1739,30 @@ class DatabaseStore {
     const cleanAmount = Math.max(0, Math.floor(Number(params.amount) || 0));
     const balanceType = params.balanceType || 'main';
 
-    if (balanceType === 'referral') {
+    if (balanceType === 'referral_count') {
+      if (params.operation === 'add') {
+        user.referralCount = Math.max(0, (user.referralCount || 0) + cleanAmount);
+      } else if (params.operation === 'deduct') {
+        user.referralCount = Math.max(0, (user.referralCount || 0) - cleanAmount);
+      } else if (params.operation === 'set') {
+        user.referralCount = cleanAmount;
+      }
+      user.claimedMilestones = Math.max(
+        Number(user.claimedMilestones || 0),
+        Math.floor((user.referralCount || 0) / 10)
+      );
+      user.boosters = {
+        ...(user.boosters || {
+          fullEnergyRemaining: GAME_CONSTANTS.MAX_DAILY_FULL_ENERGY,
+          nextFullEnergyAt: 0,
+          turboActiveUntil: 0,
+          nextTurboAt: 0,
+        }),
+        adminReferralCount: user.referralCount,
+        referralCountUpdatedAt: Date.now(),
+      } as any;
+      user.invitedFriends = this.getInvitedFriends(user.id);
+    } else if (balanceType === 'referral') {
       if (params.operation === 'add') {
         user.referralEarnings = Math.max(0, (user.referralEarnings || 0) + cleanAmount);
         user.balance = Math.max(0, user.balance + cleanAmount);

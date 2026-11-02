@@ -255,7 +255,11 @@ class ApiService {
             serverUser.totalTaps = syncedLocal.totalTaps;
             localHadMoreProgress = true;
           }
-          if ((syncedLocal.referralCount || 0) > (serverUser.referralCount || 0)) {
+          const serverRefUpdatedAt = Number((serverUser.boosters as any)?.referralCountUpdatedAt || 0);
+          const localRefUpdatedAt = Number((syncedLocal.boosters as any)?.referralCountUpdatedAt || 0);
+          if (serverRefUpdatedAt > localRefUpdatedAt && serverRefUpdatedAt > 0) {
+            // Server has a newer admin-adjusted referralCount; keep serverUser.referralCount authoritative
+          } else if ((syncedLocal.referralCount || 0) > (serverUser.referralCount || 0)) {
             serverUser.referralCount = syncedLocal.referralCount;
             localHadMoreProgress = true;
           }
@@ -389,7 +393,14 @@ class ApiService {
       try {
         const rawUser = localStorage.getItem(LOCAL_USER_KEY);
         if (rawUser) {
-          headers['x-fox-sync'] = btoa(encodeURIComponent(rawUser));
+          try {
+            const parsedSync = JSON.parse(rawUser);
+            delete parsedSync.dailyRewardDays;
+            delete parsedSync.invitedFriends;
+            headers['x-fox-sync'] = btoa(encodeURIComponent(JSON.stringify(parsedSync)));
+          } catch {
+            headers['x-fox-sync'] = btoa(encodeURIComponent(rawUser));
+          }
         }
         const localLocksUpdatedAt = this.getLocalLockedSectionsUpdatedAt();
         if (localLocksUpdatedAt > 0) {
@@ -2259,6 +2270,8 @@ class ApiService {
     storage?: {
       engine: string;
       d1Bound: boolean;
+      d1BindingsCount?: number;
+      d1BindingNames?: string[];
       kvBound: boolean;
       d1UsersCount?: number;
       lastD1Error?: string | null;
@@ -2269,51 +2282,13 @@ class ApiService {
       const headers: Record<string, string> = {};
       if (adminSecret) headers['x-admin-secret'] = adminSecret;
 
-      // Also gather any locally cached users so they are pushed into the server/D1 database automatically
-      const localCandidates: UserGameState[] = [];
-      if (typeof window !== 'undefined') {
-        try {
-          const currentRaw = localStorage.getItem(LOCAL_USER_KEY);
-          if (currentRaw) localCandidates.push(JSON.parse(currentRaw));
-        } catch {}
-        try {
-          const extraRaw = localStorage.getItem('foxcoin_local_all_users_v1');
-          if (extraRaw) {
-            const parsed = JSON.parse(extraRaw);
-            if (Array.isArray(parsed)) localCandidates.push(...parsed);
-          }
-        } catch {}
-      }
-
-      if (localCandidates.length > 0) {
-        try {
-          const syncedRes = await this.request<{
-            users: UserGameState[];
-            storage?: {
-              engine: string;
-              d1Bound: boolean;
-              kvBound: boolean;
-              d1UsersCount?: number;
-              lastD1Error?: string | null;
-              realUsersCount: number;
-            };
-          }>('/api/admin/users/sync-all', {
-            method: 'POST',
-            headers,
-            body: JSON.stringify({ users: localCandidates }),
-          });
-          if (typeof window !== 'undefined' && Array.isArray(syncedRes.users)) {
-            localStorage.setItem('foxcoin_local_all_users_v1', JSON.stringify(syncedRes.users));
-          }
-          return syncedRes;
-        } catch {}
-      }
-
       const res = await this.request<{
         users: UserGameState[];
         storage?: {
           engine: string;
           d1Bound: boolean;
+          d1BindingsCount?: number;
+          d1BindingNames?: string[];
           kvBound: boolean;
           d1UsersCount?: number;
           lastD1Error?: string | null;
@@ -2396,12 +2371,63 @@ class ApiService {
     return res;
   }
 
+  public async optimizeAdminDatabase(
+    adminSecret?: string
+  ): Promise<{
+    success: boolean;
+    d1BindingsCount: number;
+    d1BindingNames: string[];
+    compactedUsersCount: number;
+    cleanedLegacyRows: number;
+    savedBytesEstimate: number;
+    users: UserGameState[];
+    storage?: {
+      engine: string;
+      d1Bound: boolean;
+      d1BindingsCount?: number;
+      d1BindingNames?: string[];
+      kvBound: boolean;
+      d1UsersCount?: number;
+      lastD1Error?: string | null;
+      realUsersCount: number;
+    };
+  }> {
+    const headers: Record<string, string> = {};
+    if (adminSecret) headers['x-admin-secret'] = adminSecret;
+    const res = await this.request<{
+      success: boolean;
+      d1BindingsCount: number;
+      d1BindingNames: string[];
+      compactedUsersCount: number;
+      cleanedLegacyRows: number;
+      savedBytesEstimate: number;
+      users: UserGameState[];
+      storage?: {
+        engine: string;
+        d1Bound: boolean;
+        d1BindingsCount?: number;
+        d1BindingNames?: string[];
+        kvBound: boolean;
+        d1UsersCount?: number;
+        lastD1Error?: string | null;
+        realUsersCount: number;
+      };
+    }>('/api/admin/database/optimize', {
+      method: 'POST',
+      headers,
+    });
+    if (typeof window !== 'undefined' && Array.isArray(res.users)) {
+      localStorage.setItem('foxcoin_local_all_users_v1', JSON.stringify(res.users));
+    }
+    return res;
+  }
+
   public async adjustAdminUserBalance(
     params: {
       userId: string;
       amount: number;
       operation: 'add' | 'deduct' | 'set';
-      balanceType?: 'main' | 'referral';
+      balanceType?: 'main' | 'referral' | 'referral_count';
     },
     adminSecret?: string
   ): Promise<{ success: boolean; user: UserGameState; users: UserGameState[] }> {
@@ -2417,12 +2443,15 @@ class ApiService {
         }
       );
 
-      if (this.onStateUpdated && res.user) {
+      if (res.user) {
         const currentLocal = this.getLocalUser();
         if (res.user.id === currentLocal.id) {
           this.saveLocalUser(res.user);
-          this.onStateUpdated(res.user);
+          if (this.onStateUpdated) this.onStateUpdated(res.user);
         }
+      }
+      if (typeof window !== 'undefined' && Array.isArray(res.users)) {
+        localStorage.setItem('foxcoin_local_all_users_v1', JSON.stringify(res.users));
       }
       return res;
     } catch (err) {
@@ -2432,7 +2461,29 @@ class ApiService {
         if (!target) throw new Error('User not found');
 
         const cleanAmount = Math.max(0, Math.floor(Number(params.amount) || 0));
-        if (params.balanceType === 'referral') {
+        if (params.balanceType === 'referral_count') {
+          if (params.operation === 'add') {
+            target.referralCount = Math.max(0, (target.referralCount || 0) + cleanAmount);
+          } else if (params.operation === 'deduct') {
+            target.referralCount = Math.max(0, (target.referralCount || 0) - cleanAmount);
+          } else if (params.operation === 'set') {
+            target.referralCount = cleanAmount;
+          }
+          target.claimedMilestones = Math.max(
+            Number(target.claimedMilestones || 0),
+            Math.floor((target.referralCount || 0) / 10)
+          );
+          target.boosters = {
+            ...(target.boosters || {
+              fullEnergyRemaining: 6,
+              nextFullEnergyAt: 0,
+              turboActiveUntil: 0,
+              nextTurboAt: 0,
+            }),
+            adminReferralCount: target.referralCount,
+            referralCountUpdatedAt: Date.now(),
+          } as any;
+        } else if (params.balanceType === 'referral') {
           if (params.operation === 'add') {
             target.referralEarnings = Math.max(0, (target.referralEarnings || 0) + cleanAmount);
             target.balance = Math.max(0, target.balance + cleanAmount);

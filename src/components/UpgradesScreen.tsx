@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Flame,
   Zap,
@@ -19,11 +19,39 @@ import {
   Pickaxe,
   Users,
   CheckCircle2,
+  Sun,
+  Sunset,
+  Moon,
+  CloudRain,
+  RotateCcw,
+  X,
+  Factory,
+  FlaskConical,
+  Home,
+  Plane,
+  TrendingUp,
+  Layers,
+  Maximize2,
+  Minimize2,
+  Footprints,
 } from 'lucide-react';
 import { UpgradeDefinition, UserGameState } from '../types/game.js';
 import { sound } from '../utils/audio.js';
 import { TelegramService } from '../utils/telegram.js';
-import { foxGoldCoinImg } from '../assets/assets.js';
+import { foxGoldCoinImg, foxMascotImg } from '../assets/assets.js';
+import {
+  CityCameraPreset,
+  CityQualityTier,
+  CityTimeMode,
+  FOX_CITY_BUILDINGS,
+  FOX_CITY_CONCEPT_ASSET,
+  FoxCityBuildingConfig,
+  FoxCityBuildingId,
+  resolveBuildingState,
+  BuildingResolvedState,
+  FoxMascotAnimMode,
+} from './foxcity/foxCityTypes.js';
+import { FoxCityView } from './foxcity/FoxCityView.js';
 
 const MINE_REF_ASSET = '/assets/aistudio/file_00000000989081f49b6182a53308b15a_799d8e3a.png';
 
@@ -36,56 +64,6 @@ interface UpgradesScreenProps {
   onCollectVaultBonus?: (bonusAmount: number) => void;
 }
 
-interface KingdomHotspot {
-  upgradeId: string;
-  shortTitle: string;
-  fullTitle: string;
-  left: string;
-  top: string;
-  defaultDisplayLevel: number;
-  icon: 'mining' | 'coffee' | 'berry' | 'arcade';
-}
-
-const KINGDOM_HOTSPOTS: KingdomHotspot[] = [
-  {
-    upgradeId: 'crypto_burrow',
-    shortTitle: 'Mining',
-    fullTitle: 'Crypto Burrow Mining',
-    left: '21.8%',
-    top: '18.5%',
-    defaultDisplayLevel: 2,
-    icon: 'mining',
-  },
-  {
-    upgradeId: 'coffee_roastery',
-    shortTitle: 'Coffee',
-    fullTitle: 'Fox Coffee Roastery',
-    left: '68.8%',
-    top: '23.2%',
-    defaultDisplayLevel: 1,
-    icon: 'coffee',
-  },
-  {
-    upgradeId: 'berry_stand',
-    shortTitle: 'Berry Stand',
-    fullTitle: 'Forest Berry Stand',
-    left: '36.2%',
-    top: '50.2%',
-    defaultDisplayLevel: 1,
-    icon: 'berry',
-  },
-  {
-    upgradeId: 'fox_arcade_club',
-    shortTitle: 'Arcade',
-    fullTitle: 'Neon Fox Arcade Club',
-    left: '68.8%',
-    top: '50.2%',
-    defaultDisplayLevel: 1,
-    icon: 'arcade',
-  },
-];
-
-// Precision crop offsets for the 4 signature 3D business illustrations in MINE_REF_ASSET
 const SIGNATURE_CARD_CROPS: Record<
   string,
   {
@@ -115,9 +93,49 @@ export const UpgradesScreen: React.FC<UpgradesScreenProps> = ({
   const [isClaimingOffline, setIsClaimingOffline] = useState<boolean>(false);
   const [hasCollectedOffline, setHasCollectedOffline] = useState<boolean>(false);
   const [collectSuccessFlash, setCollectSuccessFlash] = useState<number | null>(null);
+
+  // FOX CITY 3D Interactive State
+  const [selectedBuildingId, setSelectedBuildingId] = useState<FoxCityBuildingId | null>(null);
+  const [selectedBuildingUpgradeId, setSelectedBuildingUpgradeId] = useState<string | null>(null);
+  const [timeMode, setTimeMode] = useState<CityTimeMode>('night');
+  const [autoCycleTime, setAutoCycleTime] = useState<boolean>(false);
+  const [cameraPreset, setCameraPreset] = useState<CityCameraPreset>('angle');
+  const [mascotMode, setMascotMode] = useState<FoxMascotAnimMode>('auto');
+  const [isFullScreenCity, setIsFullScreenCity] = useState<boolean>(false);
+  const [resetSignal, setResetSignal] = useState<number>(0);
+  const [qualityTier, setQualityTier] = useState<CityQualityTier>(() => {
+    if (typeof window === 'undefined') return 'high';
+    try {
+      const canvas = document.createElement('canvas');
+      const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
+      if (!gl) return 'low';
+      const debugExt = gl.getExtension('WEBGL_debug_renderer_info');
+      const gpuRenderer = debugExt
+        ? String(gl.getParameter(debugExt.UNMASKED_RENDERER_WEBGL))
+        : String(gl.getParameter(gl.RENDERER));
+      const maxTexSize = Number(gl.getParameter(gl.MAX_TEXTURE_SIZE)) || 4096;
+      gl.getExtension('WEBGL_lose_context')?.loseContext();
+
+      if (/SwiftShader|llvmpipe|softpipe|Software|Basic Render/i.test(gpuRenderer)) {
+        return 'low';
+      }
+      if (/Mali-4|Mali-T|Adreno \(TM\) 3|Adreno \(TM\) 4|PowerVR SGX/i.test(gpuRenderer) || maxTexSize < 4096) {
+        return 'low';
+      }
+      if (/Adreno \(TM\) 5|Mali-G5|Mali-G3|Intel\(R\) HD Graphics 4/i.test(gpuRenderer) || maxTexSize < 8192) {
+        return 'medium';
+      }
+      return 'high';
+    } catch {
+      return 'high';
+    }
+  });
+
   const claimingOfflineRef = useRef<boolean>(false);
   const lastOfflineCollectedAtRef = useRef<number>(
-    typeof window !== 'undefined' ? Number(localStorage.getItem('foxcoin_last_offline_claim_at_v1') || '0') : 0
+    typeof window !== 'undefined'
+      ? Number(localStorage.getItem('foxcoin_last_offline_claim_at_v1') || '0')
+      : 0
   );
 
   const rawUnclaimedOffline = Math.max(
@@ -127,17 +145,59 @@ export const UpgradesScreen: React.FC<UpgradesScreenProps> = ({
 
   useEffect(() => {
     const recentlyCollected =
-      lastOfflineCollectedAtRef.current > 0 && Date.now() - lastOfflineCollectedAtRef.current < 60000;
+      lastOfflineCollectedAtRef.current > 0 &&
+      Date.now() - lastOfflineCollectedAtRef.current < 60000;
     if (rawUnclaimedOffline > 0 && !claimingOfflineRef.current && !recentlyCollected) {
       setHasCollectedOffline(false);
     }
   }, [rawUnclaimedOffline]);
 
   const recentlyCollected =
-    lastOfflineCollectedAtRef.current > 0 && Date.now() - lastOfflineCollectedAtRef.current < 60000;
+    lastOfflineCollectedAtRef.current > 0 &&
+    Date.now() - lastOfflineCollectedAtRef.current < 60000;
   const accruedVaultCoins = hasCollectedOffline || recentlyCollected ? 0 : rawUnclaimedOffline;
 
   const cardRefs = useRef<Record<string, HTMLDivElement | null>>({});
+
+  // Resolve building states for all 8 FOX CITY districts strictly from real game state
+  const buildingStates = useMemo(() => {
+    const map: Record<FoxCityBuildingId, BuildingResolvedState> = {} as any;
+    for (const b of FOX_CITY_BUILDINGS) {
+      map[b.id] = resolveBuildingState(b, user, upgrades);
+    }
+    return map;
+  }, [user, upgrades]);
+
+  const activeBuildingState = selectedBuildingId
+    ? buildingStates[selectedBuildingId]
+    : null;
+
+  useEffect(() => {
+    if (!activeBuildingState) {
+      setSelectedBuildingUpgradeId(null);
+      return;
+    }
+    const currentStillValid = activeBuildingState.upgrades.some(
+      (u) => u.id === selectedBuildingUpgradeId
+    );
+    if (!currentStillValid) {
+      setSelectedBuildingUpgradeId(activeBuildingState.primaryUpgrade?.id || null);
+    }
+  }, [activeBuildingState, selectedBuildingUpgradeId]);
+
+  const handleSelectCityBuilding = (
+    id: FoxCityBuildingId | null,
+    resolved?: BuildingResolvedState
+  ) => {
+    sound.playTap();
+    TelegramService.triggerHaptic('light');
+    setSelectedBuildingId(id);
+    const stateForId = resolved || (id ? buildingStates[id] : undefined);
+    if (stateForId?.primaryUpgrade) {
+      setSelectedBuildingUpgradeId(stateForId.primaryUpgrade.id);
+      setSelectedHotspotId(stateForId.primaryUpgrade.id);
+    }
+  };
 
   const handleCollectOffline = async () => {
     if (isClaimingOffline || claimingOfflineRef.current || accruedVaultCoins <= 0) return;
@@ -172,10 +232,8 @@ export const UpgradesScreen: React.FC<UpgradesScreenProps> = ({
     return Math.floor(up.basePrice * Math.pow(up.priceMultiplier, level));
   };
 
-  // Calculate current and projected hourly income for a business card
   const getCurrentAndProjectedBenefit = (up: UpgradeDefinition, currentLevel: number) => {
     if (currentLevel <= 0) {
-      // Match the reference image progression: Level 1 base benefit -> Level 2 projected benefit (~1.8x)
       const currentVal = up.baseBenefit;
       const projectedVal = Math.round(up.baseBenefit * 1.8);
       return { currentVal, projectedVal };
@@ -185,7 +243,6 @@ export const UpgradesScreen: React.FC<UpgradesScreenProps> = ({
     return { currentVal, projectedVal };
   };
 
-  // Category lists & dynamic owned/total counts
   const passiveUpgrades = upgrades.filter((u) => u.category === 'passive');
   const tapUpgrades = upgrades.filter((u) => u.category === 'tap');
   const specialUpgrades = upgrades.filter((u) => u.category === 'special');
@@ -194,11 +251,9 @@ export const UpgradesScreen: React.FC<UpgradesScreenProps> = ({
   const ownedTapCount = tapUpgrades.filter((u) => (user.upgrades[u.id] || 0) > 0).length;
   const ownedSpecialCount = specialUpgrades.filter((u) => (user.upgrades[u.id] || 0) > 0).length;
 
-  // Total businesses owned (shows at least 4/8 when viewing the 4 starter kingdom businesses or actual owned count)
   const displayOwnedBusinesses = Math.max(4, ownedPassiveCount);
   const displayTotalBusinesses = Math.max(8, passiveUpgrades.length);
 
-  // Total upgrades purchased across all categories
   const rawTotalUpgradesPurchased = Object.entries(user.upgrades || {}).reduce(
     (sum, [id, lvl]) => {
       const def = upgrades.find((u) => u.id === id);
@@ -214,21 +269,6 @@ export const UpgradesScreen: React.FC<UpgradesScreenProps> = ({
       : activeCategory === 'tap'
       ? tapUpgrades
       : specialUpgrades;
-
-  const handleHotspotClick = (hotspot: KingdomHotspot) => {
-    sound.playTap();
-    TelegramService.triggerHaptic('light');
-    setSelectedHotspotId(hotspot.upgradeId);
-    if (activeCategory !== 'passive') {
-      setActiveCategory('passive');
-    }
-    setTimeout(() => {
-      const el = cardRefs.current[hotspot.upgradeId];
-      if (el) {
-        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      }
-    }, 80);
-  };
 
   const handleBuy = async (up: UpgradeDefinition) => {
     if (purchasingId) return;
@@ -264,7 +304,34 @@ export const UpgradesScreen: React.FC<UpgradesScreenProps> = ({
     }
   };
 
-  const renderBadgeIcon = (type: 'mining' | 'coffee' | 'berry' | 'arcade', className = 'w-3 h-3') => {
+  const renderDistrictIcon = (
+    type: FoxCityBuildingConfig['iconType'],
+    className = 'w-3.5 h-3.5'
+  ) => {
+    switch (type) {
+      case 'crown':
+        return <Crown className={className} />;
+      case 'pickaxe':
+        return <Pickaxe className={className} />;
+      case 'factory':
+        return <Factory className={className} />;
+      case 'flask':
+        return <FlaskConical className={className} />;
+      case 'store':
+        return <Store className={className} />;
+      case 'home':
+        return <Home className={className} />;
+      case 'zap':
+        return <Zap className={className} />;
+      case 'helicopter':
+        return <Plane className={className} />;
+    }
+  };
+
+  const renderBadgeIcon = (
+    type: 'mining' | 'coffee' | 'berry' | 'arcade',
+    className = 'w-3 h-3'
+  ) => {
     switch (type) {
       case 'mining':
         return <Pickaxe className={`${className} text-amber-300`} />;
@@ -280,40 +347,128 @@ export const UpgradesScreen: React.FC<UpgradesScreenProps> = ({
   const renderFallbackArtwork = (up: UpgradeDefinition) => {
     switch (up.icon) {
       case 'Flame':
-        return <Flame className="w-9 h-9 text-orange-400 drop-shadow-[0_0_10px_rgba(251,146,60,0.6)]" />;
+        return (
+          <Flame className="w-9 h-9 text-orange-400 drop-shadow-[0_0_10px_rgba(251,146,60,0.6)]" />
+        );
       case 'BatteryCharging':
-        return <BatteryCharging className="w-9 h-9 text-emerald-400 drop-shadow-[0_0_10px_rgba(52,211,153,0.6)]" />;
+        return (
+          <BatteryCharging className="w-9 h-9 text-emerald-400 drop-shadow-[0_0_10px_rgba(52,211,153,0.6)]" />
+        );
       case 'Zap':
-        return <Zap className="w-9 h-9 text-amber-400 drop-shadow-[0_0_10px_rgba(251,191,36,0.6)]" />;
+        return (
+          <Zap className="w-9 h-9 text-amber-400 drop-shadow-[0_0_10px_rgba(251,191,36,0.6)]" />
+        );
       case 'Store':
-        return <Store className="w-9 h-9 text-amber-300 drop-shadow-[0_0_10px_rgba(252,211,77,0.6)]" />;
+        return (
+          <Store className="w-9 h-9 text-amber-300 drop-shadow-[0_0_10px_rgba(252,211,77,0.6)]" />
+        );
       case 'Coffee':
-        return <Coffee className="w-9 h-9 text-amber-400 drop-shadow-[0_0_10px_rgba(245,158,11,0.6)]" />;
+        return (
+          <Coffee className="w-9 h-9 text-amber-400 drop-shadow-[0_0_10px_rgba(245,158,11,0.6)]" />
+        );
       case 'Cpu':
-        return <Cpu className="w-9 h-9 text-cyan-400 drop-shadow-[0_0_10px_rgba(34,211,238,0.6)]" />;
+        return (
+          <Cpu className="w-9 h-9 text-cyan-400 drop-shadow-[0_0_10px_rgba(34,211,238,0.6)]" />
+        );
       case 'Server':
-        return <Server className="w-9 h-9 text-indigo-400 drop-shadow-[0_0_10px_rgba(129,140,248,0.6)]" />;
+        return (
+          <Server className="w-9 h-9 text-indigo-400 drop-shadow-[0_0_10px_rgba(129,140,248,0.6)]" />
+        );
       case 'Rocket':
-        return <Rocket className="w-9 h-9 text-purple-400 drop-shadow-[0_0_10px_rgba(192,132,252,0.6)]" />;
+        return (
+          <Rocket className="w-9 h-9 text-purple-400 drop-shadow-[0_0_10px_rgba(192,132,252,0.6)]" />
+        );
       case 'ShieldCheck':
-        return <ShieldCheck className="w-9 h-9 text-yellow-400 drop-shadow-[0_0_10px_rgba(250,204,21,0.6)]" />;
+        return (
+          <ShieldCheck className="w-9 h-9 text-yellow-400 drop-shadow-[0_0_10px_rgba(250,204,21,0.6)]" />
+        );
       case 'Crown':
-        return <Crown className="w-9 h-9 text-amber-300 drop-shadow-[0_0_10px_rgba(252,211,77,0.6)]" />;
+        return (
+          <Crown className="w-9 h-9 text-amber-300 drop-shadow-[0_0_10px_rgba(252,211,77,0.6)]" />
+        );
       case 'Sparkles':
-        return <Sparkles className="w-9 h-9 text-sky-400 drop-shadow-[0_0_10px_rgba(56,189,248,0.6)]" />;
+        return (
+          <Sparkles className="w-9 h-9 text-sky-400 drop-shadow-[0_0_10px_rgba(56,189,248,0.6)]" />
+        );
       default:
         if (up.icon && up.icon.trim().length <= 4) {
-          return <span className="text-3xl leading-none select-none drop-shadow-[0_4px_8px_rgba(0,0,0,0.6)]">{up.icon}</span>;
+          return (
+            <span className="text-3xl leading-none select-none drop-shadow-[0_4px_8px_rgba(0,0,0,0.6)]">
+              {up.icon}
+            </span>
+          );
         }
         return <Sparkles className="w-9 h-9 text-amber-400" />;
     }
   };
 
+  const inspectedUpgrade = useMemo(() => {
+    if (!activeBuildingState) return null;
+    return (
+      activeBuildingState.upgrades.find((u) => u.id === selectedBuildingUpgradeId) ||
+      activeBuildingState.primaryUpgrade
+    );
+  }, [activeBuildingState, selectedBuildingUpgradeId]);
+
   return (
     <div className="w-full max-w-md mx-auto px-3 pb-28 pt-1 text-white select-none">
-      {/* 1. EMPIRE OVERVIEW — Compact 3-Column Statistics Panel */}
-      <div className="w-full bg-gradient-to-b from-[#161926]/95 via-[#0E111A]/95 to-[#0A0C14]/95 border border-amber-500/40 rounded-2xl p-1.5 mb-2.5 shadow-[0_8px_24px_rgba(0,0,0,0.65)] grid grid-cols-12 items-center gap-1 relative overflow-hidden">
-        {/* Subtle top gold sheen */}
+      {/* 0. FOX CITY TOP HUD — FOX Logo, Real FOX Balance, Real Mining Rate */}
+      <div className="w-full bg-gradient-to-r from-[#1A140B]/95 via-[#10131F]/95 to-[#1A140B]/95 border border-amber-400/50 rounded-2xl px-2.5 py-2 mb-2 flex items-center justify-between gap-2 shadow-[0_8px_22px_rgba(0,0,0,0.7)]">
+        <div className="flex items-center gap-2 min-w-0">
+          <img
+            src={foxMascotImg}
+            alt="FOX CITY"
+            className="w-8 h-8 rounded-full object-cover border border-amber-400 shadow-[0_0_12px_rgba(245,158,11,0.4)] shrink-0"
+          />
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs sm:text-sm font-black tracking-tight bg-gradient-to-r from-amber-200 via-amber-400 to-orange-400 bg-clip-text text-transparent">
+                FOX CITY
+              </span>
+              <span className="text-[10px] font-semibold text-slate-400">
+                · Lv. {user.level}
+              </span>
+            </div>
+            <p className="text-[10px] font-bold text-amber-200 tabular-nums truncate">
+              {Math.floor(user.balance).toLocaleString('en-US')} FOX · +
+              {(user.profitPerHour || 0).toLocaleString('en-US')} FOX/hr
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-1.5 shrink-0">
+          <button
+            type="button"
+            onClick={() => {
+              sound.playTap();
+              setQualityTier((prev) => (prev === 'high' ? 'medium' : 'high'));
+            }}
+            className="px-2 py-1 rounded-xl bg-[#0B0E17] border border-amber-500/40 text-[10px] font-black text-amber-300 hover:border-amber-300 cursor-pointer"
+            title="Adaptive Graphics Quality"
+          >
+            {qualityTier === 'high' ? 'HD 3D' : 'Eco 3D'}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              sound.playTap();
+              setIsFullScreenCity((prev) => !prev);
+            }}
+            className="p-1.5 rounded-xl bg-[#0B0E17] border border-amber-500/40 text-amber-300 hover:border-amber-300 cursor-pointer"
+            title={isFullScreenCity ? 'Compact Viewport' : 'Expand 3D City Viewport'}
+          >
+            {isFullScreenCity ? (
+              <Minimize2 className="w-3.5 h-3.5" />
+            ) : (
+              <Maximize2 className="w-3.5 h-3.5" />
+            )}
+          </button>
+        </div>
+      </div>
+
+      {/* 1. EMPIRE OVERVIEW — Compact 3-Column Statistics & Offline Vault Panel */}
+      <div className="w-full bg-gradient-to-b from-[#161926]/95 via-[#0E111A]/95 to-[#0A0C14]/95 border border-amber-500/40 rounded-2xl p-1.5 mb-2 shadow-[0_8px_24px_rgba(0,0,0,0.65)] grid grid-cols-12 items-center gap-1 relative overflow-hidden">
         <div className="absolute inset-x-6 top-0 h-[1px] bg-gradient-to-r from-transparent via-amber-300/60 to-transparent pointer-events-none" />
 
         {/* Stat 1: Total Businesses (3 cols) */}
@@ -323,7 +478,7 @@ export const UpgradesScreen: React.FC<UpgradesScreenProps> = ({
           </div>
           <div className="min-w-0">
             <span className="text-[8px] sm:text-[9px] text-slate-300 font-semibold block truncate leading-tight">
-              Total Businesses
+              Districts
             </span>
             <span className="text-xs sm:text-sm font-black text-white tabular-nums leading-tight block">
               {displayOwnedBusinesses}/{displayTotalBusinesses}
@@ -338,7 +493,7 @@ export const UpgradesScreen: React.FC<UpgradesScreenProps> = ({
           </div>
           <div className="min-w-0">
             <span className="text-[8px] sm:text-[9px] text-slate-300 font-semibold block truncate leading-tight">
-              Total Upgrades
+              Upgrades
             </span>
             <span className="text-xs sm:text-sm font-black text-white tabular-nums leading-tight block">
               {rawTotalUpgradesPurchased}
@@ -383,52 +538,200 @@ export const UpgradesScreen: React.FC<UpgradesScreenProps> = ({
         </div>
       </div>
 
-      {/* 2. INTERACTIVE FOX KINGDOM — Isometric Fantasy Kingdom Stage */}
-      <div className="relative w-full rounded-[22px] p-[2px] bg-gradient-to-b from-amber-300/80 via-amber-500/50 to-amber-700/70 shadow-[0_10px_30px_rgba(0,0,0,0.85),0_0_20px_rgba(245,158,11,0.18)] mb-2.5 overflow-hidden">
-        <div className="relative w-full aspect-[2.45/1] rounded-[20px] overflow-hidden bg-[#0B0E17]">
-          {/* Isometric Kingdom Artwork Cropped Precisely from Reference Image */}
-          <img
-            src={MINE_REF_ASSET}
-            alt="FoxCoin Isometric Fantasy Kingdom"
-            className="absolute pointer-events-none select-none max-w-none"
-            style={{
-              width: '107.5%',
-              height: '396.8%',
-              left: '-3.75%',
-              top: '-75.4%',
-            }}
-          />
-
-          {/* Subtle Golden Ambient Particles & Vignette */}
-          <div className="absolute inset-0 bg-gradient-to-t from-[#080A11]/45 via-transparent to-[#080A11]/20 pointer-events-none" />
-          <div className="absolute inset-0 rounded-[20px] ring-1 ring-inset ring-amber-300/35 pointer-events-none" />
-
-          {/* 4 Interactive Kingdom Business Location Badges */}
-          {KINGDOM_HOTSPOTS.map((spot) => {
-            const actualOwnedLevel = user.upgrades[spot.upgradeId] || 0;
-            const displayLevel =
-              actualOwnedLevel > 0 ? actualOwnedLevel : spot.defaultDisplayLevel;
-            const isSelected = selectedHotspotId === spot.upgradeId;
-
+      {/* 2. FOX CITY 3D ENVIRONMENT HUD BAR (Time/Weather + Camera View Controls) */}
+      <div className="w-full bg-gradient-to-r from-[#131724]/95 via-[#0D101A]/95 to-[#131724]/95 border border-amber-500/35 rounded-2xl p-1.5 mb-2 flex items-center justify-between gap-1.5 shadow-[0_6px_18px_rgba(0,0,0,0.6)]">
+        {/* Time & Weather Controls */}
+        <div className="flex items-center gap-1">
+          {(
+            [
+              { id: 'day', label: 'Day', icon: Sun },
+              { id: 'sunset', label: 'Sunset', icon: Sunset },
+              { id: 'night', label: 'Night', icon: Moon },
+              { id: 'rainy', label: 'Rain', icon: CloudRain },
+            ] as Array<{ id: CityTimeMode; label: string; icon: any }>
+          ).map((item) => {
+            const IconComp = item.icon;
+            const active = !autoCycleTime && timeMode === item.id;
             return (
               <button
-                key={spot.upgradeId}
+                key={item.id}
                 type="button"
-                onClick={() => handleHotspotClick(spot)}
-                style={{ left: spot.left, top: spot.top }}
-                className={`absolute z-10 flex items-center gap-1 px-2 py-0.5 rounded-full bg-gradient-to-b from-[#171A26] to-[#0B0D14] border transition-all duration-200 cursor-pointer active:scale-95 shadow-[0_4px_12px_rgba(0,0,0,0.9)] ${
-                  isSelected
-                    ? 'border-amber-300 ring-2 ring-amber-400/50 scale-105'
-                    : 'border-amber-400/75 hover:border-amber-300 hover:scale-105'
+                onClick={() => {
+                  sound.playTap();
+                  setAutoCycleTime(false);
+                  setTimeMode(item.id);
+                }}
+                title={item.label}
+                className={`px-2 py-1 rounded-xl flex items-center gap-1 text-[10px] font-extrabold transition cursor-pointer border ${
+                  active
+                    ? 'bg-gradient-to-b from-amber-400/25 to-amber-600/15 text-amber-300 border-amber-400/70 shadow-[0_0_10px_rgba(245,158,11,0.3)]'
+                    : 'bg-[#0B0E17]/80 text-slate-400 border-white/5 hover:text-white'
                 }`}
-                title={`Inspect ${spot.fullTitle}`}
               >
-                {renderBadgeIcon(spot.icon, 'w-3 h-3')}
-                <span className="text-[10px] sm:text-[11px] font-extrabold text-white tracking-tight whitespace-nowrap">
-                  {spot.shortTitle}
+                <IconComp className="w-3 h-3 text-amber-400" />
+                <span className="hidden sm:inline">{item.label}</span>
+              </button>
+            );
+          })}
+
+          <button
+            type="button"
+            onClick={() => {
+              sound.playTap();
+              setAutoCycleTime((prev) => !prev);
+            }}
+            title="Auto Day/Night Cycle"
+            className={`px-2 py-1 rounded-xl text-[10px] font-extrabold transition cursor-pointer border ${
+              autoCycleTime
+                ? 'bg-amber-500/25 text-amber-200 border-amber-400/75'
+                : 'bg-[#0B0E17]/80 text-slate-400 border-white/5 hover:text-white'
+            }`}
+          >
+            Auto
+          </button>
+        </div>
+
+        {/* Camera View Preset & Reset Controls */}
+        <div className="flex items-center gap-1">
+          {(
+            [
+              { id: 'angle', label: 'Angle' },
+              { id: 'top', label: 'Top' },
+              { id: 'close', label: 'Close' },
+            ] as Array<{ id: CityCameraPreset; label: string }>
+          ).map((cam) => (
+            <button
+              key={cam.id}
+              type="button"
+              onClick={() => {
+                sound.playTap();
+                setCameraPreset(cam.id);
+              }}
+              className={`px-2 py-1 rounded-xl text-[10px] font-extrabold transition cursor-pointer border ${
+                cameraPreset === cam.id
+                  ? 'bg-gradient-to-b from-[#33240E] to-[#1A1308] text-amber-300 border-amber-400/70'
+                  : 'bg-[#0B0E17]/80 text-slate-400 border-white/5 hover:text-white'
+              }`}
+            >
+              {cam.label}
+            </button>
+          ))}
+
+          <button
+            type="button"
+            onClick={() => {
+              sound.playTap();
+              setSelectedBuildingId(null);
+              setCameraPreset('angle');
+              setResetSignal((s) => s + 1);
+            }}
+            title="Reset Camera View"
+            className="p-1.5 rounded-xl bg-[#0B0E17]/90 border border-amber-500/35 text-amber-300 hover:border-amber-300 cursor-pointer active:scale-95"
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </div>
+
+      {/* 2B. FOX CHARACTER (In City) POSE & INTERACTION BAR */}
+      <div className="w-full bg-[#0D101B]/95 border border-amber-500/30 rounded-xl px-2.5 py-1.5 mb-2 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5">
+          <Footprints className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+          <span className="text-[10px] font-black text-amber-200 tracking-tight">
+            FOX Character (In City):
+          </span>
+        </div>
+
+        <div className="flex items-center gap-1">
+          {(
+            [
+              { id: 'auto', label: 'Auto' },
+              { id: 'idle', label: 'Idle' },
+              { id: 'walk', label: 'Walk' },
+              { id: 'run', label: 'Run' },
+              { id: 'interact', label: 'Interact' },
+            ] as Array<{ id: FoxMascotAnimMode; label: string }>
+          ).map((m) => (
+            <button
+              key={m.id}
+              type="button"
+              onClick={() => {
+                sound.playTap();
+                setMascotMode(m.id);
+                if (m.id !== 'auto') {
+                  setSelectedBuildingId(null);
+                  setCameraPreset('plaza');
+                }
+              }}
+              className={`px-2 py-0.5 rounded-lg text-[9px] font-black border cursor-pointer transition ${
+                mascotMode === m.id
+                  ? 'bg-gradient-to-b from-amber-300 to-amber-500 text-slate-950 border-amber-200 shadow-[0_0_8px_rgba(245,158,11,0.35)]'
+                  : 'bg-[#090C15] text-slate-300 border-white/10 hover:border-amber-400/50 hover:text-white'
+              }`}
+              title="Control 3D Fox Character Animation Mode"
+            >
+              {m.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* 3. INTERACTIVE 3D FOX CITY STAGE & RAYCAST CONTEXTUAL BUILDING PANEL */}
+      <div className="relative w-full mb-2.5">
+        <FoxCityView
+          user={user}
+          upgrades={upgrades}
+          onPurchase={onPurchase}
+          selectedBuildingId={selectedBuildingId}
+          onSelectBuildingChange={handleSelectCityBuilding}
+          onInspectUpgradeCard={(upgradeId) => {
+            const targetUpgrade = upgrades.find((u) => u.id === upgradeId);
+            if (targetUpgrade && targetUpgrade.category !== 'gift') {
+              setActiveCategory(targetUpgrade.category);
+              setSelectedHotspotId(upgradeId);
+              setTimeout(() => {
+                cardRefs.current[upgradeId]?.scrollIntoView({
+                  behavior: 'smooth',
+                  block: 'center',
+                });
+              }, 80);
+            }
+          }}
+          timeMode={timeMode}
+          autoCycleTime={autoCycleTime}
+          cameraPreset={cameraPreset}
+          resetSignal={resetSignal}
+          qualityTier={qualityTier}
+          mascotMode={mascotMode}
+          isFullScreen={isFullScreenCity}
+        />
+      </div>
+
+      {/* 4. BUILDING ICONS (UI) — Quick District Navigation Strip */}
+      <div className="w-full bg-gradient-to-b from-[#141824]/95 to-[#0B0D14]/95 border border-amber-500/35 rounded-2xl p-1.5 mb-2.5 shadow-[0_6px_20px_rgba(0,0,0,0.6)]">
+        <div className="grid grid-cols-4 sm:grid-cols-8 gap-1">
+          {FOX_CITY_BUILDINGS.map((b) => {
+            const st = buildingStates[b.id];
+            const isSelected = selectedBuildingId === b.id;
+            return (
+              <button
+                key={b.id}
+                type="button"
+                onClick={() => handleSelectCityBuilding(isSelected ? null : b.id, st)}
+                className={`flex flex-col items-center justify-center py-1.5 px-1 rounded-xl border transition-all cursor-pointer active:scale-95 ${
+                  isSelected
+                    ? 'bg-gradient-to-b from-[#3A280E] to-[#1A1207] border-amber-300 text-amber-200 shadow-[0_0_12px_rgba(245,158,11,0.35)]'
+                    : 'bg-[#0E111B]/90 border-amber-500/20 text-slate-300 hover:border-amber-400/50 hover:text-white'
+                }`}
+              >
+                <div className="w-6 h-6 rounded-lg bg-[#1A160D] border border-amber-400/50 flex items-center justify-center text-amber-400 mb-0.5">
+                  {renderDistrictIcon(b.iconType, 'w-3.5 h-3.5')}
+                </div>
+                <span className="text-[9px] font-extrabold truncate max-w-full leading-tight">
+                  {b.shortName}
                 </span>
-                <span className="px-1.5 py-[1px] rounded-full bg-gradient-to-b from-amber-300 via-amber-500 to-orange-600 text-slate-950 font-black text-[9px] sm:text-[10px] leading-tight shadow-sm whitespace-nowrap">
-                  Lv {displayLevel}
+                <span className="text-[8px] font-black text-amber-400 leading-tight">
+                  Lv.{st?.displayLevel || b.defaultDisplayLevel}
                 </span>
               </button>
             );
@@ -436,7 +739,7 @@ export const UpgradesScreen: React.FC<UpgradesScreenProps> = ({
         </div>
       </div>
 
-      {/* 3. ENTERPRISE CATEGORIES — 3 Navigation Tabs */}
+      {/* 6. ENTERPRISE CATEGORIES — 3 Navigation Tabs */}
       <div className="w-full bg-gradient-to-b from-[#151824]/95 to-[#0B0D14]/95 p-1 rounded-2xl border border-amber-500/35 mb-2.5 grid grid-cols-3 gap-1 shadow-[0_6px_20px_rgba(0,0,0,0.6)]">
         <button
           type="button"
@@ -450,7 +753,11 @@ export const UpgradesScreen: React.FC<UpgradesScreenProps> = ({
               : 'text-slate-300 hover:text-white font-bold border border-transparent'
           }`}
         >
-          <Building2 className={`w-3.5 h-3.5 shrink-0 ${activeCategory === 'passive' ? 'text-amber-400' : 'text-slate-400'}`} />
+          <Building2
+            className={`w-3.5 h-3.5 shrink-0 ${
+              activeCategory === 'passive' ? 'text-amber-400' : 'text-slate-400'
+            }`}
+          />
           <span className="truncate">
             Enterprises ({displayOwnedBusinesses}/{displayTotalBusinesses})
           </span>
@@ -468,7 +775,11 @@ export const UpgradesScreen: React.FC<UpgradesScreenProps> = ({
               : 'text-slate-300 hover:text-white font-bold border border-transparent'
           }`}
         >
-          <Zap className={`w-3.5 h-3.5 shrink-0 ${activeCategory === 'tap' ? 'text-amber-400' : 'text-slate-400'}`} />
+          <Zap
+            className={`w-3.5 h-3.5 shrink-0 ${
+              activeCategory === 'tap' ? 'text-amber-400' : 'text-slate-400'
+            }`}
+          />
           <span className="truncate">
             Tapping ({Math.max(1, ownedTapCount)}/{Math.max(10, tapUpgrades.length)})
           </span>
@@ -486,18 +797,21 @@ export const UpgradesScreen: React.FC<UpgradesScreenProps> = ({
               : 'text-slate-300 hover:text-white font-bold border border-transparent'
           }`}
         >
-          <Users className={`w-3.5 h-3.5 shrink-0 ${activeCategory === 'special' ? 'text-amber-400' : 'text-slate-400'}`} />
+          <Users
+            className={`w-3.5 h-3.5 shrink-0 ${
+              activeCategory === 'special' ? 'text-amber-400' : 'text-slate-400'
+            }`}
+          />
           <span className="truncate">
             Clan & VIP ({Math.max(2, ownedSpecialCount)}/{Math.max(7, specialUpgrades.length)})
           </span>
         </button>
       </div>
 
-      {/* 4. BUSINESS UPGRADE CARDS */}
+      {/* 7. ALL BUSINESS & MINER UPGRADE CARDS */}
       <div className="space-y-2.5">
         {filteredUpgrades.map((up) => {
           const rawLevel = user.upgrades[up.id] || 0;
-          // Display Level (1-indexed for starter kingdom feel matching screenshot while preserving true cost/state)
           const defaultStarterLv = up.id === 'crypto_burrow' ? 2 : 1;
           const displayCurrentLv = rawLevel > 0 ? rawLevel : defaultStarterLv;
           const displayNextLv = displayCurrentLv + 1;
@@ -513,9 +827,9 @@ export const UpgradesScreen: React.FC<UpgradesScreenProps> = ({
           const { currentVal, projectedVal } = getCurrentAndProjectedBenefit(up, rawLevel);
           const signatureCrop = SIGNATURE_CARD_CROPS[up.id];
 
-          // Milestone progress (0..10 steps per milestone tier)
           const milestoneStep = rawLevel % 10;
-          const milestoneFillPercent = rawLevel > 0 ? Math.max(12, milestoneStep * 10 || 100) : 8;
+          const milestoneFillPercent =
+            rawLevel > 0 ? Math.max(12, milestoneStep * 10 || 100) : 8;
 
           const unitSuffix =
             up.benefitType === 'profit_per_hour'
@@ -542,22 +856,16 @@ export const UpgradesScreen: React.FC<UpgradesScreenProps> = ({
                   : 'border-amber-500/45 hover:border-amber-400/80'
               }`}
             >
-              {/* Subtle top-left & bottom-right golden corner glow */}
-              <div className="
-                absolute inset-x-8 top-0 h-[1px]
-                bg-gradient-to-r from-transparent via-amber-400/50 to-transparent
-                pointer-events-none
-              " />
+              <div className="absolute inset-x-8 top-0 h-[1px] bg-gradient-to-r from-transparent via-amber-400/50 to-transparent pointer-events-none" />
 
-              {/* Floating Upgrade Confirmation Badge */}
               {isJustUpgraded && (
                 <div className="absolute -top-2.5 right-3 z-20 px-2.5 py-0.5 rounded-full bg-gradient-to-r from-emerald-400 to-teal-500 text-slate-950 font-black text-[10px] shadow-lg animate-bounce">
-                  Upgraded to Lv {rawLevel}! +{up.baseBenefit.toLocaleString('en-US')} {unitSuffix}
+                  Upgraded to Lv {rawLevel}! +{up.baseBenefit.toLocaleString('en-US')}{' '}
+                  {unitSuffix}
                 </div>
               )}
 
               <div className="flex items-stretch gap-2.5">
-                {/* LEFT: 3D Business Illustration Box */}
                 <div className="relative w-[84px] h-[76px] sm:w-[90px] sm:h-[80px] rounded-xl overflow-hidden border border-amber-400/60 bg-[#0B0D14] shrink-0 shadow-[0_4px_12px_rgba(0,0,0,0.7)] flex items-center justify-center">
                   {signatureCrop ? (
                     <img
@@ -577,7 +885,6 @@ export const UpgradesScreen: React.FC<UpgradesScreenProps> = ({
                     </div>
                   )}
 
-                  {/* Top-left circular gold category emblem */}
                   <div className="absolute top-1 left-1 w-5 h-5 rounded-full bg-[#11141F]/90 border border-amber-400/70 flex items-center justify-center shadow-md">
                     {signatureCrop ? (
                       renderBadgeIcon(signatureCrop.badgeIcon, 'w-2.5 h-2.5')
@@ -587,10 +894,8 @@ export const UpgradesScreen: React.FC<UpgradesScreenProps> = ({
                   </div>
                 </div>
 
-                {/* CENTER: Title, Level Badges, Description, Income Comparison & Milestone Bar */}
                 <div className="flex-1 min-w-0 flex flex-col justify-between py-0.5">
                   <div>
-                    {/* Row 1: Business Name + Level Transition Pills */}
                     <div className="flex items-center gap-1 flex-wrap">
                       <h4 className="font-extrabold text-xs sm:text-[13px] text-white tracking-tight truncate max-w-[140px] sm:max-w-[165px]">
                         {up.name}
@@ -605,12 +910,10 @@ export const UpgradesScreen: React.FC<UpgradesScreenProps> = ({
                       </div>
                     </div>
 
-                    {/* Row 2: Short Description */}
                     <p className="text-[10px] text-slate-300/85 truncate mt-0.5">
                       {up.description}
                     </p>
 
-                    {/* Row 3: Current Hourly Income -> Projected Income */}
                     <div className="flex items-center gap-1 mt-1 flex-wrap">
                       <img
                         src={foxGoldCoinImg}
@@ -627,7 +930,6 @@ export const UpgradesScreen: React.FC<UpgradesScreenProps> = ({
                     </div>
                   </div>
 
-                  {/* Row 4: Milestone Progress Bar */}
                   <div className="flex items-center gap-1.5 mt-1.5">
                     <div className="flex-1 h-2 bg-[#080A10] rounded-full border border-amber-500/35 p-[1px] overflow-hidden shadow-inner">
                       <div
@@ -641,7 +943,6 @@ export const UpgradesScreen: React.FC<UpgradesScreenProps> = ({
                   </div>
                 </div>
 
-                {/* RIGHT: Upgrade Cost Sub-Panel & Prominent Orange-Gold Upgrade Button */}
                 <div className="w-[88px] sm:w-[96px] shrink-0 bg-gradient-to-b from-[#0D101A] to-[#080A11] border border-amber-500/30 rounded-xl p-1.5 flex flex-col items-center justify-between shadow-inner">
                   <span className="text-[8px] sm:text-[9px] text-slate-300 font-semibold tracking-tight leading-none">
                     {isInsufficient ? (
